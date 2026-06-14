@@ -28,62 +28,75 @@ use crate::wire::{build_request, doc_uri, parse_result};
 
 type HttpClient = Client<HttpConnector, Full<Bytes>>;
 
-/// A [`Sink`] that writes directly to OpenSearch clusters over pooled HTTP.
+/// One cluster's base URL plus its own pooled HTTP/1.1 and HTTP/2 clients.
 ///
-/// Holds a pooled HTTP/1.1 client and a pooled HTTP/2 (prior-knowledge) client;
-/// each operation selects the one matching its resolved upstream
-/// [`Protocol`] (`docs/04` §7), so the proxy can speak h2 to a cluster that
-/// supports it while defaulting to h1.
+/// Each cluster owns its pools (not a single shared client), so connection-pool
+/// state is **sharded per cluster** — a busy cluster's pool lock never contends
+/// with another's (NFR-P, `docs/01` §7).
 #[derive(Debug)]
-pub struct OpenSearchSink {
+struct ClusterPool {
+    base: String,
     client_h1: HttpClient,
     client_h2: HttpClient,
-    /// Per-cluster base URL (scheme + authority), e.g. `http://10.0.0.1:9200`.
-    endpoints: HashMap<ClusterId, String>,
 }
 
-impl OpenSearchSink {
-    /// Builds a sink that routes each cluster to its configured base URL.
-    ///
-    /// The pooled clients are shared across all clusters; connections are keyed
-    /// by authority internally, so per-cluster reuse is automatic.
-    #[must_use]
-    pub fn new(endpoints: HashMap<ClusterId, String>) -> Self {
-        let client_h1 = Client::builder(TokioExecutor::new()).build_http();
-        let client_h2 = Client::builder(TokioExecutor::new())
-            .http2_only(true)
-            .build_http();
+impl ClusterPool {
+    /// Builds the per-cluster pools for a base URL.
+    fn new(base: String) -> Self {
         Self {
-            client_h1,
-            client_h2,
-            endpoints,
+            base,
+            client_h1: Client::builder(TokioExecutor::new()).build_http(),
+            client_h2: Client::builder(TokioExecutor::new())
+                .http2_only(true)
+                .build_http(),
         }
     }
 
     /// The pooled client for a resolved upstream protocol: the HTTP/2
     /// (prior-knowledge) client for `Http2`/`Grpc`, the HTTP/1.1 client otherwise.
-    fn client_for(&self, protocol: Protocol) -> &HttpClient {
+    fn client(&self, protocol: Protocol) -> &HttpClient {
         match protocol {
             Protocol::Http2 | Protocol::Grpc => &self.client_h2,
             _ => &self.client_h1,
         }
     }
+}
 
-    /// Resolves a cluster's base URL, or a transport error if unconfigured.
-    fn base_for(&self, cluster: &ClusterId) -> Result<&str, SinkError> {
-        self.endpoints
-            .get(cluster)
-            .map(String::as_str)
-            .ok_or(SinkError::Transport {
-                kind: "no endpoint configured for target cluster",
-            })
+/// A [`Sink`] that writes directly to OpenSearch clusters over pooled HTTP.
+///
+/// Holds a `ClusterPool` per cluster — its own base URL and pooled HTTP/1.1
+/// and HTTP/2 (prior-knowledge) clients. Each operation selects the client
+/// matching its resolved upstream [`Protocol`] (`docs/04` §7), so the proxy can
+/// speak h2 to a cluster that supports it while defaulting to h1.
+#[derive(Debug)]
+pub struct OpenSearchSink {
+    clusters: HashMap<ClusterId, ClusterPool>,
+}
+
+impl OpenSearchSink {
+    /// Builds a sink that routes each cluster to its configured base URL, giving
+    /// each cluster its own pooled clients (sharded pools, `docs/01` §7).
+    #[must_use]
+    pub fn new(endpoints: HashMap<ClusterId, String>) -> Self {
+        let clusters = endpoints
+            .into_iter()
+            .map(|(cluster, base)| (cluster, ClusterPool::new(base)))
+            .collect();
+        Self { clusters }
+    }
+
+    /// Resolves a cluster's pool, or a transport error if it is unconfigured.
+    fn pool_for(&self, cluster: &ClusterId) -> Result<&ClusterPool, SinkError> {
+        self.clusters.get(cluster).ok_or(SinkError::Transport {
+            kind: "no endpoint configured for target cluster",
+        })
     }
 
     /// POSTs a (partition-filtered) query body to `{index}/{verb}` and returns
     /// the upstream status and raw response body. Shared by search and count.
     async fn post_query(&self, verb: &str, op: &SearchOp) -> Result<(u16, Vec<u8>), SinkError> {
-        let base = self.base_for(&op.target.cluster)?;
-        let uri = format!("{base}/{}/{verb}", op.target.index.as_str());
+        let pool = self.pool_for(&op.target.cluster)?;
+        let uri = format!("{}/{}/{verb}", pool.base, op.target.index.as_str());
         let req = Request::builder()
             .method(Method::POST)
             .uri(uri)
@@ -93,13 +106,13 @@ impl OpenSearchSink {
                 kind: "building upstream query request",
             })?;
 
-        let resp = self
-            .client_for(op.protocol)
-            .request(req)
-            .await
-            .map_err(|_| SinkError::Transport {
-                kind: "upstream query failed",
-            })?;
+        let resp =
+            pool.client(op.protocol)
+                .request(req)
+                .await
+                .map_err(|_| SinkError::Transport {
+                    kind: "upstream query failed",
+                })?;
         let status = resp.status().as_u16();
         if status >= 500 {
             return Err(SinkError::Upstream {
@@ -121,16 +134,16 @@ impl OpenSearchSink {
 
     /// Sends a single operation and parses its result.
     async fn dispatch(&self, op: &WriteOp) -> Result<OpResult, SinkError> {
-        let base = self.base_for(&op.target.cluster)?;
-        let (req, fallback_id) = build_request(base, &op.target.index, &op.doc)?;
+        let pool = self.pool_for(&op.target.cluster)?;
+        let (req, fallback_id) = build_request(&pool.base, &op.target.index, &op.doc)?;
 
-        let resp = self
-            .client_for(op.protocol)
-            .request(req)
-            .await
-            .map_err(|_| SinkError::Transport {
-                kind: "upstream request failed",
-            })?;
+        let resp =
+            pool.client(op.protocol)
+                .request(req)
+                .await
+                .map_err(|_| SinkError::Transport {
+                    kind: "upstream request failed",
+                })?;
         let status = resp.status().as_u16();
         if status >= 500 {
             return Err(SinkError::Upstream {
@@ -153,8 +166,13 @@ impl OpenSearchSink {
 
 impl Reader for OpenSearchSink {
     async fn get(&self, op: ReadOp) -> Result<ReadOutcome, SinkError> {
-        let base = self.base_for(&op.target.cluster)?;
-        let uri = doc_uri(base, &op.target.index, Some(&op.id), op.routing.as_deref());
+        let pool = self.pool_for(&op.target.cluster)?;
+        let uri = doc_uri(
+            &pool.base,
+            &op.target.index,
+            Some(&op.id),
+            op.routing.as_deref(),
+        );
         let req = Request::builder()
             .method(Method::GET)
             .uri(uri)
@@ -163,13 +181,13 @@ impl Reader for OpenSearchSink {
                 kind: "building upstream read request",
             })?;
 
-        let resp = self
-            .client_for(op.protocol)
-            .request(req)
-            .await
-            .map_err(|_| SinkError::Transport {
-                kind: "upstream read failed",
-            })?;
+        let resp =
+            pool.client(op.protocol)
+                .request(req)
+                .await
+                .map_err(|_| SinkError::Transport {
+                    kind: "upstream read failed",
+                })?;
         let status = resp.status().as_u16();
         // 404 is a normal "document does not exist"; only 5xx is a real failure.
         if status >= 500 {

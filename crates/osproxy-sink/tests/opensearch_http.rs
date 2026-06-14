@@ -152,6 +152,38 @@ async fn get_by_id_sends_request_and_returns_the_found_document() {
 }
 
 #[tokio::test]
+async fn each_cluster_routes_to_its_own_sharded_pool() {
+    // Two clusters, two upstreams: each op must reach the endpoint of its own
+    // cluster's pool (sharded per cluster, docs/01 §7).
+    let (base_a, cap_a) = start_mock(r#"{"_id":"a:1","result":"created"}"#).await;
+    let (base_b, cap_b) = start_mock(r#"{"_id":"b:1","result":"created"}"#).await;
+    let mut endpoints = HashMap::new();
+    endpoints.insert(ClusterId::from("eu-1"), base_a);
+    endpoints.insert(ClusterId::from("us-1"), base_b);
+    let sink = OpenSearchSink::new(endpoints);
+
+    let op = |cluster: &str| {
+        WriteOp::new(
+            Target::new(ClusterId::from(cluster), IndexName::from("orders")),
+            DocOp::Index {
+                id: Some("1".to_owned()),
+                routing: None,
+                body: b"{}".to_vec(),
+            },
+            Epoch::new(1),
+        )
+    };
+    sink.write(WriteBatch::single(op("eu-1"))).await.unwrap();
+    sink.write(WriteBatch::single(op("us-1"))).await.unwrap();
+
+    // Each mock saw exactly its cluster's request — no cross-routing.
+    assert_eq!(cap_a.lock().unwrap().method, "PUT");
+    assert_eq!(cap_b.lock().unwrap().method, "PUT");
+    assert!(cap_a.lock().unwrap().uri.contains("/orders/_doc/1"));
+    assert!(cap_b.lock().unwrap().uri.contains("/orders/_doc/1"));
+}
+
+#[tokio::test]
 async fn read_from_unreachable_upstream_is_a_transport_error() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
