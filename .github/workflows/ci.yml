@@ -14,7 +14,7 @@ jobs:
     name: Build & full gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # Pinned to match rust-toolchain.toml exactly, so clippy's lint set is
       # identical locally and here (docs/12).
       - uses: dtolnay/rust-toolchain@1.94.1
@@ -29,7 +29,7 @@ jobs:
     name: Supply chain (cargo-deny)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.94.1
       - uses: taiki-e/install-action@cargo-deny
       - run: cargo deny check
@@ -38,7 +38,7 @@ jobs:
     name: Coverage (>=90%)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.94.1
         with:
           components: llvm-tools-preview
@@ -52,7 +52,7 @@ jobs:
     name: Deterministic perf (iai-callgrind)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.94.1
       - uses: Swatinem/rust-cache@v2
       - name: Install valgrind
@@ -61,6 +61,6 @@ jobs:
         # Must match the iai-callgrind dev-dependency version in osproxy-core.
         uses: taiki-e/install-action@v2
         with:
-          tool: iai-callgrind-runner@0.14.2
+          tool: iai-callgrind-runner@0.16.1
       - name: Instruction-count benchmarks
         run: cargo xtask bench

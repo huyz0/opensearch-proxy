@@ -16,7 +16,7 @@ proptest = "1"
 dhat = "0.3"
 # Pinned exact: the iai-callgrind-runner installed in CI must match this version
 # exactly (see .github/workflows/ci.yml). Bumping requires updating both.
-iai-callgrind = "=0.14.2"
+iai-callgrind = "=0.16.1"
 
 [lints]
 workspace = true
