@@ -77,7 +77,17 @@ fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'static str]> {
             "osproxy-control",
             "osproxy-observe",
         ],
-        "osproxy-server" => &["osproxy-core", "osproxy-config", "osproxy-engine"],
+        // The binary is the one place every layer meets: it wires a concrete
+        // tenancy + sink into the engine pipeline and serves it over transport.
+        "osproxy-server" => &[
+            "osproxy-core",
+            "osproxy-config",
+            "osproxy-engine",
+            "osproxy-transport",
+            "osproxy-spi",
+            "osproxy-tenancy",
+            "osproxy-sink",
+        ],
         _ => return None,
     })
 }

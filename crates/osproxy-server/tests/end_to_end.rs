@@ -1,0 +1,147 @@
+//! Full-stack ingest: a real HTTP client speaks to the osproxy ingress (the
+//! actual `AppHandler` + reference tenancy), which routes and transforms the
+//! document and writes it to a mock OpenSearch. Proves the M1 spine end to end
+//! (client → ingress → pipeline → upstream) without Docker; the live
+//! testcontainer round-trip is a separate, ignored test.
+
+// Test scaffolding (mock server + helpers, not `#[test]` fns) needs the unwrap
+// allowance the test-only config does not reach.
+#![allow(clippy::unwrap_used)]
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::body::Incoming;
+use hyper::service::service_fn;
+use hyper::{Method, Request, Response};
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use osproxy_core::{ClusterId, IndexName};
+use osproxy_engine::Pipeline;
+use osproxy_server::handler::AppHandler;
+use osproxy_server::tenancy::ReferenceTenancy;
+use osproxy_sink::OpenSearchSink;
+use osproxy_tenancy::TenancyRouter;
+use tokio::net::TcpListener;
+
+#[derive(Clone, Debug, Default)]
+struct Captured {
+    method: String,
+    uri: String,
+    body: String,
+}
+
+/// A one-shot mock OpenSearch returning a fixed created response and capturing
+/// the request it received.
+async fn start_upstream() -> (String, Arc<Mutex<Captured>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let captured = Arc::new(Mutex::new(Captured::default()));
+    let cap = Arc::clone(&captured);
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let io = TokioIo::new(stream);
+        let svc = service_fn(move |req: Request<Incoming>| {
+            let cap = Arc::clone(&cap);
+            async move {
+                let method = req.method().to_string();
+                let uri = req.uri().to_string();
+                let body = req.into_body().collect().await.unwrap().to_bytes();
+                *cap.lock().unwrap() = Captured {
+                    method,
+                    uri,
+                    body: String::from_utf8_lossy(&body).into_owned(),
+                };
+                let resp = Response::builder()
+                    .status(201)
+                    .body(Full::new(Bytes::from(
+                        r#"{"_id":"acme:7","result":"created"}"#,
+                    )))
+                    .unwrap();
+                Ok::<_, std::convert::Infallible>(resp)
+            }
+        });
+        hyper::server::conn::http1::Builder::new()
+            .serve_connection(io, svc)
+            .await
+            .unwrap();
+    });
+    (format!("http://{addr}"), captured)
+}
+
+#[tokio::test]
+async fn put_doc_is_tenanted_and_forwarded_upstream() {
+    let (upstream, captured) = start_upstream().await;
+    let cluster = ClusterId::from("default");
+    let mut endpoints = HashMap::new();
+    endpoints.insert(cluster.clone(), upstream);
+
+    // The exact wiring the binary builds.
+    let sink = OpenSearchSink::new(endpoints);
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
+    let handler = Arc::new(AppHandler::new(Pipeline::new(
+        TenancyRouter::new(tenancy),
+        sink,
+    )));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = osproxy_transport::serve(listener, handler).await;
+    });
+
+    // Client POSTs a document carrying its tenant.
+    let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("http://{proxy_addr}/orders/_doc"))
+        .header("content-type", "application/json")
+        .body(Full::new(Bytes::from_static(
+            br#"{"tenant_id":"acme","id":7,"msg":"hi"}"#,
+        )))
+        .unwrap();
+    let resp = client.request(req).await.unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // The upstream received the transformed doc at the constructed id with
+    // routing, and the injected tenancy field — proving the full tenanting path.
+    let got = captured.lock().unwrap().clone();
+    assert_eq!(got.method, "PUT");
+    assert_eq!(got.uri, "/osproxy-shared/_doc/acme:7?routing=acme");
+    assert!(got.body.contains(r#""_tenant":"acme""#), "{}", got.body);
+}
+
+#[tokio::test]
+async fn unresolved_partition_returns_client_error() {
+    let (upstream, _captured) = start_upstream().await;
+    let cluster = ClusterId::from("default");
+    let mut endpoints = HashMap::new();
+    endpoints.insert(cluster.clone(), upstream);
+    let sink = OpenSearchSink::new(endpoints);
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
+    let handler = Arc::new(AppHandler::new(Pipeline::new(
+        TenancyRouter::new(tenancy),
+        sink,
+    )));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = osproxy_transport::serve(listener, handler).await;
+    });
+
+    // No tenant_id => partition cannot be resolved => 400 with a value-free body.
+    let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("http://{proxy_addr}/orders/_doc"))
+        .body(Full::new(Bytes::from_static(br#"{"id":7}"#)))
+        .unwrap();
+    let resp = client.request(req).await.unwrap();
+    assert_eq!(resp.status(), 400);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("partition_unresolved"), "{text}");
+}

@@ -16,6 +16,17 @@ path = "src/main.rs"
 osproxy-core.workspace = true
 osproxy-config.workspace = true
 osproxy-engine.workspace = true
+osproxy-transport.workspace = true
+osproxy-spi.workspace = true
+osproxy-tenancy.workspace = true
+osproxy-sink.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal"] }
+
+[dev-dependencies]
+hyper = { workspace = true, features = ["server", "client", "http1"] }
+hyper-util = { workspace = true, features = ["server", "service", "client", "client-legacy", "http1", "tokio"] }
+http-body-util.workspace = true
+bytes.workspace = true
 
 [lints]
 workspace = true

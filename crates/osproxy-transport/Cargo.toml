@@ -11,6 +11,16 @@ repository.workspace = true
 [dependencies]
 osproxy-core.workspace = true
 osproxy-spi.workspace = true
+hyper = { workspace = true, features = ["server", "http1"] }
+hyper-util = { workspace = true, features = ["server", "service", "tokio"] }
+http-body-util.workspace = true
+bytes.workspace = true
+tokio = { workspace = true, features = ["rt", "net"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time"] }
+hyper = { workspace = true, features = ["client"] }
+hyper-util = { workspace = true, features = ["client", "client-legacy", "http1", "tokio"] }
 
 [lints]
 workspace = true
