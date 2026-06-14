@@ -1,7 +1,10 @@
-//! Deterministic allocation-count budgets for the per-document rewrite hot path
-//! (docs/12, NFR-P3). Allocation counts are exact for a fixed input, so a change
-//! that adds a heap allocation to a transform that runs on every document fails
-//! CI. The dhat allocator is installed for this test binary only.
+//! Deterministic allocation-count budgets for the rewrite hot paths (docs/12,
+//! NFR-P3): the per-document transforms (id construction, field inject/strip,
+//! query wrap), the per-document id frame mapping, and the per-request demux
+//! parses (`_bulk`/`_mget`/`_msearch`). Allocation counts are exact for a fixed
+//! input, so a change that adds a heap allocation to a path that runs on every
+//! document or request fails CI. The dhat allocator is installed for this test
+//! binary only.
 //!
 //! The budgets are baselines, not targets: a change that moves one is a
 //! deliberate decision to review (update the number with the reason), not a
@@ -12,7 +15,10 @@
 
 use dhat::{HeapStats, Profiler};
 use osproxy_core::FieldName;
-use osproxy_rewrite::{construct_id, inject_fields, strip_fields, wrap_query};
+use osproxy_rewrite::{
+    construct_id, inject_fields, map_logical_to_physical, map_physical_to_logical, parse_bulk,
+    parse_mget, parse_msearch, strip_fields, wrap_query,
+};
 use serde_json::{json, Value};
 
 #[global_allocator]
@@ -26,11 +32,18 @@ fn allocs(f: impl FnOnce()) -> u64 {
 }
 
 /// All rewrite-path budgets in one test: dhat's profiler is process-global, so
-/// only one may exist at a time (parallel `#[test]`s would collide).
+/// only one may exist at a time (parallel `#[test]`s would collide). The groups
+/// are helpers called within the one live profiler, not separate tests.
 #[test]
 fn rewrite_hot_path_allocation_budgets() {
     let _profiler = Profiler::builder().testing().build();
+    document_transform_budgets();
+    bulk_path_budgets();
+    demux_parse_budgets();
+}
 
+/// Per-document write/read transforms.
+fn document_transform_budgets() {
     // construct_id: one expansion of `{partition}:{body.id}` into an owned id.
     let doc = json!({ "id": 7, "msg": "hi" });
     assert_eq!(
@@ -75,5 +88,58 @@ fn rewrite_hot_path_allocation_budgets() {
         }),
         33,
         "wrap_query allocation budget"
+    );
+}
+
+/// Bulk-path budgets (the highest-throughput ingest path; one id mapping per
+/// document, one parse per request).
+fn bulk_path_budgets() {
+    // map_logical_to_physical: frame the natural key into the physical id — runs
+    // per document on bulk ingest. (prefix + suffix from id_frame, plus the
+    // formatted physical id.)
+    let l2p = allocs(|| {
+        let _ = std::hint::black_box(
+            map_logical_to_physical("{partition}:{body.id}", "acme", "7").unwrap(),
+        );
+    });
+
+    // map_physical_to_logical: strip the frame back off — runs per hit on the
+    // read/response path; only the recovered logical id is owned.
+    let p2l = allocs(|| {
+        let _ = std::hint::black_box(
+            map_physical_to_logical("{partition}:{body.id}", "acme", "acme:7").unwrap(),
+        );
+    });
+
+    // parse_bulk: parse a fixed two-operation NDJSON body (an index with a source
+    // line and a delete) — the per-request bulk parse.
+    let bulk_body =
+        b"{\"index\":{\"_id\":\"1\"}}\n{\"msg\":\"hi\"}\n{\"delete\":{\"_id\":\"2\"}}\n";
+    let bulk = allocs(|| {
+        let _ = std::hint::black_box(parse_bulk(bulk_body).unwrap());
+    });
+
+    assert_eq!(
+        (l2p, p2l, bulk),
+        (2, 2, 16),
+        "bulk-path allocation budgets (map_logical_to_physical, map_physical_to_logical, parse_bulk)"
+    );
+}
+
+/// The other two demux parses, completing the `_bulk`/`_mget`/`_msearch` family.
+fn demux_parse_budgets() {
+    // One `_mget` doc and one `_msearch` header/body pair.
+    let mget_body = b"{\"docs\":[{\"_index\":\"a\",\"_id\":\"1\"}]}";
+    let mget = allocs(|| {
+        let _ = std::hint::black_box(parse_mget(mget_body).unwrap());
+    });
+    let msearch_body = b"{\"index\":\"a\"}\n{\"query\":{\"match_all\":{}}}\n";
+    let msearch = allocs(|| {
+        let _ = std::hint::black_box(parse_msearch(msearch_body).unwrap());
+    });
+    assert_eq!(
+        (mget, msearch),
+        (11, 10),
+        "demux-parse allocation budgets (parse_mget, parse_msearch)"
     );
 }
