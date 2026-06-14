@@ -10,8 +10,9 @@
 // Test scaffolding (helpers + spawned server/container, not `#[test]` fns).
 #![allow(clippy::unwrap_used)]
 // JUSTIFY(file-length): the live-OpenSearch exit gate — several end-to-end
-// scenarios (ingest, by-id read/delete, search/count isolation, bulk demux,
-// blind diagnosis) share one set of container/proxy scaffolding helpers.
+// scenarios (ingest, by-id read/delete, search/count isolation, bulk demux with
+// create/update verbs, blind diagnosis) share one set of container/proxy
+// scaffolding helpers.
 // Splitting into multiple files would duplicate that ~120-line scaffold per
 // file (and spin extra containers); keeping them together is the cohesive unit.
 
@@ -381,6 +382,78 @@ async fn bulk_demux_round_trips_to_real_opensearch() {
     assert_eq!(status, 200, "{counted}");
     let counted: serde_json::Value = serde_json::from_str(&counted).unwrap();
     assert_eq!(counted["count"], 2, "acme bulk docs, isolated: {counted}");
+
+    // The create/update verbs also round-trip and stay tenanted.
+    assert_bulk_create_and_update(&client, &os_base, &proxy).await;
+}
+
+/// A second bulk exercising `create` and `update` end-to-end: an upsert that
+/// creates a tenanted doc, a partial `doc` update of an existing doc, and a
+/// `create` conflict that is positioned as a per-item error. Verified by reading
+/// the physical documents straight from OpenSearch.
+async fn assert_bulk_create_and_update(client: &HttpClient, os_base: &str, proxy: &str) {
+    // Header-routed (the update bodies carry no partition key): create acme:5,
+    // upsert-create acme:6, and patch the existing acme:1.
+    let ndjson = concat!(
+        "{\"create\":{\"_id\":\"5\"}}\n{\"msg\":\"c5\"}\n",
+        "{\"update\":{\"_id\":\"6\"}}\n{\"doc\":{\"msg\":\"u6\"},\"upsert\":{\"msg\":\"up6\"}}\n",
+        "{\"update\":{\"_id\":\"1\"}}\n{\"doc\":{\"msg\":\"a1-patched\"}}\n",
+    );
+    let (status, body) = request_with_tenant(
+        client,
+        Method::POST,
+        &format!("{proxy}/orders/_bulk"),
+        "acme",
+        Bytes::from(ndjson.to_owned()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, 200, "{body}");
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["errors"], false, "create+update bulk: {body}");
+
+    let _ = send(
+        client,
+        Method::POST,
+        &format!("{os_base}/{INDEX}/_refresh"),
+        Bytes::new(),
+    )
+    .await
+    .unwrap();
+
+    // The physical docs exist, tenanted: acme:5 (create), acme:6 (upsert-create),
+    // acme:1 (patched). The injected `_tenant` is present on each.
+    for (id, msg) in [("5", "c5"), ("6", "up6"), ("1", "a1-patched")] {
+        let (status, doc) = get(
+            client,
+            &format!("{os_base}/{INDEX}/_doc/acme:{id}?routing=acme"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, 200, "acme:{id} missing: {doc}");
+        let parsed: serde_json::Value = serde_json::from_str(&doc).unwrap();
+        assert_eq!(parsed["_source"]["_tenant"], "acme", "{doc}");
+        assert_eq!(parsed["_source"]["msg"], msg, "{doc}");
+    }
+
+    // A `create` of an existing id is a positioned conflict (errors:true), not a
+    // silent overwrite — proving op_type=create reached OpenSearch.
+    let (status, body) = request_with_tenant(
+        client,
+        Method::POST,
+        &format!("{proxy}/orders/_bulk"),
+        "acme",
+        Bytes::from_static(b"{\"create\":{\"_id\":\"5\"}}\n{\"msg\":\"dup\"}\n"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, 200, "{body}");
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        parsed["errors"], true,
+        "create conflict should error: {body}"
+    );
+    assert_eq!(parsed["items"][0]["create"]["status"], 409, "{body}");
 }
 
 #[tokio::test]
