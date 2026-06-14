@@ -27,6 +27,8 @@ hyper = { workspace = true, features = ["server", "client", "http1"] }
 hyper-util = { workspace = true, features = ["server", "service", "client", "client-legacy", "http1", "tokio"] }
 http-body-util.workspace = true
 bytes.workspace = true
+serde_json.workspace = true
+testcontainers.workspace = true
 
 [lints]
 workspace = true

@@ -11,6 +11,22 @@ yanked = "deny"
 ignore = [
     "RUSTSEC-2025-0141", # bincode unmaintained — via iai-callgrind (benches)
     "RUSTSEC-2026-0173", # proc-macro-error2 unmaintained — via iai-callgrind (benches)
+    # rustls-pemfile deprecated — reached only through testcontainers' bollard
+    # (dev/test infra, the M1 testcontainer exit gate); never in shipped
+    # artifacts. Our own TLS code uses rustls-pki-types' PemObject directly.
+    "RUSTSEC-2025-0134",
+    # astral-tokio-tar < 0.6.0 tar-extraction vulnerabilities (PAX header
+    # desync / symlink chmod / path validation). REAL vulnerabilities, accepted
+    # ONLY because they are confined to the dev/test Docker tooling
+    # (testcontainers -> bollard) used by the #[ignore]'d testcontainer exit
+    # gate, operating on the trusted official OpenSearch image — never in a
+    # shipped artifact and never extracting untrusted input. The fix needs
+    # astral-tokio-tar 0.6, a breaking change testcontainers/bollard have not
+    # yet adopted; remove these the moment they do.
+    "RUSTSEC-2026-0066",
+    "RUSTSEC-2026-0112",
+    "RUSTSEC-2026-0113",
+    "RUSTSEC-2026-0145",
 ]
 
 [licenses]
