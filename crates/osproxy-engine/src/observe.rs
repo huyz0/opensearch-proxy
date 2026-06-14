@@ -53,6 +53,16 @@ pub(crate) fn dispatch_info(resolved: &Resolved, ack: &WriteAck) -> DispatchInfo
     }
 }
 
+/// Builds the `dispatch` span for a read from the resolved target and the
+/// upstream read status (a get-by-id has no write ack).
+pub(crate) fn read_dispatch_info(resolved: &Resolved, upstream_status: u16) -> DispatchInfo {
+    DispatchInfo {
+        cluster: resolved.decision.target.cluster.clone(),
+        upstream_status,
+        pool_reuse: false,
+    }
+}
+
 /// Synthesizes an [`ErrorContext`] for a request-path failure, carrying the
 /// stable code, retryability, a remediation hint, and whatever decision chain is
 /// known at the point of failure (ids only).

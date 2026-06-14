@@ -77,6 +77,7 @@ pub struct RequestCtx<'a> {
     endpoint: EndpointKind,
     protocol: Protocol,
     logical_index: &'a str,
+    doc_id: Option<&'a str>,
     headers: HeaderView<'a>,
     body: &'a [u8],
 }
@@ -107,9 +108,18 @@ impl<'a> RequestCtx<'a> {
             endpoint,
             protocol,
             logical_index,
+            doc_id: None,
             headers,
             body,
         }
+    }
+
+    /// Sets the document id from the request path (e.g. `_doc/{id}`), present on
+    /// by-id reads/writes. Builder style; `RequestCtx` is `Copy` (`docs/04` §5).
+    #[must_use]
+    pub fn with_doc_id(mut self, doc_id: Option<&'a str>) -> Self {
+        self.doc_id = doc_id;
+        self
     }
 
     /// The authenticated caller.
@@ -152,6 +162,14 @@ impl<'a> RequestCtx<'a> {
     #[must_use]
     pub fn logical_index(&self) -> &str {
         self.logical_index
+    }
+
+    /// The client-supplied document id from the path, if the endpoint carries
+    /// one (`GetById`/`DeleteById`/by-id ingest). This is the **logical** id;
+    /// the tenancy layer maps it to the physical id (`docs/04` §5).
+    #[must_use]
+    pub fn doc_id(&self) -> Option<&'a str> {
+        self.doc_id
     }
 
     /// The request headers.
@@ -202,5 +220,25 @@ mod tests {
         assert_eq!(ctx.principal_id().as_str(), "svc");
         assert_eq!(ctx.request_id().as_str(), "req-1");
         assert_eq!(ctx.body(), b"{}");
+        assert_eq!(ctx.doc_id(), None);
+    }
+
+    #[test]
+    fn doc_id_is_attached_by_builder() {
+        let principal = Principal::new(PrincipalId::from("svc"));
+        let rid = RequestId::from("req-1");
+        let raw: Vec<(String, String)> = vec![];
+        let ctx = RequestCtx::new(
+            &principal,
+            &rid,
+            HttpMethod::Get,
+            EndpointKind::GetById,
+            Protocol::Http1,
+            "orders",
+            HeaderView::new(&raw),
+            b"",
+        )
+        .with_doc_id(Some("7"));
+        assert_eq!(ctx.doc_id(), Some("7"));
     }
 }

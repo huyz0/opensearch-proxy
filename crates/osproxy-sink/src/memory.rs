@@ -1,23 +1,29 @@
-//! An in-memory [`Sink`] for tests and dry-run routing.
+//! An in-memory [`Sink`] (and [`Reader`]) for tests and dry-run routing.
 //!
 //! Records every batch it receives and acknowledges each operation as a
-//! success, without any network. Not for production — it persists nothing — but
-//! it lets the engine and routing logic be exercised end-to-end without a live
-//! OpenSearch (the real `OpenSearchSink` is covered by a testcontainer
-//! round-trip).
+//! success, without any network. It also keeps the indexed documents by
+//! `(index, id)` so it can serve get-by-id [`Reader`] requests — which lets the
+//! full write→read round-trip be exercised in memory (the real `OpenSearchSink`
+//! is covered by a testcontainer round-trip). Not for production: it persists
+//! nothing.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::ack::{OpResult, WriteAck};
 use crate::batch::{DocOp, WriteBatch};
 use crate::error::SinkError;
+use crate::read::{ReadOp, ReadOutcome, Reader};
 use crate::sink::Sink;
 
-/// A non-persistent [`Sink`] that records batches and acknowledges success.
+/// A non-persistent [`Sink`]/[`Reader`] that records batches, stores indexed
+/// documents, and acknowledges success.
 #[derive(Debug, Default)]
 pub struct MemorySink {
     recorded: Mutex<Vec<WriteBatch>>,
+    /// Indexed documents keyed by `(physical index, physical id)`.
+    docs: Mutex<HashMap<(String, String), Vec<u8>>>,
     auto_id: AtomicU64,
 }
 
@@ -62,17 +68,70 @@ impl MemorySink {
         let n = self.auto_id.fetch_add(1, Ordering::SeqCst) + 1;
         format!("auto-{n}")
     }
+
+    /// Applies a batch to the document store: indexes store the body under
+    /// `(index, id)`; deletes remove it. The ack supplies any auto-assigned id
+    /// so an auto-id index is still retrievable.
+    fn store(&self, batch: &WriteBatch, ack: &WriteAck) {
+        let mut docs = self
+            .docs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (op, result) in batch.ops().iter().zip(ack.results()) {
+            let index = op.target.index.as_str().to_owned();
+            match &op.doc {
+                DocOp::Index { body, .. } => {
+                    docs.insert((index, result.id.clone()), body.clone());
+                }
+                DocOp::Delete { id, .. } => {
+                    docs.remove(&(index, id.clone()));
+                }
+            }
+        }
+    }
 }
 
 impl Sink for MemorySink {
     async fn write(&self, batch: WriteBatch) -> Result<WriteAck, SinkError> {
         let ack = self.ack_for(&batch);
+        self.store(&batch, &ack);
         self.recorded
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(batch);
         Ok(ack)
     }
+}
+
+impl Reader for MemorySink {
+    async fn get(&self, op: ReadOp) -> Result<ReadOutcome, SinkError> {
+        let index = op.target.index.as_str().to_owned();
+        let doc = self
+            .docs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&(index.clone(), op.id.clone()))
+            .cloned();
+        // Emulate the OpenSearch get-by-id envelope so the engine's response
+        // shaping is identical against the memory sink and a real cluster.
+        Ok(match doc {
+            Some(body) => ReadOutcome::found(200, envelope(&index, &op.id, &body, true)),
+            None => ReadOutcome::not_found(404, envelope(&index, &op.id, b"null", false)),
+        })
+    }
+}
+
+/// Builds the OpenSearch get-by-id response envelope around a stored document.
+fn envelope(index: &str, id: &str, source: &[u8], found: bool) -> Vec<u8> {
+    let source: serde_json::Value =
+        serde_json::from_slice(source).unwrap_or(serde_json::Value::Null);
+    let doc = serde_json::json!({
+        "_index": index,
+        "_id": id,
+        "found": found,
+        "_source": source,
+    });
+    serde_json::to_vec(&doc).unwrap_or_else(|_| b"{\"found\":false}".to_vec())
 }
 
 #[cfg(test)]
@@ -112,5 +171,77 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ack.results()[0].id, "p:7");
+    }
+
+    fn target() -> Target {
+        Target::new(ClusterId::from("c"), IndexName::from("i"))
+    }
+
+    #[tokio::test]
+    async fn written_document_is_readable_by_id() {
+        let sink = MemorySink::new();
+        let op = WriteOp::new(
+            target(),
+            DocOp::Index {
+                id: Some("acme:7".to_owned()),
+                routing: Some("acme".to_owned()),
+                body: br#"{"msg":"hi"}"#.to_vec(),
+            },
+            Epoch::new(1),
+        );
+        sink.write(WriteBatch::single(op)).await.unwrap();
+
+        let hit = sink
+            .get(ReadOp::new(target(), "acme:7", Some("acme".to_owned())))
+            .await
+            .unwrap();
+        assert!(hit.found);
+        // The body is the OpenSearch get-by-id envelope around the stored doc.
+        let doc: serde_json::Value = serde_json::from_slice(&hit.body).unwrap();
+        assert_eq!(doc["found"], true);
+        assert_eq!(doc["_id"], "acme:7");
+        assert_eq!(doc["_source"]["msg"], "hi");
+    }
+
+    #[tokio::test]
+    async fn missing_document_is_a_not_found_outcome() {
+        let sink = MemorySink::new();
+        let miss = sink
+            .get(ReadOp::new(target(), "absent", None))
+            .await
+            .unwrap();
+        assert!(!miss.found);
+        assert_eq!(miss.status, 404);
+    }
+
+    #[tokio::test]
+    async fn delete_removes_a_stored_document() {
+        let sink = MemorySink::new();
+        sink.write(WriteBatch::single(WriteOp::new(
+            target(),
+            DocOp::Index {
+                id: Some("acme:7".to_owned()),
+                routing: None,
+                body: b"{}".to_vec(),
+            },
+            Epoch::new(1),
+        )))
+        .await
+        .unwrap();
+        sink.write(WriteBatch::single(WriteOp::new(
+            target(),
+            DocOp::Delete {
+                id: "acme:7".to_owned(),
+                routing: None,
+            },
+            Epoch::new(1),
+        )))
+        .await
+        .unwrap();
+        let miss = sink
+            .get(ReadOp::new(target(), "acme:7", None))
+            .await
+            .unwrap();
+        assert!(!miss.found);
     }
 }

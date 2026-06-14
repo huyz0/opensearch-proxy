@@ -79,7 +79,8 @@ impl<A: Authenticator> IngressHandler for AppHandler<A> {
             &req.logical_index,
             HeaderView::new(&req.headers),
             &req.body,
-        );
+        )
+        .with_doc_id(req.doc_id.as_deref());
 
         // Echo the request id so a client (or LLM) can fetch its
         // /debug/explain/{id} afterward.

@@ -6,10 +6,12 @@
 //! `QueueSink` drop-in behind the same trait. Epoch stamping is carried on every
 //! [`WriteOp`] at this boundary (`docs/06` §2).
 //!
-//! M1 ships the trait, the [`WriteBatch`]/[`WriteAck`] vocabulary, an in-memory
-//! [`MemorySink`] for tests and dry-run, and the [`OpenSearchSink`] that writes
-//! directly to a cluster over a pooled HTTP connection. Upstream TLS via the
-//! crypto seam attaches in the transport slice.
+//! M1 ships the [`Sink`] trait, the [`WriteBatch`]/[`WriteAck`] vocabulary, an
+//! in-memory [`MemorySink`] for tests and dry-run, and the [`OpenSearchSink`]
+//! that writes directly to a cluster over a pooled HTTP connection. M2 adds the
+//! [`Reader`] seam for get-by-id reads (kept separate because a read is always
+//! direct-to-cluster — a redundancy `QueueSink` can absorb writes but cannot
+//! answer a read); both `MemorySink` and `OpenSearchSink` implement it.
 #![deny(missing_docs)]
 
 mod ack;
@@ -17,6 +19,7 @@ mod batch;
 mod error;
 mod memory;
 mod opensearch;
+mod read;
 mod sink;
 
 pub use ack::{OpResult, WriteAck};
@@ -24,4 +27,5 @@ pub use batch::{DocOp, WriteBatch, WriteOp};
 pub use error::SinkError;
 pub use memory::MemorySink;
 pub use opensearch::OpenSearchSink;
+pub use read::{ReadOp, ReadOutcome, Reader};
 pub use sink::Sink;

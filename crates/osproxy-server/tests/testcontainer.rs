@@ -90,6 +90,30 @@ async fn get(client: &HttpClient, url: &str) -> Result<(u16, String), String> {
     send(client, Method::GET, url, Bytes::new()).await
 }
 
+/// A `GET` carrying the `x-tenant` partition header the proxy needs to resolve a
+/// by-id read (there is no body to carry the partition on a read).
+async fn get_with_tenant(
+    client: &HttpClient,
+    url: &str,
+    tenant: &str,
+) -> Result<(u16, String), String> {
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri(url)
+        .header("x-tenant", tenant)
+        .body(Full::new(Bytes::new()))
+        .map_err(|e| e.to_string())?;
+    let resp: Response<_> = client.request(req).await.map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .map_err(|e| e.to_string())?
+        .to_bytes();
+    Ok((status, String::from_utf8_lossy(&bytes).into_owned()))
+}
+
 async fn send(
     client: &HttpClient,
     method: Method,
@@ -151,6 +175,29 @@ async fn ingest_round_trips_to_real_opensearch() {
     assert_eq!(parsed["_source"]["_tenant"], "acme");
     assert_eq!(parsed["_source"]["msg"], "hello");
     assert_eq!(parsed["_routing"], "acme");
+
+    // Read it back *through the proxy* by its logical id: the client sees the
+    // logical document — logical id `7`, logical index, no `_tenant`, no
+    // `_routing` — the full write→read round-trip symmetry (docs/11 M2).
+    let (status, logical) = get_with_tenant(&client, &format!("{proxy}/orders/_doc/7"), "acme")
+        .await
+        .unwrap();
+    assert_eq!(status, 200, "proxy read failed: {logical}");
+    let seen: serde_json::Value = serde_json::from_str(&logical).unwrap();
+    assert_eq!(seen["_index"], "orders");
+    assert_eq!(seen["_id"], "7");
+    assert!(seen.get("_routing").is_none(), "{logical}");
+    assert!(seen["_source"].get("_tenant").is_none(), "{logical}");
+    assert_eq!(seen["_source"]["msg"], "hello");
+
+    // A miss is a logical not-found, not a leak of physical naming.
+    let (status, miss) = get_with_tenant(&client, &format!("{proxy}/orders/_doc/999"), "acme")
+        .await
+        .unwrap();
+    assert_eq!(status, 404, "{miss}");
+    let miss: serde_json::Value = serde_json::from_str(&miss).unwrap();
+    assert_eq!(miss["_id"], "999");
+    assert_eq!(miss["found"], false);
 }
 
 #[tokio::test]

@@ -18,7 +18,7 @@ use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use osproxy_core::{ClusterId, Epoch, IndexName, Target};
-use osproxy_sink::{DocOp, OpenSearchSink, Sink, WriteBatch, WriteOp};
+use osproxy_sink::{DocOp, OpenSearchSink, ReadOp, Reader, Sink, WriteBatch, WriteOp};
 use tokio::net::TcpListener;
 
 /// What the mock captured from the single request it served.
@@ -93,6 +93,54 @@ async fn index_with_id_and_routing_is_sent_and_parsed() {
     assert_eq!(got.method, "PUT");
     assert_eq!(got.uri, "/orders-shared/_doc/acme:1001?routing=acme");
     assert!(got.body.contains("\"_tenant\":\"acme\""));
+}
+
+#[tokio::test]
+async fn get_by_id_sends_request_and_returns_the_found_document() {
+    let (base, captured) = start_mock(
+        r#"{"_index":"orders-shared","_id":"acme:7","found":true,"_source":{"_tenant":"acme","msg":"hi"}}"#,
+    )
+    .await;
+    let sink = sink_for("eu-1", base);
+
+    let outcome = sink
+        .get(ReadOp::new(
+            Target::new(ClusterId::from("eu-1"), IndexName::from("orders-shared")),
+            "acme:7",
+            Some("acme".to_owned()),
+        ))
+        .await
+        .unwrap();
+
+    assert!(outcome.found);
+    assert_eq!(outcome.status, 200);
+    assert!(outcome.body.windows(3).any(|w| w == b"hi\""));
+
+    let got = captured.lock().unwrap().clone();
+    assert_eq!(got.method, "GET");
+    assert_eq!(got.uri, "/orders-shared/_doc/acme:7?routing=acme");
+    assert!(got.body.is_empty());
+}
+
+#[tokio::test]
+async fn read_from_unreachable_upstream_is_a_transport_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let sink = sink_for("eu-1", format!("http://{addr}"));
+
+    let err = sink
+        .get(ReadOp::new(
+            Target::new(ClusterId::from("eu-1"), IndexName::from("i")),
+            "x",
+            None,
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        err.retryable(),
+        "transport failure should be retryable: {err:?}"
+    );
 }
 
 #[tokio::test]

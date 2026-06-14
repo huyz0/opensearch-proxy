@@ -43,4 +43,11 @@ pub enum RewriteError {
         /// The placeholder text, without braces.
         placeholder: String,
     },
+
+    /// An id template cannot be reversed to recover a logical id on the read
+    /// path: a logical→physical mapping needs exactly one `{body.<path>}`
+    /// placeholder (the natural key), so a template with none or several is not
+    /// usable for `GetById`/`DeleteById` (`docs/03` §4, `docs/04` §5).
+    #[error("id template is not reversible: needs exactly one body placeholder")]
+    IrreversibleIdTemplate,
 }

@@ -51,6 +51,113 @@ pub fn construct_id(template: &str, partition: &str, doc: &Value) -> Result<Stri
     Ok(out)
 }
 
+/// Maps a client-supplied **logical** id to the **physical** id stored in
+/// OpenSearch, by substituting it for the template's single `{body.<path>}`
+/// placeholder and expanding `{partition}` (`docs/04` §5).
+///
+/// This is the read-path inverse of [`construct_id`]: on write the physical id
+/// is built from the document body; on read the client knows only the logical
+/// (natural) id, and the proxy reconstructs the same physical id to fetch it.
+///
+/// # Errors
+///
+/// Returns [`RewriteError::IrreversibleIdTemplate`] if the template does not
+/// contain exactly one `{body.<path>}` placeholder, or
+/// [`RewriteError::UnsupportedPlaceholder`] for an unknown placeholder.
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_rewrite::map_logical_to_physical;
+///
+/// let physical = map_logical_to_physical("{partition}:{body.id}", "acme", "7").unwrap();
+/// assert_eq!(physical, "acme:7");
+/// ```
+pub fn map_logical_to_physical(
+    template: &str,
+    partition: &str,
+    logical_id: &str,
+) -> Result<String, RewriteError> {
+    let (prefix, suffix) = id_frame(template, partition)?;
+    Ok(format!("{prefix}{logical_id}{suffix}"))
+}
+
+/// Maps a **physical** id back to the client-facing **logical** id, the inverse
+/// of [`map_logical_to_physical`], by stripping the template's literal frame.
+///
+/// Returns `None` if `physical_id` does not fit the frame (e.g. it belongs to a
+/// different partition), so a caller can fall back to the physical id rather
+/// than mis-report one.
+///
+/// # Errors
+///
+/// Returns [`RewriteError::IrreversibleIdTemplate`] (or
+/// [`RewriteError::UnsupportedPlaceholder`]) if the template itself is not a
+/// valid reversible id template.
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_rewrite::map_physical_to_logical;
+///
+/// let logical = map_physical_to_logical("{partition}:{body.id}", "acme", "acme:7").unwrap();
+/// assert_eq!(logical.as_deref(), Some("7"));
+/// ```
+pub fn map_physical_to_logical(
+    template: &str,
+    partition: &str,
+    physical_id: &str,
+) -> Result<Option<String>, RewriteError> {
+    let (prefix, suffix) = id_frame(template, partition)?;
+    Ok(physical_id
+        .strip_prefix(&prefix)
+        .and_then(|rest| rest.strip_suffix(&suffix))
+        .map(str::to_owned))
+}
+
+/// Renders the template's literal frame around its single `{body.<path>}`
+/// placeholder, with `{partition}` expanded: returns `(prefix, suffix)` such
+/// that `prefix + <natural key> + suffix` is the physical id.
+///
+/// Exactly one body placeholder is required for the mapping to be reversible.
+fn id_frame(template: &str, partition: &str) -> Result<(String, String), RewriteError> {
+    let mut prefix = String::new();
+    let mut suffix = String::new();
+    let mut seen_body = false;
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let literal = &rest[..open];
+        let after = &rest[open + 1..];
+        let close = after
+            .find('}')
+            .ok_or_else(|| RewriteError::UnsupportedPlaceholder {
+                placeholder: after.to_owned(),
+            })?;
+        let placeholder = &after[..close];
+        let frame = if seen_body { &mut suffix } else { &mut prefix };
+        frame.push_str(literal);
+        if placeholder == "partition" {
+            frame.push_str(partition);
+        } else if placeholder.strip_prefix("body.").is_some() {
+            if seen_body {
+                return Err(RewriteError::IrreversibleIdTemplate);
+            }
+            seen_body = true;
+        } else {
+            return Err(RewriteError::UnsupportedPlaceholder {
+                placeholder: placeholder.to_owned(),
+            });
+        }
+        rest = &after[close + 1..];
+    }
+    if seen_body {
+        suffix.push_str(rest);
+    } else {
+        return Err(RewriteError::IrreversibleIdTemplate);
+    }
+    Ok((prefix, suffix))
+}
+
 /// Expands a single placeholder (the text between `{` and `}`).
 fn expand(placeholder: &str, partition: &str, doc: &Value) -> Result<String, RewriteError> {
     if placeholder == "partition" {
@@ -109,5 +216,54 @@ mod tests {
     fn missing_body_path_propagates_error() {
         let doc = json!({ "a": 1 });
         assert!(construct_id("{body.missing}", "p", &doc).is_err());
+    }
+
+    #[test]
+    fn logical_to_physical_substitutes_natural_key() {
+        assert_eq!(
+            map_logical_to_physical("{partition}:{body.id}", "acme", "7").unwrap(),
+            "acme:7"
+        );
+        assert_eq!(
+            map_logical_to_physical("doc-{body.k}@{partition}", "p1", "abc").unwrap(),
+            "doc-abc@p1"
+        );
+    }
+
+    #[test]
+    fn physical_to_logical_strips_the_frame() {
+        assert_eq!(
+            map_physical_to_logical("{partition}:{body.id}", "acme", "acme:7").unwrap(),
+            Some("7".to_owned())
+        );
+        // A physical id from a different partition does not fit the frame.
+        assert_eq!(
+            map_physical_to_logical("{partition}:{body.id}", "acme", "other:7").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn mapping_round_trips_for_arbitrary_natural_keys() {
+        let template = "{partition}:{body.natural}";
+        for key in ["1001", "a-b", "", "x:y"] {
+            let physical = map_logical_to_physical(template, "acme", key).unwrap();
+            assert_eq!(
+                map_physical_to_logical(template, "acme", &physical).unwrap(),
+                Some(key.to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn templates_without_exactly_one_body_placeholder_are_irreversible() {
+        assert_eq!(
+            map_logical_to_physical("{partition}:static", "p", "x").unwrap_err(),
+            RewriteError::IrreversibleIdTemplate
+        );
+        assert_eq!(
+            map_logical_to_physical("{body.a}-{body.b}", "p", "x").unwrap_err(),
+            RewriteError::IrreversibleIdTemplate
+        );
     }
 }

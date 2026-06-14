@@ -1,7 +1,8 @@
 //! The reference tenancy implementation the binary serves.
 //!
 //! A minimal but complete [`TenancySpi`]: the partition is the `tenant_id`
-//! field, every document gets a `_tenant` field and a `{partition}:{body.id}`
+//! body field on ingest (or the `x-tenant` header on by-id reads, which carry
+//! no body), every document gets a `_tenant` field and a `{partition}:{body.id}`
 //! id with routing, and every partition lives on one shared index. It exists to
 //! make the binary runnable and to demonstrate the SPI; real consumers provide
 //! their own.
@@ -14,6 +15,9 @@ use osproxy_spi::{
 
 /// The injected tenancy field name.
 const TENANT_FIELD: &str = "_tenant";
+
+/// The header carrying the partition on by-id reads (which have no body).
+const TENANT_HEADER: &str = "x-tenant";
 
 /// A single-shared-index tenancy: all partitions share one physical index,
 /// isolated by an injected `_tenant` field.
@@ -33,7 +37,12 @@ impl ReferenceTenancy {
 
 impl TenancySpi for ReferenceTenancy {
     fn partition_key(&self) -> PartitionKeySpec {
-        PartitionKeySpec::BodyField(JsonPath::new("tenant_id"))
+        // Ingest carries the partition in the body; by-id reads have no body, so
+        // they carry it in a header set by the caller (or an auth gateway).
+        PartitionKeySpec::AnyOf(vec![
+            PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
+            PartitionKeySpec::Header(TENANT_HEADER.to_owned()),
+        ])
     }
 
     fn doc_id_rule(&self) -> Option<DocIdRule> {

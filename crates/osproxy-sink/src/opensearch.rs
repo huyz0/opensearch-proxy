@@ -21,6 +21,7 @@ use serde_json::Value;
 use crate::ack::{OpResult, WriteAck};
 use crate::batch::{DocOp, WriteBatch, WriteOp};
 use crate::error::SinkError;
+use crate::read::{ReadOp, ReadOutcome, Reader};
 use crate::sink::Sink;
 
 type HttpClient = Client<HttpConnector, Full<Bytes>>;
@@ -83,6 +84,50 @@ impl OpenSearchSink {
             })?
             .to_bytes();
         Ok(parse_result(&body, fallback_id, status))
+    }
+}
+
+impl Reader for OpenSearchSink {
+    async fn get(&self, op: ReadOp) -> Result<ReadOutcome, SinkError> {
+        let base = self.base_for(&op.target.cluster)?;
+        let uri = doc_uri(base, &op.target.index, Some(&op.id), op.routing.as_deref());
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(uri)
+            .body(Full::new(Bytes::new()))
+            .map_err(|_| SinkError::Transport {
+                kind: "building upstream read request",
+            })?;
+
+        let resp = self
+            .client
+            .request(req)
+            .await
+            .map_err(|_| SinkError::Transport {
+                kind: "upstream read failed",
+            })?;
+        let status = resp.status().as_u16();
+        // 404 is a normal "document does not exist"; only 5xx is a real failure.
+        if status >= 500 {
+            return Err(SinkError::Upstream {
+                status,
+                retryable: matches!(status, 502..=504),
+            });
+        }
+        let body = resp
+            .into_body()
+            .collect()
+            .await
+            .map_err(|_| SinkError::Transport {
+                kind: "reading upstream read response",
+            })?
+            .to_bytes()
+            .to_vec();
+        Ok(if status == 200 {
+            ReadOutcome::found(status, body)
+        } else {
+            ReadOutcome::not_found(status, body)
+        })
     }
 }
 

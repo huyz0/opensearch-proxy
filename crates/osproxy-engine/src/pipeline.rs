@@ -3,21 +3,26 @@
 //!
 //! M1 implements the single-document ingest path (`docs/04` §1): resolve the
 //! routing decision, build the epoch-stamped write batch, dispatch it to the
-//! sink, and shape the acknowledgement into an OpenSearch-style response. Read,
-//! bulk, and by-id paths attach here in later milestones.
+//! sink, and shape the acknowledgement into an OpenSearch-style response. M2
+//! adds the get-by-id read path (`docs/04` §5): resolve, map the logical id to
+//! the physical id, fetch, and shape the stored document back into the client's
+//! logical view. Search and bulk attach here in later milestones.
 
 use std::sync::Arc;
 
 use osproxy_core::{EndpointKind, RequestId};
 use osproxy_observe::{ClassifyInfo, EgressInfo, ExplainStore, RequestTrace};
-use osproxy_sink::{Sink, WriteAck};
+use osproxy_sink::{Reader, Sink, WriteAck};
 use osproxy_spi::{RequestCtx, SpiError, TenancySpi};
 use osproxy_tenancy::TenancyRouter;
 use serde_json::Value;
 
 use crate::error::RequestError;
-use crate::observe::{dispatch_info, error_context, logical_index, resolve_info, rewrite_info};
+use crate::observe::{
+    dispatch_info, error_context, logical_index, read_dispatch_info, resolve_info, rewrite_info,
+};
 use crate::plan::build_write_batch;
+use crate::read::{build_read_op, not_found_body, shape_found};
 
 /// How many recent request explanations `/debug/explain` retains per instance.
 const EXPLAIN_CAPACITY: usize = 1024;
@@ -46,7 +51,7 @@ pub struct Pipeline<T, S> {
     explain: Arc<ExplainStore>,
 }
 
-impl<T: TenancySpi, S: Sink> Pipeline<T, S> {
+impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
     /// Builds a pipeline from a router and a sink.
     pub fn new(router: TenancyRouter<T>, sink: S) -> Self {
         Self {
@@ -99,6 +104,7 @@ impl<T: TenancySpi, S: Sink> Pipeline<T, S> {
     ) -> Result<PipelineResponse, RequestError> {
         match ctx.endpoint() {
             EndpointKind::IngestDoc => self.ingest_doc(ctx, trace).await,
+            EndpointKind::GetById => self.get_by_id(ctx, trace).await,
             other => Err(RequestError::Spi(SpiError::UnsupportedEndpoint {
                 endpoint: other,
             })),
@@ -120,6 +126,41 @@ impl<T: TenancySpi, S: Sink> Pipeline<T, S> {
         let ack = self.sink.write(batch).await?;
         trace.record_dispatch(dispatch_info(&resolved, &ack));
         Ok(response_for(&ack))
+    }
+
+    /// The get-by-id read path (`docs/04` §5): resolve the partition, map the
+    /// client's logical id to the physical id, fetch it, and shape the stored
+    /// document back into the client's logical view (injected fields stripped).
+    async fn get_by_id(
+        &self,
+        ctx: &RequestCtx<'_>,
+        trace: &mut RequestTrace,
+    ) -> Result<PipelineResponse, RequestError> {
+        let resolved = self.router.resolve(ctx).await?;
+        trace.record_resolve(resolve_info(&resolved));
+
+        let logical_id = ctx.doc_id().ok_or(RequestError::Internal {
+            reason: "get-by-id reached the engine without a document id",
+        })?;
+        let (read_op, shape) = build_read_op(&resolved, logical_id)?;
+
+        let outcome = self.sink.get(read_op).await?;
+        trace.record_dispatch(read_dispatch_info(&resolved, outcome.status));
+
+        if outcome.found {
+            let body = shape_found(
+                &outcome.body,
+                ctx.logical_index(),
+                logical_id,
+                &shape.inject_names,
+            )?;
+            Ok(PipelineResponse { status: 200, body })
+        } else {
+            Ok(PipelineResponse {
+                status: 404,
+                body: not_found_body(ctx.logical_index(), logical_id),
+            })
+        }
     }
 }
 
@@ -163,7 +204,11 @@ mod tests {
 
     impl TenancySpi for Tenancy {
         fn partition_key(&self) -> PartitionKeySpec {
-            PartitionKeySpec::BodyField(JsonPath::new("tenant_id"))
+            // Ingest resolves from the body; by-id reads (no body) from a header.
+            PartitionKeySpec::AnyOf(vec![
+                PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
+                PartitionKeySpec::Header("x-tenant".to_owned()),
+            ])
         }
         fn doc_id_rule(&self) -> Option<DocIdRule> {
             Some(DocIdRule::new(IdTemplate::new("{partition}:{body.id}")).with_routing(true))
