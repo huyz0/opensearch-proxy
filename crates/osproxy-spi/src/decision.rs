@@ -34,8 +34,8 @@ pub enum HeaderOp {
 ///
 /// For single-doc ingest the transform injects tenancy fields and/or constructs
 /// the document `_id`. `osproxy-rewrite` performs the transform; this enum is
-/// the instruction. `#[non_exhaustive]` for additive growth.
-#[non_exhaustive]
+/// the instruction. Not `#[non_exhaustive]`: the engine must apply every
+/// transform kind, so a new kind should force the plan builder to be updated.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BodyTransform {
     /// Forward the body unchanged.

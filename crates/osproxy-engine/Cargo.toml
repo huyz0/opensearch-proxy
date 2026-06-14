@@ -16,6 +16,11 @@ osproxy-rewrite.workspace = true
 osproxy-sink.workspace = true
 osproxy-control.workspace = true
 osproxy-observe.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true

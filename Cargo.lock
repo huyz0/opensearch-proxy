@@ -382,6 +382,9 @@ dependencies = [
  "osproxy-sink",
  "osproxy-spi",
  "osproxy-tenancy",
+ "serde_json",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
