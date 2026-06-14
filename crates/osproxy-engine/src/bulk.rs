@@ -69,14 +69,14 @@ pub(crate) async fn ingest_bulk<T: TenancySpi, S: Sink>(
                 buf.push((ordinal, p));
                 if buf.len() >= FLUSH_THRESHOLD {
                     let entries = buffers.remove(&target).unwrap_or_default();
-                    flush(sink, &entries, &mut lines).await;
+                    flush(router, sink, entries, &mut lines).await;
                 }
             }
             Err(fail) => lines[ordinal] = fail.into_line(),
         }
     }
 
-    flush_remaining(sink, buffers, &mut lines).await;
+    flush_remaining(router, sink, buffers, &mut lines).await;
 
     let errors = lines.iter().any(is_error_line);
     let body = json!({ "took": 0, "errors": errors, "items": lines });
@@ -88,35 +88,79 @@ pub(crate) async fn ingest_bulk<T: TenancySpi, S: Sink>(
     })
 }
 
-/// Flushes one target's sub-batch in place: dispatch it and apply each result to
-/// `lines` by its original ordinal. Awaited inline, so the transformed bytes are
-/// freed before parsing resumes (the mid-stream backpressure that bounds memory).
-async fn flush<S: Sink>(sink: &S, entries: &[(usize, Prepared)], lines: &mut [Value]) {
-    let batch = build_batch(entries);
-    apply_results(entries, sink.write(batch).await, lines);
+/// Flushes one target's sub-batch in place: re-check the migration write gate
+/// per item, dispatch the admitted ops, and apply each result to `lines` by its
+/// original ordinal. Awaited inline, so the transformed bytes are freed before
+/// parsing resumes (the mid-stream backpressure that bounds memory).
+async fn flush<T: TenancySpi, S: Sink>(
+    router: &TenancyRouter<T>,
+    sink: &S,
+    entries: Entries,
+    lines: &mut [Value],
+) {
+    let (admitted, rejected) = gate(router, entries).await;
+    for (ordinal, p) in &rejected {
+        lines[*ordinal] = stale_epoch_line(p);
+    }
+    apply_results(&admitted, sink.write(build_batch(&admitted)).await, lines);
 }
 
-/// Flushes every remaining target's sub-batch **concurrently** (bounded), then
-/// applies the results by ordinal. Completion order cannot disturb re-interleave —
-/// every line is keyed by its original ordinal.
-async fn flush_remaining<S: Sink>(
+/// Flushes every remaining target's sub-batch **concurrently** (bounded). Each
+/// task gates its entries (no `lines` access, so the tasks stay independent) and
+/// dispatches the admitted ops; results are applied by ordinal afterward, so
+/// completion order cannot disturb re-interleave.
+async fn flush_remaining<T: TenancySpi, S: Sink>(
+    router: &TenancyRouter<T>,
     sink: &S,
     buffers: HashMap<Target, Entries>,
     lines: &mut [Value],
 ) {
+    type Flushed = (Entries, Entries, Result<WriteAck, SinkError>);
     let pending = buffers.into_values().filter(|v| !v.is_empty());
-    let results: Vec<(Entries, Result<WriteAck, SinkError>)> = futures_util::stream::iter(pending)
+    let results: Vec<Flushed> = futures_util::stream::iter(pending)
         .map(|entries| async move {
-            let r = sink.write(build_batch(&entries)).await;
-            (entries, r)
+            let (admitted, rejected) = gate(router, entries).await;
+            let ack = sink.write(build_batch(&admitted)).await;
+            (admitted, rejected, ack)
         })
         .buffer_unordered(MAX_DISPATCH_CONCURRENCY)
         .collect()
         .await;
 
-    for (entries, result) in results {
-        apply_results(&entries, result, lines);
+    for (admitted, rejected, ack) in results {
+        for (ordinal, p) in &rejected {
+            lines[*ordinal] = stale_epoch_line(p);
+        }
+        apply_results(&admitted, ack, lines);
     }
+}
+
+/// Splits a target's entries by the migration write gate (`docs/06` §2),
+/// re-checked here at dispatch: `(admitted, rejected)`. A rejected item resolved
+/// against a placement that has since advanced or entered cutover — it is held,
+/// never dispatched.
+async fn gate<T: TenancySpi>(router: &TenancyRouter<T>, entries: Entries) -> (Entries, Entries) {
+    let mut admitted = Entries::new();
+    let mut rejected = Entries::new();
+    for (ordinal, p) in entries {
+        if router.admit_write(&p.partition, p.op.epoch).await {
+            admitted.push((ordinal, p));
+        } else {
+            rejected.push((ordinal, p));
+        }
+    }
+    (admitted, rejected)
+}
+
+/// The response line for an item held by the migration write gate: a positioned,
+/// retryable `409` so the client re-resolves and retries just that item.
+fn stale_epoch_line(p: &Prepared) -> Value {
+    json!({ p.action: {
+        "_index": p.logical_index,
+        "_id": p.logical_id,
+        "status": 409,
+        "error": { "type": "stale_epoch" },
+    }})
 }
 
 /// Builds the [`WriteBatch`] for a target's buffered entries.

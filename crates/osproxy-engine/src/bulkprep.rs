@@ -19,9 +19,12 @@ use osproxy_spi::{BodyTransform, InjectedField, InjectedValue, RequestCtx, Tenan
 use osproxy_tenancy::{Resolved, TenancyRouter};
 use serde_json::Value;
 
-/// A prepared operation: the write op plus what the response line needs.
+/// A prepared operation: the write op plus what the response line needs and the
+/// partition it resolved for (so the migration write gate can be re-checked at
+/// flush, `docs/06` §2).
 pub(crate) struct Prepared {
     pub(crate) op: WriteOp,
+    pub(crate) partition: PartitionId,
     pub(crate) action: &'static str,
     pub(crate) logical_index: String,
     pub(crate) logical_id: String,
@@ -147,6 +150,7 @@ fn build_op(
             resolved.decision.epoch,
         )
         .with_protocol(resolved.decision.upstream_protocol),
+        partition: resolved.partition.clone(),
         action,
         logical_index,
         logical_id,
