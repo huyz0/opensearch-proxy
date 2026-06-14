@@ -4,6 +4,14 @@
 [advisories]
 version = 2
 yanked = "deny"
+# Unmaintained-crate notices reached only through dev/test-only dependencies
+# (never in shipped artifacts). No safe upgrade exists; revisit when the
+# upstream dev tools drop them. Vulnerabilities (not just unmaintained) are
+# still denied.
+ignore = [
+    "RUSTSEC-2025-0141", # bincode unmaintained — via dhat (memory-budget tests)
+    "RUSTSEC-2026-0173", # proc-macro-error2 unmaintained — via iai-callgrind (benches)
+]
 
 [licenses]
 version = 2
@@ -21,7 +29,7 @@ confidence-threshold = 0.9
 
 [bans]
 multiple-versions = "warn"
-wildcard-dependencies = "warn"
+wildcards = "warn"
 
 [sources]
 unknown-registry = "deny"
