@@ -8,6 +8,9 @@ Cargo.lock          # this is a library workspace; keep lockfile out of crates, 
 *.profraw
 dhat-heap.json
 
+# Claude Code local settings (machine-specific). The skills symlink IS tracked.
+.claude/settings.local.json
+
 # Editor / OS
 .DS_Store
 *.swp
