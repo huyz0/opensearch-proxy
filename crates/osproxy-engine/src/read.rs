@@ -1,15 +1,14 @@
-//! The read-path glue for get-by-id (`docs/04` §5).
+//! The read-path glue for get-by-id, delete-by-id, and search (`docs/04` §4–5).
 //!
-//! Mirrors [`crate::plan`] on the read side: it turns a resolved routing
-//! decision plus the client's **logical** id into the [`ReadOp`] the
-//! [`Reader`](osproxy_sink::Reader) fetches, then shapes the upstream document
-//! back into the client's logical view — stripping injected tenancy fields,
-//! mapping the physical id back to logical, and presenting the logical index.
-//! Pure and synchronous; the network hop happens in the pipeline.
+//! Mirrors [`crate::plan`] on the read side: it turns a resolved routing decision
+//! plus the client's request into the op the reader/sink runs, then shapes the
+//! upstream response back into the client's logical view (strip injected fields,
+//! map physical ids back to logical, present the logical index). Pure and
+//! synchronous; the network hop happens in the pipeline.
 
 use osproxy_core::FieldName;
 use osproxy_rewrite::{map_logical_to_physical, map_physical_to_logical, strip_fields, wrap_query};
-use osproxy_sink::{ReadOp, SearchOp};
+use osproxy_sink::{DocOp, ReadOp, SearchOp, WriteOp};
 use osproxy_spi::{BodyTransform, DocIdRule, InjectedField, InjectedValue};
 use osproxy_tenancy::Resolved;
 use serde_json::Value;
@@ -37,9 +36,45 @@ pub(crate) fn build_read_op(
     resolved: &Resolved,
     logical_id: &str,
 ) -> Result<(ReadOp, ReadShape), RequestError> {
-    let partition = resolved.partition.as_str();
     let shape = read_shape(&resolved.decision.body_transform);
+    let (physical_id, routing) = physical_id_and_routing(resolved, logical_id, &shape)?;
+    let op = ReadOp::new(resolved.decision.target.clone(), physical_id, routing);
+    Ok((op, shape))
+}
 
+/// Builds the delete [`WriteOp`] for a resolved delete-by-id request, mapping the
+/// client's logical id to the physical id (and setting `_routing`), epoch-stamped
+/// like any write (`docs/04` §5, `docs/06` §2).
+///
+/// # Errors
+///
+/// Returns [`RequestError::Rewrite`] if the id rule cannot map the logical id to
+/// a physical id (an irreversible template).
+pub(crate) fn build_delete_op(
+    resolved: &Resolved,
+    logical_id: &str,
+) -> Result<WriteOp, RequestError> {
+    let shape = read_shape(&resolved.decision.body_transform);
+    let (physical_id, routing) = physical_id_and_routing(resolved, logical_id, &shape)?;
+    Ok(WriteOp::new(
+        resolved.decision.target.clone(),
+        DocOp::Delete {
+            id: physical_id,
+            routing,
+        },
+        resolved.decision.epoch,
+    ))
+}
+
+/// Maps a logical id to `(physical_id, routing)` for a by-id request: applies the
+/// id rule when present (else the client id is already physical), and sets
+/// routing to the partition when the rule asks for it.
+fn physical_id_and_routing(
+    resolved: &Resolved,
+    logical_id: &str,
+    shape: &ReadShape,
+) -> Result<(String, Option<String>), RequestError> {
+    let partition = resolved.partition.as_str();
     let physical_id = match &shape.id_rule {
         Some(rule) => map_logical_to_physical(rule.template.as_str(), partition, logical_id)?,
         // No id rule (e.g. a dedicated index): the client id is the physical id.
@@ -50,9 +85,7 @@ pub(crate) fn build_read_op(
         .as_ref()
         .filter(|r| r.set_routing)
         .map(|_| partition.to_owned());
-
-    let op = ReadOp::new(resolved.decision.target.clone(), physical_id, routing);
-    Ok((op, shape))
+    Ok((physical_id, routing))
 }
 
 /// Shapes a found upstream document into the client's logical view: presents the
@@ -82,6 +115,20 @@ pub(crate) fn shape_found(
     serde_json::to_vec(&doc).map_err(|_| RequestError::Internal {
         reason: "serializing read response",
     })
+}
+
+/// The OpenSearch-shaped delete response in the client's logical terms: the
+/// logical index and id, and a `result` of `deleted` (or `not_found` on a 404).
+#[must_use]
+pub(crate) fn shape_delete(logical_index: &str, logical_id: &str, status: u16) -> Vec<u8> {
+    // 404 → "not_found", any success → "deleted".
+    let result = ["deleted", "not_found"][usize::from(status == 404)];
+    let doc = serde_json::json!({
+        "_index": logical_index,
+        "_id": logical_id,
+        "result": result,
+    });
+    serde_json::to_vec(&doc).unwrap_or_else(|_| b"{}".to_vec())
 }
 
 /// The OpenSearch-shaped body for a document that does not exist, in the
@@ -297,6 +344,27 @@ mod tests {
         assert_eq!(doc["_index"], "orders");
         assert_eq!(doc["_id"], "7");
         assert_eq!(doc["found"], false);
+    }
+
+    #[test]
+    fn delete_op_maps_logical_id_and_sets_routing() {
+        let op = build_delete_op(&resolved(shared_transform()), "7").unwrap();
+        assert_eq!(op.epoch, Epoch::new(4));
+        let DocOp::Delete { id, routing } = &op.doc else {
+            unreachable!("delete-by-id produces a Delete op")
+        };
+        assert_eq!(id, "acme:7");
+        assert_eq!(routing.as_deref(), Some("acme"));
+    }
+
+    #[test]
+    fn delete_response_reports_logical_terms() {
+        let ok: Value = serde_json::from_slice(&shape_delete("orders", "7", 200)).unwrap();
+        assert_eq!(ok["_index"], "orders");
+        assert_eq!(ok["_id"], "7");
+        assert_eq!(ok["result"], "deleted");
+        let miss: Value = serde_json::from_slice(&shape_delete("orders", "7", 404)).unwrap();
+        assert_eq!(miss["result"], "not_found");
     }
 
     #[test]

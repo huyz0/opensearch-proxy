@@ -108,6 +108,24 @@ async fn read(
     p.handle(&ctx).await.unwrap()
 }
 
+async fn delete(p: &Pipeline<SharedTenancy, MemorySink>, logical_id: &str) -> PipelineResponse {
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("d");
+    let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Delete,
+        EndpointKind::DeleteById,
+        Protocol::Http1,
+        "orders",
+        HeaderView::new(&headers),
+        b"",
+    )
+    .with_doc_id(Some(logical_id));
+    p.handle(&ctx).await.unwrap()
+}
+
 async fn search(p: &Pipeline<SharedTenancy, MemorySink>, body: &[u8]) -> PipelineResponse {
     let principal = Principal::new(PrincipalId::from("svc"));
     let rid = RequestId::from("s");
@@ -172,6 +190,24 @@ async fn get_by_id_returns_the_logical_document() {
     assert!(doc["_source"].get("_tenant").is_none());
     assert_eq!(doc["_source"]["msg"], "hello");
     assert_eq!(doc["_source"]["id"], 7);
+}
+
+#[tokio::test]
+async fn delete_by_id_removes_the_document() {
+    let p = pipeline();
+    write(&p, br#"{"tenant_id":"acme","id":7,"msg":"hello"}"#).await;
+
+    // Delete maps the logical id to the physical id and reports logical terms.
+    let resp = delete(&p, "7").await;
+    assert_eq!(resp.status, 200);
+    let doc: Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(doc["_index"], "orders");
+    assert_eq!(doc["_id"], "7");
+    assert_eq!(doc["result"], "deleted");
+
+    // The document is gone: a subsequent read is a logical not-found.
+    let after = read(&p, "r", "7").await;
+    assert_eq!(after.status, 404);
 }
 
 #[tokio::test]

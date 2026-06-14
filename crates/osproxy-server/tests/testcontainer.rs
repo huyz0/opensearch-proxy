@@ -189,10 +189,15 @@ async fn ingest_round_trips_to_real_opensearch() {
     assert_eq!(parsed["_source"]["msg"], "hello");
     assert_eq!(parsed["_routing"], "acme");
 
-    // Read it back *through the proxy* by its logical id: the client sees the
-    // logical document — logical id `7`, logical index, no `_tenant`, no
-    // `_routing` — the full write→read round-trip symmetry (docs/11 M2).
-    let (status, logical) = get_with_tenant(&client, &format!("{proxy}/orders/_doc/7"), "acme")
+    // The proxy read→delete→read round-trip in the client's logical terms.
+    assert_logical_read(&client, &proxy).await;
+    assert_delete_removes(&client, &proxy).await;
+}
+
+/// Reads the doc back through the proxy in the client's logical view, and that a
+/// miss is a logical not-found (not a leak of physical naming).
+async fn assert_logical_read(client: &HttpClient, proxy: &str) {
+    let (status, logical) = get_with_tenant(client, &format!("{proxy}/orders/_doc/7"), "acme")
         .await
         .unwrap();
     assert_eq!(status, 200, "proxy read failed: {logical}");
@@ -203,14 +208,36 @@ async fn ingest_round_trips_to_real_opensearch() {
     assert!(seen["_source"].get("_tenant").is_none(), "{logical}");
     assert_eq!(seen["_source"]["msg"], "hello");
 
-    // A miss is a logical not-found, not a leak of physical naming.
-    let (status, miss) = get_with_tenant(&client, &format!("{proxy}/orders/_doc/999"), "acme")
+    let (status, miss) = get_with_tenant(client, &format!("{proxy}/orders/_doc/999"), "acme")
         .await
         .unwrap();
     assert_eq!(status, 404, "{miss}");
     let miss: serde_json::Value = serde_json::from_str(&miss).unwrap();
     assert_eq!(miss["_id"], "999");
     assert_eq!(miss["found"], false);
+}
+
+/// Deletes the doc through the proxy by logical id and confirms it is gone — the
+/// write→delete→read round-trip (`docs/04` §5).
+async fn assert_delete_removes(client: &HttpClient, proxy: &str) {
+    let (status, deleted) = request_with_tenant(
+        client,
+        Method::DELETE,
+        &format!("{proxy}/orders/_doc/7"),
+        "acme",
+        Bytes::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, 200, "{deleted}");
+    let deleted: serde_json::Value = serde_json::from_str(&deleted).unwrap();
+    assert_eq!(deleted["_id"], "7");
+    assert_eq!(deleted["result"], "deleted");
+
+    let (status, gone) = get_with_tenant(client, &format!("{proxy}/orders/_doc/7"), "acme")
+        .await
+        .unwrap();
+    assert_eq!(status, 404, "doc should be gone after delete: {gone}");
 }
 
 #[tokio::test]

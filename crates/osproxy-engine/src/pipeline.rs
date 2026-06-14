@@ -12,17 +12,13 @@ use std::sync::Arc;
 
 use osproxy_core::{EndpointKind, RequestId};
 use osproxy_observe::{ClassifyInfo, EgressInfo, ExplainStore, RequestTrace};
-use osproxy_sink::{Reader, Sink, WriteAck};
+use osproxy_sink::{Reader, Sink};
 use osproxy_spi::{RequestCtx, SpiError, TenancySpi};
 use osproxy_tenancy::TenancyRouter;
 use serde_json::Value;
 
 use crate::error::RequestError;
-use crate::observe::{
-    dispatch_info, error_context, logical_index, read_dispatch_info, resolve_info, rewrite_info,
-};
-use crate::plan::build_write_batch;
-use crate::read::{build_read_op, build_search_op, not_found_body, shape_found, shape_hits};
+use crate::observe::{error_context, logical_index};
 
 /// How many recent request explanations `/debug/explain` retains per instance.
 const EXPLAIN_CAPACITY: usize = 1024;
@@ -46,8 +42,8 @@ pub struct PipelineResponse {
 /// sink.
 #[derive(Debug)]
 pub struct Pipeline<T, S> {
-    router: TenancyRouter<T>,
-    sink: S,
+    pub(crate) router: TenancyRouter<T>,
+    pub(crate) sink: S,
     explain: Arc<ExplainStore>,
 }
 
@@ -111,112 +107,12 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         match ctx.endpoint() {
             EndpointKind::IngestDoc => self.ingest_doc(ctx, trace).await,
             EndpointKind::GetById => self.get_by_id(ctx, trace).await,
+            EndpointKind::DeleteById => self.delete_by_id(ctx, trace).await,
             EndpointKind::Search => self.search(ctx, trace).await,
             other => Err(RequestError::Spi(SpiError::UnsupportedEndpoint {
                 endpoint: other,
             })),
         }
-    }
-
-    /// The single-document ingest path.
-    async fn ingest_doc(
-        &self,
-        ctx: &RequestCtx<'_>,
-        trace: &mut RequestTrace,
-    ) -> Result<PipelineResponse, RequestError> {
-        let resolved = self.router.resolve(ctx).await?;
-        trace.record_resolve(resolve_info(&resolved));
-
-        let batch = build_write_batch(&resolved, ctx.body())?;
-        trace.record_rewrite(rewrite_info(&resolved, &batch));
-
-        let ack = self.sink.write(batch).await?;
-        trace.record_dispatch(dispatch_info(&resolved, &ack));
-        Ok(response_for(&ack))
-    }
-
-    /// The get-by-id read path (`docs/04` §5): resolve the partition, map the
-    /// client's logical id to the physical id, fetch it, and shape the stored
-    /// document back into the client's logical view (injected fields stripped).
-    async fn get_by_id(
-        &self,
-        ctx: &RequestCtx<'_>,
-        trace: &mut RequestTrace,
-    ) -> Result<PipelineResponse, RequestError> {
-        let resolved = self.router.resolve(ctx).await?;
-        trace.record_resolve(resolve_info(&resolved));
-
-        let logical_id = ctx.doc_id().ok_or(RequestError::Internal {
-            reason: "get-by-id reached the engine without a document id",
-        })?;
-        let (read_op, shape) = build_read_op(&resolved, logical_id)?;
-
-        let outcome = self.sink.get(read_op).await?;
-        trace.record_dispatch(read_dispatch_info(&resolved, outcome.status));
-
-        if outcome.found {
-            let body = shape_found(
-                &outcome.body,
-                ctx.logical_index(),
-                logical_id,
-                &shape.inject_names,
-            )?;
-            Ok(PipelineResponse { status: 200, body })
-        } else {
-            Ok(PipelineResponse {
-                status: 404,
-                body: not_found_body(ctx.logical_index(), logical_id),
-            })
-        }
-    }
-
-    /// The search/read path (`docs/04` §4): resolve the partition, wrap the
-    /// client query in the mandatory partition filter, dispatch to the single
-    /// target, and strip the injected tenancy fields from every hit so the
-    /// client sees only its own logical documents.
-    async fn search(
-        &self,
-        ctx: &RequestCtx<'_>,
-        trace: &mut RequestTrace,
-    ) -> Result<PipelineResponse, RequestError> {
-        let resolved = self.router.resolve(ctx).await?;
-        trace.record_resolve(resolve_info(&resolved));
-
-        let (search_op, shape) = build_search_op(&resolved, ctx.body())?;
-        let outcome = self.sink.search(search_op).await?;
-        trace.record_dispatch(read_dispatch_info(&resolved, outcome.status));
-
-        let body = shape_hits(
-            &outcome.body,
-            ctx.logical_index(),
-            resolved.partition.as_str(),
-            &shape,
-        )?;
-        Ok(PipelineResponse {
-            status: outcome.status,
-            body,
-        })
-    }
-}
-
-/// Shapes a write acknowledgement into an OpenSearch-style ingest response.
-///
-/// For a single-document write the ack carries one result; its status and the
-/// created/updated outcome are surfaced as the client would expect.
-fn response_for(ack: &WriteAck) -> PipelineResponse {
-    let Some(result) = ack.results().first() else {
-        // No operations is not reachable from the single-doc path, but never
-        // panic: report an empty 200 rather than unwrapping (NFR-R1).
-        return PipelineResponse {
-            status: 200,
-            body: b"{}".to_vec(),
-        };
-    };
-    let outcome = if result.created { "created" } else { "updated" };
-    let body = format!(r#"{{"_id":"{}","result":"{outcome}"}}"#, result.id).into_bytes();
-    PipelineResponse {
-        status: result.status,
-        body,
     }
 }
 

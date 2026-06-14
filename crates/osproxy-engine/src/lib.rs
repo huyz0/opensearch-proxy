@@ -14,6 +14,7 @@
 //! document — the write→read round-trip symmetry the model rests on.
 #![deny(missing_docs)]
 
+mod endpoints;
 mod error;
 mod observe;
 mod pipeline;
