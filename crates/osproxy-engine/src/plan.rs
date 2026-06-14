@@ -138,7 +138,10 @@ mod tests {
             DocOp::Index { id, routing, body } => {
                 (id, routing, serde_json::from_slice(body).unwrap())
             }
-            DocOp::Delete { .. } => unreachable_delete(),
+            // The single-doc plan path only produces Index or Delete.
+            DocOp::Create { .. } | DocOp::Update { .. } | DocOp::Delete { .. } => {
+                unreachable_delete()
+            }
         }
     }
 

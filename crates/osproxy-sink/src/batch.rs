@@ -43,6 +43,27 @@ pub enum DocOp {
         /// The transformed document body (injected fields applied).
         body: Vec<u8>,
     },
+    /// Create a document, failing with a conflict if the id already exists
+    /// (`op_type=create`). Distinct from [`DocOp::Index`] so the sink can target
+    /// the `_create` endpoint and surface the 409 (`docs/04` §3).
+    Create {
+        /// The constructed document id, or `None` to let OpenSearch auto-assign.
+        id: Option<String>,
+        /// The `_routing` value (the partition id), if routing is enabled.
+        routing: Option<String>,
+        /// The transformed document body (injected fields applied).
+        body: Vec<u8>,
+    },
+    /// Partial-update a document by id (`_update`): the body carries the
+    /// already-transformed `doc`/`upsert`/`script` (`docs/04` §3).
+    Update {
+        /// The constructed document id to update.
+        id: String,
+        /// The `_routing` value, if routing is enabled.
+        routing: Option<String>,
+        /// The transformed update body (injected into `doc`/`upsert`).
+        body: Vec<u8>,
+    },
     /// Delete a document by id.
     Delete {
         /// The constructed document id to delete.

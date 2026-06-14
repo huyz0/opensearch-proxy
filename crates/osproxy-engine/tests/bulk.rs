@@ -5,6 +5,10 @@
 
 // Test scaffolding (helpers + a tenancy impl, not `#[test]` fns).
 #![allow(clippy::unwrap_used)]
+// JUSTIFY(file-length): the `_bulk` verb matrix (index/create/update/delete,
+// mixed-partition demux, order preservation, per-item + upstream failures) shares
+// one ~95-line tenancy/pipeline scaffold. Splitting would duplicate that scaffold
+// per file; the behaviours read better proven side by side against it.
 
 use std::sync::Arc;
 
@@ -220,8 +224,8 @@ proptest! {
 async fn per_item_errors_are_positioned_and_typed() {
     let p = pipeline();
     let body = concat!(
-        "{\"update\":{\"_id\":\"1\"}}\n{\"doc\":{}}\n", // update unsupported in bulk
-        "{\"delete\":{}}\n",                            // delete with no id
+        "{\"update\":{}}\n{\"doc\":{}}\n", // update with no id
+        "{\"delete\":{}}\n",               // delete with no id
         "{\"index\":{}}\n{\"tenant_id\":\"ghost\",\"id\":9}\n", // no placement
     );
     // An x-tenant header so the delete (no body) resolves a partition and fails
@@ -243,7 +247,7 @@ async fn per_item_errors_are_positioned_and_typed() {
     let doc: Value = serde_json::from_slice(&resp.body).unwrap();
     assert_eq!(doc["errors"], true);
     let items = doc["items"].as_array().unwrap();
-    assert_eq!(items[0]["update"]["error"]["type"], "unsupported_in_bulk");
+    assert_eq!(items[0]["update"]["error"]["type"], "update_without_id");
     assert_eq!(items[1]["delete"]["error"]["type"], "delete_without_id");
     assert_eq!(items[2]["index"]["error"]["type"], "placement_missing");
     assert_eq!(items[2]["index"]["status"], 404);
@@ -269,6 +273,75 @@ async fn action_line_id_is_mapped_logical_to_physical() {
         .await
         .unwrap();
     assert!(hit.found, "acme:99 should be stored");
+}
+
+#[tokio::test]
+async fn create_action_routes_through_the_create_op() {
+    let p = pipeline();
+    // A `create` carries the same tenancy rewrite as `index`, but the demuxed op
+    // targets `_create` upstream (fail-if-exists). Against the memory sink it
+    // succeeds and stores under the partition-prefixed physical id.
+    let body = "{\"create\":{}}\n{\"tenant_id\":\"acme\",\"id\":5,\"msg\":\"c5\"}\n";
+    let resp = bulk(&p, body.as_bytes()).await;
+    let doc: Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(doc["errors"], false, "{doc}");
+    assert_eq!(doc["items"][0]["create"]["_id"], "5");
+    assert_eq!(doc["items"][0]["create"]["status"], 201);
+
+    let hit = p
+        .sink()
+        .get(ReadOp::new(
+            target("acme-idx"),
+            "acme:5",
+            Some("acme".into()),
+        ))
+        .await
+        .unwrap();
+    assert!(hit.found, "acme:5 should be stored by the create op");
+}
+
+#[tokio::test]
+async fn update_upsert_injects_tenancy_and_round_trips() {
+    let p = pipeline();
+    // An upsert for a not-yet-existing doc: the engine maps the logical id to the
+    // physical id and injects `_tenant` into the upsert, so the created document
+    // is isolated. (The header carries the partition; the update body does not.)
+    let body = concat!(
+        "{\"update\":{\"_id\":\"5\"}}\n",
+        "{\"doc\":{\"msg\":\"patched\"},\"upsert\":{\"msg\":\"made\"}}\n",
+    );
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("b");
+    let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::IngestBulk,
+        Protocol::Http1,
+        "orders",
+        HeaderView::new(&headers),
+        body.as_bytes(),
+    );
+    let resp = p.handle(&ctx).await.unwrap();
+    let doc: Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(doc["errors"], false, "{doc}");
+    assert_eq!(doc["items"][0]["update"]["_id"], "5");
+
+    // The upserted document landed under the physical id, carrying `_tenant`.
+    let hit = p
+        .sink()
+        .get(ReadOp::new(
+            target("acme-idx"),
+            "acme:5",
+            Some("acme".into()),
+        ))
+        .await
+        .unwrap();
+    assert!(hit.found, "acme:5 should exist after the upsert");
+    let stored: Value = serde_json::from_slice(&hit.body).unwrap();
+    assert_eq!(stored["_source"]["_tenant"], "acme");
+    assert_eq!(stored["_source"]["msg"], "made");
 }
 
 #[tokio::test]

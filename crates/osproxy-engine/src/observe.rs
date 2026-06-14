@@ -37,7 +37,9 @@ pub(crate) fn rewrite_info(resolved: &Resolved, batch: &WriteBatch) -> RewriteIn
     RewriteInfo {
         transform_kind: transform_kind(&resolved.decision.body_transform),
         body_bytes: batch.ops().first().map_or(0, |op| match &op.doc {
-            DocOp::Index { body, .. } => body.len(),
+            DocOp::Index { body, .. } | DocOp::Create { body, .. } | DocOp::Update { body, .. } => {
+                body.len()
+            }
             DocOp::Delete { .. } => 0,
         }),
     }

@@ -48,6 +48,35 @@ pub fn inject_fields(doc: &mut Value, fields: &[(FieldName, Value)]) -> Result<(
     Ok(())
 }
 
+/// Injects the tenancy fields into the `doc` and `upsert` sub-objects of an
+/// `_update` body (`docs/04` §3).
+///
+/// An update never replaces a whole document, so the fields are stamped into
+/// whichever sub-documents are present: a partial `doc` (re-asserting the
+/// tenancy fields, harmless on an existing doc) and the `upsert` (so an upsert
+/// that *creates* the document still carries its isolation fields). A sub-key
+/// that is absent is skipped; a `script`-only update with no `upsert` injects
+/// nothing (the targeted document already carries the fields).
+///
+/// # Errors
+///
+/// Returns [`RewriteError::NotAnObject`] if `update` itself, or a present
+/// `doc`/`upsert`, is not a JSON object, or
+/// [`RewriteError::ReservedFieldCollision`] if a sub-document already contains an
+/// injected field (a client must not pre-seed a tenancy field, `docs/03`).
+pub fn inject_update(
+    update: &mut Value,
+    fields: &[(FieldName, Value)],
+) -> Result<(), RewriteError> {
+    let obj = update.as_object_mut().ok_or(RewriteError::NotAnObject)?;
+    for key in ["doc", "upsert"] {
+        if let Some(sub) = obj.get_mut(key) {
+            inject_fields(sub, fields)?;
+        }
+    }
+    Ok(())
+}
+
 /// Removes each named field from the top-level object of `doc`, if present.
 ///
 /// The inverse of [`inject_fields`]. Lenient by design: stripping a field that
@@ -102,6 +131,47 @@ mod tests {
         );
         // Untouched: the spoofed value is still there (caller rejects the request).
         assert_eq!(doc["_tenant"], json!("evil"));
+    }
+
+    #[test]
+    fn inject_update_stamps_doc_and_upsert() {
+        let mut update = json!({
+            "doc": { "msg": "hi" },
+            "upsert": { "msg": "new" },
+        });
+        inject_update(
+            &mut update,
+            &[(FieldName::from("_tenant"), Value::from("acme"))],
+        )
+        .unwrap();
+        assert_eq!(update["doc"]["_tenant"], json!("acme"));
+        assert_eq!(update["upsert"]["_tenant"], json!("acme"));
+    }
+
+    #[test]
+    fn inject_update_rejects_spoofed_tenancy_field() {
+        let mut update = json!({ "upsert": { "_tenant": "evil" } });
+        assert_eq!(
+            inject_update(
+                &mut update,
+                &[(FieldName::from("_tenant"), Value::from("acme"))],
+            )
+            .unwrap_err(),
+            RewriteError::ReservedFieldCollision {
+                field: FieldName::from("_tenant")
+            }
+        );
+    }
+
+    #[test]
+    fn inject_update_is_a_noop_without_doc_or_upsert() {
+        let mut update = json!({ "script": { "source": "ctx._source.n++" } });
+        inject_update(
+            &mut update,
+            &[(FieldName::from("_tenant"), Value::from("acme"))],
+        )
+        .unwrap();
+        assert_eq!(update["script"]["source"], "ctx._source.n++");
     }
 
     #[test]

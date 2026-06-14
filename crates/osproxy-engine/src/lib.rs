@@ -15,6 +15,7 @@
 #![deny(missing_docs)]
 
 mod bulk;
+mod bulkprep;
 mod endpoints;
 mod error;
 mod mget;

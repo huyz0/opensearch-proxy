@@ -66,11 +66,13 @@ impl MemorySink {
             .ops()
             .iter()
             .map(|op| match &op.doc {
-                DocOp::Index { id, .. } => {
+                DocOp::Index { id, .. } | DocOp::Create { id, .. } => {
                     let id = id.clone().unwrap_or_else(|| self.next_auto_id());
                     OpResult::new(id, 201, true)
                 }
-                DocOp::Delete { id, .. } => OpResult::new(id.clone(), 200, false),
+                DocOp::Update { id, .. } | DocOp::Delete { id, .. } => {
+                    OpResult::new(id.clone(), 200, false)
+                }
             })
             .collect();
         WriteAck::new(results)
@@ -82,9 +84,8 @@ impl MemorySink {
         format!("auto-{n}")
     }
 
-    /// Applies a batch to the document store: indexes store the body under
-    /// `(index, id)`; deletes remove it. The ack supplies any auto-assigned id
-    /// so an auto-id index is still retrievable.
+    /// Applies a batch to the document store: index/create store, update merges,
+    /// delete removes. The ack supplies any auto-assigned id.
     fn store(&self, batch: &WriteBatch, ack: &WriteAck) {
         let mut docs = self
             .docs
@@ -93,8 +94,19 @@ impl MemorySink {
         for (op, result) in batch.ops().iter().zip(ack.results()) {
             let index = op.target.index.as_str().to_owned();
             match &op.doc {
-                DocOp::Index { body, .. } => {
+                DocOp::Index { body, .. } | DocOp::Create { body, .. } => {
                     docs.insert((index, result.id.clone()), body.clone());
+                }
+                DocOp::Update { id, body, .. } => {
+                    let key = (index, id.clone());
+                    let existing = docs
+                        .get(&key)
+                        .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok());
+                    if let Some(bytes) =
+                        apply_update(existing, body).and_then(|m| serde_json::to_vec(&m).ok())
+                    {
+                        docs.insert(key, bytes);
+                    }
                 }
                 DocOp::Delete { id, .. } => {
                     docs.remove(&(index, id.clone()));
@@ -181,6 +193,32 @@ impl Reader for MemorySink {
             .push(op);
         Ok(CountOutcome::new(200, count as u64))
     }
+}
+
+/// Applies an `_update` body: a partial `doc` is shallow-merged into the
+/// existing source; when absent the `upsert` (or, with `doc_as_upsert`, the
+/// `doc`) becomes the new source. `None` if nothing to write; scripts no-op.
+fn apply_update(existing: Option<serde_json::Value>, body: &[u8]) -> Option<serde_json::Value> {
+    let patch: serde_json::Value = serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
+    let Some(mut source) = existing else {
+        let doc_as_upsert = patch
+            .get("doc_as_upsert")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+        return patch
+            .get("upsert")
+            .or_else(|| doc_as_upsert.then(|| patch.get("doc")).flatten())
+            .cloned();
+    };
+    if let (Some(target), Some(doc)) = (
+        source.as_object_mut(),
+        patch.get("doc").and_then(serde_json::Value::as_object),
+    ) {
+        for (k, v) in doc {
+            target.insert(k.clone(), v.clone());
+        }
+    }
+    Some(source)
 }
 
 /// Builds the OpenSearch get-by-id response envelope around a stored document.

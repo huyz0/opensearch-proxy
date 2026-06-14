@@ -21,6 +21,7 @@ mod memory;
 mod opensearch;
 mod read;
 mod sink;
+mod wire;
 
 pub use ack::{OpResult, WriteAck};
 pub use batch::{DocOp, WriteBatch, WriteOp};
