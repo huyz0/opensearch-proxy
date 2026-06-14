@@ -1,12 +1,13 @@
 //! Workspace automation. Run via `cargo xtask <command>`.
 //!
 //! Commands:
-//!   ci        Run the full local gate: fmt, clippy, test, doc, budgets.
+//!   ci        Run the full local gate: fmt, clippy, test, doc, budgets, skills.
 //!   fmt       Check formatting (`cargo fmt --check`).
 //!   clippy    Lint with warnings denied.
 //!   test      Run all tests.
 //!   doc       Build docs (warnings denied) and run doc tests.
 //!   budgets   Check size budgets and that overflows carry a `// JUSTIFY`.
+//!   skills    Validate .agents/skills/*/SKILL.md (size + frontmatter).
 //!
 //! See docs/08-engineering-standards.md and docs/10-review-process.md.
 
@@ -22,6 +23,7 @@ fn main() -> ExitCode {
         "test" => test(),
         "doc" => doc(),
         "budgets" => budgets(),
+        "skills" => skills(),
         other => Err(format!("unknown command: {other}\n{USAGE}")),
     };
     match result {
@@ -33,7 +35,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: cargo xtask <ci|fmt|clippy|test|doc|budgets>";
+const USAGE: &str = "usage: cargo xtask <ci|fmt|clippy|test|doc|budgets|skills>";
 
 fn run_ci() -> Result<(), String> {
     fmt()?;
@@ -41,6 +43,7 @@ fn run_ci() -> Result<(), String> {
     test()?;
     doc()?;
     budgets()?;
+    skills()?;
     println!("\nxtask: all gates passed ✓");
     Ok(())
 }
@@ -111,6 +114,68 @@ fn budgets() -> Result<(), String> {
             "file-length budget exceeded without `// JUSTIFY(file-length)`:\n{}",
             violations.join("\n")
         ))
+    }
+}
+
+/// Validates the agent skill system (see .agents/skills/manage-skills/SKILL.md):
+/// every `SKILL.md` must be <=100 lines and carry frontmatter with a `name` and
+/// a `description` following the `WHAT: ... USE WHEN: ...` pattern.
+fn skills() -> Result<(), String> {
+    const LINE_LIMIT: usize = 100;
+    let dir = workspace_root().join(".agents/skills");
+    let mut skill_files = Vec::new();
+    collect_named_files(&dir, "SKILL.md", &mut skill_files);
+
+    if skill_files.is_empty() {
+        return Err(format!("no SKILL.md files found under {}", dir.display()));
+    }
+
+    let mut violations = Vec::new();
+    for file in &skill_files {
+        let content =
+            std::fs::read_to_string(file).map_err(|e| format!("read {}: {e}", file.display()))?;
+        let shown = file.strip_prefix(workspace_root()).unwrap_or(file);
+        let lines = content.lines().count();
+        if lines > LINE_LIMIT {
+            violations.push(format!(
+                "  {} has {lines} lines (limit {LINE_LIMIT})",
+                shown.display()
+            ));
+        }
+        let frontmatter = content.split("---").nth(1).unwrap_or_default();
+        if !frontmatter.contains("name:") {
+            violations.push(format!("  {} frontmatter missing `name:`", shown.display()));
+        }
+        if !(frontmatter.contains("WHAT:") && frontmatter.contains("USE WHEN:")) {
+            violations.push(format!(
+                "  {} description must match `WHAT: ... USE WHEN: ...`",
+                shown.display()
+            ));
+        }
+    }
+
+    if violations.is_empty() {
+        println!("xtask: {} skills ok", skill_files.len());
+        Ok(())
+    } else {
+        Err(format!(
+            "skill validation failed:\n{}",
+            violations.join("\n")
+        ))
+    }
+}
+
+fn collect_named_files(dir: &Path, name: &str, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_named_files(&path, name, out);
+        } else if path.file_name().is_some_and(|n| n == name) {
+            out.push(path);
+        }
     }
 }
 

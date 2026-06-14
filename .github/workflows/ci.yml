@@ -43,6 +43,9 @@ jobs:
       - name: Size & complexity budgets
         run: cargo xtask budgets
 
+      - name: Skill-system lint
+        run: cargo xtask skills
+
   deny:
     name: Supply chain (cargo-deny)
     runs-on: ubuntu-latest
