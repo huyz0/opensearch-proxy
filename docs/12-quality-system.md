@@ -40,6 +40,9 @@ decide. This keeps quality reproducible and cheap, and keeps the LLM focused.
   callgrind), not wall-clock time. Wall-clock benchmarks are noisy and machine-
   dependent — useless as a CI gate. Instruction counts are exact, so a real
   regression is visible and a refactor that doesn't change work shows zero delta.
+  For **local exploration on a dev box without valgrind**, `cargo xtask
+  bench-local` runs the same hot paths under `divan` (wall-clock); it is a
+  calibration/comparison aid only and never gates a build.
 - **Memory budgets are allocation counts** (`dhat` testing mode), which are exact
   for a given input — a change that adds a heap allocation to a hot path fails CI.
 - **Architecture is a graph check.** The allowed dependency DAG lives in

@@ -61,6 +61,12 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 # verified client certificate into a stable mTLS identity.
 ring = "0.17"
 rcgen = "0.13"
+# Local-first wall-clock micro-benchmarks (`cargo xtask bench`). divan owns its
+# own timing loop, so bench code needs no banned `Instant::now`. Wall-clock is
+# noisy/host-specific, so these calibrate and explore locally — they are NOT a CI
+# gate; the deterministic gates are dhat (alloc counts) and, in CI where valgrind
+# exists, iai-callgrind (instruction counts). (docs/12)
+divan = "0.1"
 # gRPC ingress (docs/11 M4). tonic serves the proxy's DocumentService over h2;
 # tonic-prost is the runtime prost codec, prost the message runtime, and
 # tonic-prost-build the build-time codegen (needs `protoc`). tokio-stream adapts

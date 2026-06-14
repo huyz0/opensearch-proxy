@@ -28,6 +28,7 @@ fn main() -> ExitCode {
         "skills" => skills(),
         "arch" => arch(),
         "bench" => bench(),
+        "bench-local" => bench_local(),
         other => Err(format!("unknown command: {other}\n{USAGE}")),
     };
     match result {
@@ -39,7 +40,8 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: cargo xtask <ci|fmt|clippy|test|doc|budgets|skills|arch|bench>";
+const USAGE: &str =
+    "usage: cargo xtask <ci|fmt|clippy|test|doc|budgets|skills|arch|bench|bench-local>";
 
 fn run_ci() -> Result<(), String> {
     fmt()?;
@@ -166,11 +168,22 @@ fn internal_deps(manifest: &str) -> Vec<String> {
         .collect()
 }
 
-/// Runs the deterministic instruction-count microbenchmarks. Requires valgrind +
-/// iai-callgrind-runner; intended for CI (docs/12). Not part of `ci` because it
-/// needs valgrind, which is not present on every dev box.
+/// Runs the deterministic instruction-count microbenchmarks (iai-callgrind).
+/// Requires valgrind + iai-callgrind-runner; intended for CI (docs/12). Not part
+/// of `ci` because it needs valgrind, which is not present on every dev box.
 fn bench() -> Result<(), String> {
     cargo(&["bench", "--workspace"], &[])
+}
+
+/// Runs the wall-clock micro-benchmarks (divan) — a local calibration tool that
+/// needs no special tooling and runs on any dev box, unlike `bench`. *Not* a CI
+/// gate: wall-clock is host-specific and noisy, so it must never fail a build;
+/// the deterministic gates stay dhat (alloc) and iai-callgrind (instructions).
+fn bench_local() -> Result<(), String> {
+    cargo(
+        &["bench", "-p", "osproxy-rewrite", "--bench", "hot_paths"],
+        &[],
+    )
 }
 
 fn fmt() -> Result<(), String> {
