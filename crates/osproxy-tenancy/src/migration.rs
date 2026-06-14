@@ -78,18 +78,20 @@ impl PartitionState {
     }
 }
 
-/// Whether a write resolved against a past placement may still commit.
+/// Whether a write resolved at a past epoch may still commit (the migration
+/// write gate, `docs/06` §2).
 ///
-/// The authoritative check is *destination match*, not epoch arithmetic: a write
-/// commits only if its resolved placement equals the partition's current write
-/// destination and writes are not blocked. This makes the migration invariants
-/// hold regardless of how stale the in-flight decision is.
+/// A write commits only if writes are currently allowed ([`Phase::Cutover`]
+/// blocks them) and the partition's epoch is unchanged since the decision was
+/// resolved. Because a partition's epoch advances only on its own transitions,
+/// epoch equality is a per-partition staleness check; the cutover gate covers
+/// the one window where an up-to-epoch write must still be held.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum WriteAdmission {
-    /// The write may commit: its target is the current write destination.
+    /// The write may commit: writes are open and the epoch is current.
     Admit,
-    /// The write must be rejected and retried (stale-epoch / cutover): the
-    /// destination changed or writes are blocked. Maps to a retryable error.
+    /// The write must be rejected and retried: the partition advanced since the
+    /// decision was resolved, or it is in the cutover window. Retryable.
     Reject,
 }
 

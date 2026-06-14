@@ -159,20 +159,28 @@ impl PlacementTable {
             .map(|e| PlacementAt::new(e.state.read_placement().clone(), e.epoch))
     }
 
-    /// The migration write gate (`docs/06` §2): may a write that resolved to
-    /// `resolved` for `partition` commit now? [`WriteAdmission::Admit`] only if
-    /// `resolved` is the partition's current write destination; otherwise
-    /// [`WriteAdmission::Reject`] (the cutover window or a flipped pointer), which
-    /// the caller surfaces as a retryable stale-epoch error (INV-M1, INV-M2).
+    /// The migration write gate (`docs/06` §2): may a write resolved at `epoch`
+    /// for `partition` commit now? [`WriteAdmission::Admit`] only if writes are
+    /// currently allowed (not in the `Cutover` window) *and* the partition's
+    /// epoch is unchanged since the decision was resolved — otherwise
+    /// [`WriteAdmission::Reject`], which the caller surfaces as a retryable
+    /// stale-epoch error so the client re-resolves and retries.
+    ///
+    /// Epoch equality is the per-partition staleness check (`epoch` only advances
+    /// on *this* partition's transitions), and the cutover gate handles the one
+    /// window where a write resolved at the *current* epoch must still be held:
+    /// together they give INV-M1 (no write in cutover) and INV-M2 (no write
+    /// against a superseded placement after the flip).
     #[must_use]
-    pub fn admit_write(&self, partition: &PartitionId, resolved: &Placement) -> WriteAdmission {
-        let current = self
+    pub fn admit_write(&self, partition: &PartitionId, epoch: Epoch) -> WriteAdmission {
+        let admit = self
             .read_lock()
             .get(partition)
-            .and_then(|e| e.state.write_placement().cloned());
-        match current {
-            Some(dest) if &dest == resolved => WriteAdmission::Admit,
-            _ => WriteAdmission::Reject,
+            .is_some_and(|e| e.state.write_placement().is_some() && e.epoch == epoch);
+        if admit {
+            WriteAdmission::Admit
+        } else {
+            WriteAdmission::Reject
         }
     }
 

@@ -6,7 +6,7 @@
 //! to constants, so downstream stages stay pure). The `SharedIndex`
 //! partition-in-id invariant (`docs/03`) is enforced here.
 
-use osproxy_core::{IndexName, PartitionId, Target};
+use osproxy_core::{Epoch, IndexName, PartitionId, Target};
 use osproxy_spi::{
     BodyTransform, InjectedField, InjectedValue, Placement, RequestCtx, RouteDecision, RoutingSpi,
     SpiError, TenancySpi,
@@ -45,6 +45,14 @@ impl<T: TenancySpi> TenancyRouter<T> {
     #[must_use]
     pub fn spi(&self) -> &T {
         &self.spi
+    }
+
+    /// The migration write gate for a resolved decision (`docs/06` §2): whether a
+    /// write that resolved at `epoch` for `partition` may still commit. The
+    /// engine calls this at dispatch; `false` is surfaced as a retryable
+    /// stale-epoch error. Delegates to the [`TenancySpi`].
+    pub async fn admit_write(&self, partition: &PartitionId, epoch: Epoch) -> bool {
+        self.spi.admit_write(partition, epoch).await
     }
 
     /// Resolves the full routing plan for `ctx` (the single-document path).

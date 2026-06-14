@@ -27,6 +27,15 @@ pub enum RequestError {
     #[error("sink failed: {0}")]
     Sink(#[from] SinkError),
 
+    /// The write resolved against a placement epoch no longer current for a
+    /// migrating partition: the migration write gate held it (`docs/06` §2).
+    /// Retryable — the client re-resolves against the new placement.
+    #[error("stale placement epoch {stamped} for a migrating partition")]
+    StaleEpoch {
+        /// The epoch the rejected decision was stamped with (an id, not data).
+        stamped: osproxy_core::Epoch,
+    },
+
     /// An internal invariant was violated — a bug, not a client or upstream
     /// fault. Carries a static reason (never tenant data) for the operator/LLM.
     #[error("internal invariant violated: {reason}")]
@@ -44,6 +53,7 @@ impl RequestError {
         match self {
             Self::Spi(e) => e.code(),
             Self::Sink(e) => e.code(),
+            Self::StaleEpoch { .. } => ErrorCode::StaleEpoch,
             // A malformed body or reserved-field collision is an unsupported /
             // rejected request shape; reuse the unsupported-endpoint code until
             // a dedicated rewrite code is added (additive, docs/08 §7).
@@ -57,6 +67,8 @@ impl RequestError {
         match self {
             Self::Spi(e) => e.retryable(),
             Self::Sink(e) => e.retryable(),
+            // A stale epoch is retryable: the retry re-resolves the placement.
+            Self::StaleEpoch { .. } => true,
             Self::Rewrite(_) | Self::Internal { .. } => false,
         }
     }

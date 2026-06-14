@@ -1,6 +1,6 @@
 //! The high-level tenancy contract — what most implementers provide.
 
-use osproxy_core::PartitionId;
+use osproxy_core::{Epoch, PartitionId};
 
 use crate::error::SpiError;
 use crate::placement::PlacementAt;
@@ -86,4 +86,16 @@ pub trait TenancySpi: Send + Sync + 'static {
     /// placement, or [`SpiError::PlacementBackend`] when the lookup backend is
     /// unavailable.
     async fn placement_for(&self, partition: &PartitionId) -> Result<PlacementAt, SpiError>;
+
+    /// The migration write gate (`docs/06` §2): may a write that resolved at
+    /// `epoch` for `partition` still commit? Re-checked at dispatch, after the
+    /// decision was stamped, so a placement that advanced (or entered cutover) in
+    /// the meantime is caught. `false` means reject as a retryable stale-epoch
+    /// error; the client re-resolves against the new placement.
+    ///
+    /// Defaults to always-admit: an implementation without live migration (a
+    /// constant placement) never needs to hold a write.
+    async fn admit_write(&self, _partition: &PartitionId, _epoch: Epoch) -> bool {
+        true
+    }
 }

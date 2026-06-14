@@ -8,6 +8,7 @@
 
 use osproxy_sink::{Reader, Sink, WriteAck, WriteBatch};
 use osproxy_spi::{RequestCtx, TenancySpi};
+use osproxy_tenancy::Resolved;
 
 use crate::error::RequestError;
 use crate::observe::{dispatch_info, read_dispatch_info, resolve_info, rewrite_info};
@@ -32,9 +33,23 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         let batch = build_write_batch(&resolved, ctx.body())?;
         trace.record_rewrite(rewrite_info(&resolved, &batch));
 
+        self.gate_write(&resolved).await?;
         let ack = self.sink.write(batch).await?;
         trace.record_dispatch(dispatch_info(&resolved, &ack));
         Ok(response_for(&ack))
+    }
+
+    /// The migration write gate (`docs/06` §2), applied at dispatch after the
+    /// decision was stamped: if the partition's placement advanced (or entered
+    /// cutover) in the meantime, hold the write with a retryable stale-epoch
+    /// error so the client re-resolves rather than committing to the wrong place.
+    async fn gate_write(&self, resolved: &Resolved) -> Result<(), RequestError> {
+        let epoch = resolved.decision.epoch;
+        if self.router.admit_write(&resolved.partition, epoch).await {
+            Ok(())
+        } else {
+            Err(RequestError::StaleEpoch { stamped: epoch })
+        }
     }
 
     /// The bulk-ingest path (`docs/04` §3): parse the NDJSON body, demux the
@@ -121,6 +136,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         })?;
         let op = build_delete_op(&resolved, logical_id)?;
 
+        self.gate_write(&resolved).await?;
         let ack = self.sink.write(WriteBatch::single(op)).await?;
         trace.record_dispatch(dispatch_info(&resolved, &ack));
 

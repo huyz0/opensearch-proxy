@@ -129,6 +129,9 @@ fn remediation(err: &RequestError) -> &'static str {
             "the document body is malformed or collides with a reserved field"
         }
         RequestError::Sink(_) => "the upstream cluster failed; retry if retryable",
+        RequestError::StaleEpoch { .. } => {
+            "the partition is migrating; retry to re-resolve the new placement"
+        }
         RequestError::Internal { .. } => "internal error; inspect logs",
     }
 }

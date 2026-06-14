@@ -3,11 +3,13 @@
 //!
 //! The table's epoch is a logical generation (no wall-clock), so these run
 //! reproducibly with no time control needed — the interleavings are driven
-//! explicitly. Each test names the invariant it pins.
+//! explicitly. A write carries the epoch it resolved at; the gate
+//! ([`PlacementTable::admit_write`]) decides whether it may still commit. Each
+//! test names the invariant it pins.
 
 #![allow(clippy::unwrap_used)]
 
-use osproxy_core::PartitionId;
+use osproxy_core::{Epoch, PartitionId};
 use osproxy_spi::Placement;
 use osproxy_tenancy::{MigrationError, PartitionState, PlacementTable, WriteAdmission};
 
@@ -17,43 +19,43 @@ fn cluster(name: &str) -> Placement {
     }
 }
 
-/// A partition registered at A, migrating toward B.
-fn registered() -> (PlacementTable, PartitionId, Placement, Placement) {
+/// A partition registered at A (returning its epoch), migrating toward B.
+fn registered() -> (PlacementTable, PartitionId, Epoch, Placement) {
     let table = PlacementTable::new();
     let p = PartitionId::from("acme");
-    let a = cluster("a");
-    let b = cluster("b");
-    table.set(p.clone(), a.clone());
-    (table, p, a, b)
+    let e_active = table.set(p.clone(), cluster("a"));
+    (table, p, e_active, cluster("b"))
 }
 
 #[test]
 fn inv_m1_no_write_commits_during_cutover() {
-    let (table, p, a, b) = registered();
-    table.begin_migration(&p, b.clone()).unwrap();
-    table.enter_cutover(&p).unwrap();
+    let (table, p, e_active, b) = registered();
+    let e_drain = table.begin_migration(&p, b).unwrap();
+    let e_cutover = table.enter_cutover(&p).unwrap();
 
-    // During cutover, *every* resolved target is rejected — the one window with
-    // write rejection (the client retries; the retry re-resolves after the flip).
-    assert_eq!(table.admit_write(&p, &a), WriteAdmission::Reject);
-    assert_eq!(table.admit_write(&p, &b), WriteAdmission::Reject);
+    // During cutover, a write resolved at *any* epoch is rejected — even one
+    // resolved at the live cutover epoch. The client retries; the retry will
+    // succeed once the pointer flips.
+    assert_eq!(table.admit_write(&p, e_cutover), WriteAdmission::Reject);
+    assert_eq!(table.admit_write(&p, e_drain), WriteAdmission::Reject);
+    assert_eq!(table.admit_write(&p, e_active), WriteAdmission::Reject);
     // Reads still resolve — to the old placement, a single view.
-    assert_eq!(table.get(&p).unwrap().placement, a);
+    assert_eq!(table.get(&p).unwrap().placement, cluster("a"));
 }
 
 #[test]
-fn inv_m2_after_cutover_old_placement_never_admits() {
-    let (table, p, a, b) = registered();
-    table.begin_migration(&p, b.clone()).unwrap();
+fn inv_m2_after_cutover_a_stale_write_never_admits() {
+    let (table, p, e_active, b) = registered();
+    let e_drain = table.begin_migration(&p, b).unwrap();
     table.enter_cutover(&p).unwrap();
-    table.complete_migration(&p).unwrap();
+    let e_flipped = table.complete_migration(&p).unwrap();
 
-    // A write that resolved against the old placement A before the flip can
-    // never commit afterward; only the new placement B does. Its retry will
-    // re-resolve to B.
-    assert_eq!(table.admit_write(&p, &a), WriteAdmission::Reject);
-    assert_eq!(table.admit_write(&p, &b), WriteAdmission::Admit);
-    assert_eq!(table.get(&p).unwrap().placement, b);
+    // Any write resolved before the flip is stale and can never commit; only one
+    // resolved at the new, current epoch does. Its retry re-resolves to B.
+    assert_eq!(table.admit_write(&p, e_active), WriteAdmission::Reject);
+    assert_eq!(table.admit_write(&p, e_drain), WriteAdmission::Reject);
+    assert_eq!(table.admit_write(&p, e_flipped), WriteAdmission::Admit);
+    assert_eq!(table.get(&p).unwrap().placement, cluster("b"));
     assert!(matches!(
         table.state(&p).unwrap().0,
         PartitionState::Active(_)
@@ -61,24 +63,24 @@ fn inv_m2_after_cutover_old_placement_never_admits() {
 }
 
 #[test]
-fn inv_m3_abort_returns_to_origin_with_no_writes_to_destination() {
-    // Abort from each migrating phase returns to Active(A); a B-resolved write is
-    // never admitted across the whole aborted attempt, so nothing landed in B.
+fn inv_m3_abort_returns_to_origin_and_admits_the_origin_epoch_again() {
+    // Abort from each migrating phase returns to Active(A) at a fresh epoch; the
+    // migrating epochs are stale forever, so nothing that resolved mid-migration
+    // can land — and the destination B never had a non-stale write epoch at all.
     for enter_cutover in [false, true] {
-        let (table, p, a, b) = registered();
-        table.begin_migration(&p, b.clone()).unwrap();
-        // Before abort: B never admits in either phase.
-        assert_eq!(table.admit_write(&p, &b), WriteAdmission::Reject);
+        let (table, p, e_active, b) = registered();
+        let e_drain = table.begin_migration(&p, b).unwrap();
         if enter_cutover {
             table.enter_cutover(&p).unwrap();
-            assert_eq!(table.admit_write(&p, &b), WriteAdmission::Reject);
         }
-        table.abort_migration(&p).unwrap();
+        let e_aborted = table.abort_migration(&p).unwrap();
 
-        // Back to the origin: A admits again, B still never does.
-        assert_eq!(table.admit_write(&p, &a), WriteAdmission::Admit);
-        assert_eq!(table.admit_write(&p, &b), WriteAdmission::Reject);
-        assert_eq!(table.get(&p).unwrap().placement, a);
+        // Back at the origin: the post-abort epoch admits, the pre/mid-migration
+        // epochs are stale.
+        assert_eq!(table.admit_write(&p, e_aborted), WriteAdmission::Admit);
+        assert_eq!(table.admit_write(&p, e_active), WriteAdmission::Reject);
+        assert_eq!(table.admit_write(&p, e_drain), WriteAdmission::Reject);
+        assert_eq!(table.get(&p).unwrap().placement, cluster("a"));
     }
 }
 
@@ -86,7 +88,8 @@ fn inv_m3_abort_returns_to_origin_with_no_writes_to_destination() {
 fn inv_m4_reads_are_always_a_single_placement() {
     // Through every phase the read placement is exactly one of {A, B}, never a
     // split — A until the flip, B after.
-    let (table, p, a, b) = registered();
+    let (table, p, _e, b) = registered();
+    let a = cluster("a");
     assert_eq!(table.get(&p).unwrap().placement, a);
     table.begin_migration(&p, b.clone()).unwrap();
     assert_eq!(table.get(&p).unwrap().placement, a, "draining reads from A");
@@ -97,20 +100,20 @@ fn inv_m4_reads_are_always_a_single_placement() {
 }
 
 #[test]
-fn draining_keeps_writes_flowing_to_the_origin() {
+fn draining_keeps_writes_flowing_at_the_draining_epoch() {
     // The whole point of Draining: writes continue to A normally while the
-    // external tool copies, so only Cutover rejects (contrast INV-M1).
-    let (table, p, a, b) = registered();
-    table.begin_migration(&p, b.clone()).unwrap();
-    assert_eq!(table.admit_write(&p, &a), WriteAdmission::Admit);
-    // A write resolved for B can't commit yet — the pointer hasn't flipped.
-    assert_eq!(table.admit_write(&p, &b), WriteAdmission::Reject);
+    // external tool copies, so only Cutover rejects (contrast INV-M1). A write
+    // resolved during draining carries the draining epoch and commits.
+    let (table, p, e_active, b) = registered();
+    let e_drain = table.begin_migration(&p, b).unwrap();
+    assert_eq!(table.admit_write(&p, e_drain), WriteAdmission::Admit);
+    // A write resolved before the migration began is now stale.
+    assert_eq!(table.admit_write(&p, e_active), WriteAdmission::Reject);
 }
 
 #[test]
 fn epoch_advances_monotonically_across_every_transition() {
-    let (table, p, _a, b) = registered();
-    let e0 = table.state(&p).unwrap().1;
+    let (table, p, e0, b) = registered();
     let e1 = table.begin_migration(&p, b).unwrap();
     let e2 = table.enter_cutover(&p).unwrap();
     let e3 = table.complete_migration(&p).unwrap();
@@ -118,8 +121,21 @@ fn epoch_advances_monotonically_across_every_transition() {
 }
 
 #[test]
+fn an_unrelated_partitions_migration_does_not_stale_this_one() {
+    // Epoch staleness is per-partition: bumping the global generation by
+    // migrating another partition must not reject this partition's live write.
+    let (table, p, e_p, _b) = registered();
+    let q = PartitionId::from("other");
+    table.set(q.clone(), cluster("x"));
+    table.begin_migration(&q, cluster("y")).unwrap();
+    table.enter_cutover(&q).unwrap();
+    // p never transitioned, so its resolved epoch is still current.
+    assert_eq!(table.admit_write(&p, e_p), WriteAdmission::Admit);
+}
+
+#[test]
 fn transitions_are_rejected_out_of_phase_and_leave_the_table_unchanged() {
-    let (table, p, _a, b) = registered();
+    let (table, p, _e, b) = registered();
 
     // Cutover/complete/abort before a migration begins: not migrating.
     assert_eq!(table.enter_cutover(&p), Err(MigrationError::NotMigrating));
@@ -150,39 +166,21 @@ fn transitions_are_rejected_out_of_phase_and_leave_the_table_unchanged() {
 }
 
 #[test]
-fn interleaved_inflight_writes_never_admit_against_a_stale_destination() {
-    // Simulation: capture writes "resolved" at each phase (carrying the target
-    // they resolved to), then drive the full lifecycle and assert at every step
-    // that a captured write is admitted *iff* its target equals the partition's
-    // current write destination — the single rule the gate must enforce.
-    let (table, p, a, b) = registered();
+fn at_most_one_epoch_is_admissible_per_phase_no_split_brain() {
+    // Drive the lifecycle capturing each phase's epoch; assert that across the
+    // whole history at most one captured epoch is admissible at any instant —
+    // there is never a window where two different resolved writes could both
+    // commit (no split-brain).
+    let (table, p, e_active, b) = registered();
+    let e_drain = table.begin_migration(&p, b).unwrap();
+    let e_cutover = table.enter_cutover(&p).unwrap();
+    let e_flipped = table.complete_migration(&p).unwrap();
 
-    let admitted_target = |t: &PlacementTable| -> Option<Placement> {
-        // The only target that may currently be admitted, if any.
-        for candidate in [&a, &b] {
-            if t.admit_write(&p, candidate) == WriteAdmission::Admit {
-                return Some(candidate.clone());
-            }
-        }
-        None
-    };
-
-    // Active(A): writes to A admit, nothing else.
-    assert_eq!(admitted_target(&table), Some(a.clone()));
-    table.begin_migration(&p, b.clone()).unwrap();
-    // Draining: still A.
-    assert_eq!(admitted_target(&table), Some(a.clone()));
-    table.enter_cutover(&p).unwrap();
-    // Cutover: nothing admits.
-    assert_eq!(admitted_target(&table), None);
-    table.complete_migration(&p).unwrap();
-    // Active(B): only B.
-    assert_eq!(admitted_target(&table), Some(b.clone()));
-
-    // At most one placement is ever admissible at a time — there is never a
-    // window where both A and B writes could commit (no split-brain).
-    assert!(
-        !(table.admit_write(&p, &a) == WriteAdmission::Admit
-            && table.admit_write(&p, &b) == WriteAdmission::Admit)
-    );
+    let epochs = [e_active, e_drain, e_cutover, e_flipped];
+    let admissible = epochs
+        .iter()
+        .filter(|&&e| table.admit_write(&p, e) == WriteAdmission::Admit)
+        .count();
+    assert_eq!(admissible, 1, "exactly the current epoch admits");
+    assert_eq!(table.admit_write(&p, e_flipped), WriteAdmission::Admit);
 }
