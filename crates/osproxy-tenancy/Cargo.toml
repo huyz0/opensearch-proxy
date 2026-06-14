@@ -13,6 +13,7 @@ osproxy-core.workspace = true
 osproxy-spi.workspace = true
 osproxy-rewrite.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }

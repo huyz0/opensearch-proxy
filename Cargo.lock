@@ -1471,6 +1471,7 @@ dependencies = [
  "osproxy-rewrite",
  "osproxy-spi",
  "serde_json",
+ "thiserror",
  "tokio",
 ]
 

@@ -17,17 +17,31 @@ use std::sync::RwLock;
 use osproxy_core::{Epoch, PartitionId};
 use osproxy_spi::{Placement, PlacementAt};
 
-/// A concurrent, epoch-versioned map from partition to placement.
+use crate::migration::{MigrationError, PartitionState, Phase, WriteAdmission};
+
+/// One partition's migration state plus the epoch it was last stamped at. Every
+/// `set`/transition advances the epoch, so a stamped decision can be recognized
+/// as resolved against a superseded generation (`docs/06` §2).
+#[derive(Clone, Debug)]
+struct Entry {
+    state: PartitionState,
+    epoch: Epoch,
+}
+
+/// A concurrent, epoch-versioned map from partition to placement, carrying each
+/// partition's migration state machine (`docs/06`).
 ///
 /// Cloneable handles are not provided here; wrap in an `Arc` to share. All
-/// methods are non-blocking beyond a short critical section.
+/// methods are non-blocking beyond a short critical section. Transitions are
+/// total: an inapplicable transition returns a [`MigrationError`] and leaves the
+/// table unchanged.
 #[derive(Debug)]
 pub struct PlacementTable {
     // A read-mostly map: lookups vastly outnumber migrations. `RwLock` lets
     // concurrent routing reads proceed in parallel.
-    entries: RwLock<HashMap<PartitionId, PlacementAt>>,
-    // The generation counter. `set` pre-increments it, so the first placement
-    // gets epoch 1 and `Epoch::ZERO` always means "never placed".
+    entries: RwLock<HashMap<PartitionId, Entry>>,
+    // The generation counter. Every `set`/transition pre-increments it, so the
+    // first placement gets epoch 1 and `Epoch::ZERO` always means "never placed".
     generation: AtomicU64,
 }
 
@@ -41,30 +55,156 @@ impl PlacementTable {
         }
     }
 
-    /// Sets (registers or migrates) the placement for `partition`, stamping it
-    /// with a fresh epoch, and returns that epoch.
-    ///
-    /// Used both for initial registration and for migration cutover — they are
-    /// the same operation: replace the placement and advance the generation.
+    /// Registers (or replaces) the placement for `partition` as `Active`,
+    /// stamping a fresh epoch and returning it. Initial registration; an
+    /// in-flight migration uses the phase transitions below, not `set`.
     pub fn set(&self, partition: PartitionId, placement: Placement) -> Epoch {
-        let epoch = Epoch::new(self.generation.fetch_add(1, Ordering::SeqCst) + 1);
-        let mut entries = self.write_lock();
-        entries.insert(partition, PlacementAt::new(placement, epoch));
+        let epoch = self.next_epoch();
+        self.write_lock().insert(
+            partition,
+            Entry::new(PartitionState::Active(placement), epoch),
+        );
         epoch
     }
 
-    /// Resolves the current placement (and the epoch it was read at) for
-    /// `partition`, or `None` if the partition has no placement.
-    #[must_use]
-    pub fn get(&self, partition: &PartitionId) -> Option<PlacementAt> {
-        self.read_lock().get(partition).cloned()
+    /// Begins migrating `partition` to `to`: `Active(from)` → `Migrating`
+    /// `Draining`. Writes still go to `from`; the epoch advances.
+    ///
+    /// # Errors
+    /// [`MigrationError::AlreadyMigrating`] if a migration is already in flight,
+    /// [`MigrationError::UnknownPartition`] if the partition has no placement.
+    pub fn begin_migration(
+        &self,
+        partition: &PartitionId,
+        to: Placement,
+    ) -> Result<Epoch, MigrationError> {
+        self.transition(partition, |state| match state {
+            PartitionState::Active(from) => Ok(PartitionState::Migrating {
+                from,
+                to,
+                phase: Phase::Draining,
+            }),
+            PartitionState::Migrating { .. } => Err(MigrationError::AlreadyMigrating),
+        })
     }
 
-    /// The current generation of the table (the epoch the most recent `set`
+    /// Enters the cutover window: `Draining` → `Cutover`. Writes are now rejected
+    /// until [`complete_migration`](Self::complete_migration) flips the pointer.
+    ///
+    /// # Errors
+    /// [`MigrationError::NotMigrating`] if settled, [`MigrationError::NotDraining`]
+    /// if already past draining.
+    pub fn enter_cutover(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
+        self.transition(partition, |state| match state {
+            PartitionState::Migrating {
+                from,
+                to,
+                phase: Phase::Draining,
+            } => Ok(PartitionState::Migrating {
+                from,
+                to,
+                phase: Phase::Cutover,
+            }),
+            PartitionState::Migrating { .. } => Err(MigrationError::NotDraining),
+            PartitionState::Active(_) => Err(MigrationError::NotMigrating),
+        })
+    }
+
+    /// Completes the migration — the pointer flip: `Cutover` → `Active(to)`.
+    ///
+    /// # Errors
+    /// [`MigrationError::NotMigrating`] if settled, [`MigrationError::NotCutover`]
+    /// if not yet in cutover.
+    pub fn complete_migration(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
+        self.transition(partition, |state| match state {
+            PartitionState::Migrating {
+                to,
+                phase: Phase::Cutover,
+                ..
+            } => Ok(PartitionState::Active(to)),
+            PartitionState::Migrating { .. } => Err(MigrationError::NotCutover),
+            PartitionState::Active(_) => Err(MigrationError::NotMigrating),
+        })
+    }
+
+    /// Aborts an in-flight migration, returning the partition to `Active(from)`.
+    /// Since writes never committed to `to` (Draining wrote to `from`, Cutover
+    /// rejected), no rollback of data is needed (INV-M3).
+    ///
+    /// # Errors
+    /// [`MigrationError::NotMigrating`] if the partition is settled.
+    pub fn abort_migration(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
+        self.transition(partition, |state| match state {
+            PartitionState::Migrating { from, .. } => Ok(PartitionState::Active(from)),
+            PartitionState::Active(_) => Err(MigrationError::NotMigrating),
+        })
+    }
+
+    /// The current migration state and the epoch it was stamped at, or `None`.
+    /// For observability and the control plane (`docs/06` §5).
+    #[must_use]
+    pub fn state(&self, partition: &PartitionId) -> Option<(PartitionState, Epoch)> {
+        self.read_lock()
+            .get(partition)
+            .map(|e| (e.state.clone(), e.epoch))
+    }
+
+    /// Resolves the placement reads go to (and its epoch), or `None`. The single
+    /// read placement — `from` until a migration completes — so a read never
+    /// sees a split view (INV-M4). The routing entry point.
+    #[must_use]
+    pub fn get(&self, partition: &PartitionId) -> Option<PlacementAt> {
+        self.read_lock()
+            .get(partition)
+            .map(|e| PlacementAt::new(e.state.read_placement().clone(), e.epoch))
+    }
+
+    /// The migration write gate (`docs/06` §2): may a write that resolved to
+    /// `resolved` for `partition` commit now? [`WriteAdmission::Admit`] only if
+    /// `resolved` is the partition's current write destination; otherwise
+    /// [`WriteAdmission::Reject`] (the cutover window or a flipped pointer), which
+    /// the caller surfaces as a retryable stale-epoch error (INV-M1, INV-M2).
+    #[must_use]
+    pub fn admit_write(&self, partition: &PartitionId, resolved: &Placement) -> WriteAdmission {
+        let current = self
+            .read_lock()
+            .get(partition)
+            .and_then(|e| e.state.write_placement().cloned());
+        match current {
+            Some(dest) if &dest == resolved => WriteAdmission::Admit,
+            _ => WriteAdmission::Reject,
+        }
+    }
+
+    /// The current generation of the table (the epoch the most recent change
     /// produced, or [`Epoch::ZERO`] if empty).
     #[must_use]
     pub fn current_epoch(&self) -> Epoch {
         Epoch::new(self.generation.load(Ordering::SeqCst))
+    }
+
+    /// Allocates the next monotonic epoch (generation counter pre-increment).
+    fn next_epoch(&self) -> Epoch {
+        Epoch::new(self.generation.fetch_add(1, Ordering::SeqCst) + 1)
+    }
+
+    /// Applies a state transition under the write lock: `f` maps the current
+    /// state to the next one (or a [`MigrationError`]). On success the entry is
+    /// replaced and stamped with a fresh epoch; on any error the table is
+    /// untouched (transitions are atomic and side-effect-free on failure).
+    fn transition(
+        &self,
+        partition: &PartitionId,
+        f: impl FnOnce(PartitionState) -> Result<PartitionState, MigrationError>,
+    ) -> Result<Epoch, MigrationError> {
+        let mut entries = self.write_lock();
+        let current = entries
+            .get(partition)
+            .ok_or(MigrationError::UnknownPartition)?;
+        let next = f(current.state.clone())?;
+        let epoch = self.next_epoch();
+        entries.insert(partition.clone(), Entry::new(next, epoch));
+        Ok(epoch)
     }
 
     /// Acquires the read lock, recovering from a poisoned lock.
@@ -73,7 +213,7 @@ impl PlacementTable {
     /// plain map (no broken invariant a panic could leave torn), so recovering
     /// the guard is safe and keeps routing available — far better than
     /// propagating a panic onto every request path (NFR-R1).
-    fn read_lock(&self) -> std::sync::RwLockReadGuard<'_, HashMap<PartitionId, PlacementAt>> {
+    fn read_lock(&self) -> std::sync::RwLockReadGuard<'_, HashMap<PartitionId, Entry>> {
         self.entries
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -81,10 +221,16 @@ impl PlacementTable {
 
     /// Acquires the write lock, recovering from a poisoned lock (see
     /// [`PlacementTable::read_lock`]).
-    fn write_lock(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<PartitionId, PlacementAt>> {
+    fn write_lock(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<PartitionId, Entry>> {
         self.entries
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl Entry {
+    fn new(state: PartitionState, epoch: Epoch) -> Self {
+        Self { state, epoch }
     }
 }
 

@@ -17,9 +17,11 @@
 //! [`TenancySpi`]: osproxy_spi::TenancySpi
 #![deny(missing_docs)]
 
+mod migration;
 mod placement_table;
 mod resolve;
 mod router;
 
+pub use migration::{MigrationError, PartitionState, Phase, WriteAdmission};
 pub use placement_table::PlacementTable;
 pub use router::{Resolved, TenancyRouter};
