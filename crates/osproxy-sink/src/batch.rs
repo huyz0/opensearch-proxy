@@ -2,6 +2,7 @@
 //! against a single target.
 
 use osproxy_core::{Epoch, Target};
+use osproxy_spi::Protocol;
 
 /// A single write operation against a resolved [`Target`].
 ///
@@ -17,13 +18,28 @@ pub struct WriteOp {
     pub doc: DocOp,
     /// The placement epoch this write was resolved against.
     pub epoch: Epoch,
+    /// The upstream wire protocol this op is dispatched over (per-request,
+    /// `docs/04` §7). Defaults to [`Protocol::Http1`].
+    pub protocol: Protocol,
 }
 
 impl WriteOp {
-    /// Constructs a write operation.
+    /// Constructs a write operation (defaulting to HTTP/1.1 upstream).
     #[must_use]
     pub fn new(target: Target, doc: DocOp, epoch: Epoch) -> Self {
-        Self { target, doc, epoch }
+        Self {
+            target,
+            doc,
+            epoch,
+            protocol: Protocol::Http1,
+        }
+    }
+
+    /// Sets the upstream protocol for this op (builder style).
+    #[must_use]
+    pub fn with_protocol(mut self, protocol: Protocol) -> Self {
+        self.protocol = protocol;
+        self
     }
 }
 

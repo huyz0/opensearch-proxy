@@ -145,7 +145,8 @@ fn build_op(
             resolved.decision.target.clone(),
             doc,
             resolved.decision.epoch,
-        ),
+        )
+        .with_protocol(resolved.decision.upstream_protocol),
         action,
         logical_index,
         logical_id,

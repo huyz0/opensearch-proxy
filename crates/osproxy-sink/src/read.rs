@@ -8,6 +8,7 @@
 //! [`Sink`]: crate::Sink
 
 use osproxy_core::Target;
+use osproxy_spi::Protocol;
 
 use crate::error::SinkError;
 
@@ -23,17 +24,28 @@ pub struct ReadOp {
     pub id: String,
     /// The `_routing` value (the partition id), if the placement routes.
     pub routing: Option<String>,
+    /// The upstream wire protocol this read is dispatched over. Defaults to
+    /// [`Protocol::Http1`].
+    pub protocol: Protocol,
 }
 
 impl ReadOp {
-    /// Constructs a read operation.
+    /// Constructs a read operation (defaulting to HTTP/1.1 upstream).
     #[must_use]
     pub fn new(target: Target, id: impl Into<String>, routing: Option<String>) -> Self {
         Self {
             target,
             id: id.into(),
             routing,
+            protocol: Protocol::Http1,
         }
+    }
+
+    /// Sets the upstream protocol for this op (builder style).
+    #[must_use]
+    pub fn with_protocol(mut self, protocol: Protocol) -> Self {
+        self.protocol = protocol;
+        self
     }
 }
 
@@ -81,13 +93,27 @@ pub struct SearchOp {
     pub target: Target,
     /// The query body to forward upstream (already partition-filtered).
     pub body: Vec<u8>,
+    /// The upstream wire protocol this search is dispatched over. Defaults to
+    /// [`Protocol::Http1`].
+    pub protocol: Protocol,
 }
 
 impl SearchOp {
-    /// Constructs a search operation.
+    /// Constructs a search operation (defaulting to HTTP/1.1 upstream).
     #[must_use]
     pub fn new(target: Target, body: Vec<u8>) -> Self {
-        Self { target, body }
+        Self {
+            target,
+            body,
+            protocol: Protocol::Http1,
+        }
+    }
+
+    /// Sets the upstream protocol for this op (builder style).
+    #[must_use]
+    pub fn with_protocol(mut self, protocol: Protocol) -> Self {
+        self.protocol = protocol;
+        self
     }
 }
 

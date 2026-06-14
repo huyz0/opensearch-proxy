@@ -13,15 +13,15 @@ osproxy-core.workspace = true
 osproxy-spi.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
-hyper = { workspace = true, features = ["client", "http1"] }
-hyper-util = { workspace = true, features = ["client", "client-legacy", "http1", "tokio"] }
+hyper = { workspace = true, features = ["client", "http1", "http2"] }
+hyper-util = { workspace = true, features = ["client", "client-legacy", "http1", "http2", "tokio"] }
 http-body-util.workspace = true
 bytes.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net"] }
-hyper = { workspace = true, features = ["server"] }
-hyper-util = { workspace = true, features = ["server", "service"] }
+hyper = { workspace = true, features = ["server", "http1", "http2"] }
+hyper-util = { workspace = true, features = ["server", "server-auto", "service", "tokio"] }
 
 [lints]
 workspace = true

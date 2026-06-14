@@ -40,7 +40,8 @@ pub fn build_write_batch(resolved: &Resolved, body: &[u8]) -> Result<WriteBatch,
         decision.target.clone(),
         DocOp::Index { id, routing, body },
         decision.epoch,
-    );
+    )
+    .with_protocol(decision.upstream_protocol);
     Ok(WriteBatch::single(op))
 }
 

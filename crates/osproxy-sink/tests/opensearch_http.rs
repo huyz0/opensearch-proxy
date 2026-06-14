@@ -27,6 +27,7 @@ struct Captured {
     method: String,
     uri: String,
     body: String,
+    version: String,
 }
 
 /// Starts a one-shot mock server returning `response` (status 201) and capturing
@@ -45,19 +46,22 @@ async fn start_mock(response: &'static str) -> (String, Arc<Mutex<Captured>>) {
             async move {
                 let method = req.method().to_string();
                 let uri = req.uri().to_string();
+                let version = format!("{:?}", req.version());
                 let body = req.into_body().collect().await.unwrap().to_bytes();
                 *captured.lock().unwrap() = Captured {
                     method,
                     uri,
                     body: String::from_utf8_lossy(&body).into_owned(),
+                    version,
                 };
                 Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from(response))))
             }
         });
-        hyper::server::conn::http1::Builder::new()
+        // The protocol-auto builder serves whichever protocol the sink's client
+        // speaks (h1 by default; h2 prior-knowledge when the op selects it).
+        let _ = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
             .serve_connection(io, service)
-            .await
-            .unwrap();
+            .await;
     });
 
     (format!("http://{addr}"), captured)
@@ -93,6 +97,31 @@ async fn index_with_id_and_routing_is_sent_and_parsed() {
     assert_eq!(got.method, "PUT");
     assert_eq!(got.uri, "/orders-shared/_doc/acme:1001?routing=acme");
     assert!(got.body.contains("\"_tenant\":\"acme\""));
+}
+
+#[tokio::test]
+async fn an_http2_op_is_dispatched_over_http2() {
+    let (base, captured) = start_mock(r#"{"_id":"acme:1","result":"created"}"#).await;
+    let sink = sink_for("eu-1", base);
+
+    // The op's resolved upstream protocol is HTTP/2 — the sink must dispatch it
+    // over its h2 client, not the default h1 one (per-request selection).
+    let op = WriteOp::new(
+        Target::new(ClusterId::from("eu-1"), IndexName::from("orders")),
+        DocOp::Index {
+            id: Some("acme:1".to_owned()),
+            routing: None,
+            body: b"{}".to_vec(),
+        },
+        Epoch::new(1),
+    )
+    .with_protocol(osproxy_spi::Protocol::Http2);
+    let ack = sink.write(WriteBatch::single(op)).await.unwrap();
+    assert!(ack.all_succeeded());
+
+    let got = captured.lock().unwrap().clone();
+    assert_eq!(got.version, "HTTP/2.0", "must travel over h2: {got:?}");
+    assert_eq!(got.method, "PUT");
 }
 
 #[tokio::test]

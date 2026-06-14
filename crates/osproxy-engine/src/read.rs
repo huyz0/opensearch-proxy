@@ -38,7 +38,8 @@ pub(crate) fn build_read_op(
 ) -> Result<(ReadOp, ReadShape), RequestError> {
     let shape = read_shape(&resolved.decision.body_transform);
     let (physical_id, routing) = physical_id_and_routing(resolved, logical_id, &shape)?;
-    let op = ReadOp::new(resolved.decision.target.clone(), physical_id, routing);
+    let op = ReadOp::new(resolved.decision.target.clone(), physical_id, routing)
+        .with_protocol(resolved.decision.upstream_protocol);
     Ok((op, shape))
 }
 
@@ -63,7 +64,8 @@ pub(crate) fn build_delete_op(
             routing,
         },
         resolved.decision.epoch,
-    ))
+    )
+    .with_protocol(resolved.decision.upstream_protocol))
 }
 
 /// Maps a logical id to `(physical_id, routing)` for a by-id request: applies the
@@ -159,10 +161,9 @@ pub(crate) fn build_search_op(
     let shape = read_shape(&resolved.decision.body_transform);
     let filter = filter_terms(&resolved.decision.body_transform, partition);
     let wrapped = wrap_query(body, &filter)?;
-    Ok((
-        SearchOp::new(resolved.decision.target.clone(), wrapped),
-        shape,
-    ))
+    let op = SearchOp::new(resolved.decision.target.clone(), wrapped)
+        .with_protocol(resolved.decision.upstream_protocol);
+    Ok((op, shape))
 }
 
 /// Shapes a search hits envelope into the client's logical view: every hit's
@@ -232,14 +233,12 @@ fn filter_terms(transform: &BodyTransform, partition: &str) -> Vec<(FieldName, V
         .collect()
 }
 
-/// The concrete value of an injected field (the tenancy adapter resolves these
-/// to constants; `PartitionId` is resolved here too for robustness).
+/// The concrete value of an injected field (the adapter resolves these to
+/// constants; `PartitionId`/`FromPrincipal` fall back to the partition here for
+/// robustness — filtering on the partition is always isolating, never a leak).
 fn injected_value(field: &InjectedField, partition: &str) -> Value {
     match &field.value {
         InjectedValue::Constant(v) => v.clone(),
-        // `PartitionId` resolves to the partition; a `FromPrincipal` value cannot
-        // be reconstructed here, so it falls back to the partition id too —
-        // filtering on the partition is always isolating (never a leak).
         InjectedValue::PartitionId | InjectedValue::FromPrincipal(_) => {
             Value::String(partition.to_owned())
         }

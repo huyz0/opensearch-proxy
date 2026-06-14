@@ -16,6 +16,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use osproxy_core::ClusterId;
+use osproxy_spi::Protocol;
 use serde_json::Value;
 
 use crate::ack::{OpResult, WriteAck};
@@ -28,9 +29,15 @@ use crate::wire::{build_request, doc_uri, parse_result};
 type HttpClient = Client<HttpConnector, Full<Bytes>>;
 
 /// A [`Sink`] that writes directly to OpenSearch clusters over pooled HTTP.
+///
+/// Holds a pooled HTTP/1.1 client and a pooled HTTP/2 (prior-knowledge) client;
+/// each operation selects the one matching its resolved upstream
+/// [`Protocol`] (`docs/04` §7), so the proxy can speak h2 to a cluster that
+/// supports it while defaulting to h1.
 #[derive(Debug)]
 pub struct OpenSearchSink {
-    client: HttpClient,
+    client_h1: HttpClient,
+    client_h2: HttpClient,
     /// Per-cluster base URL (scheme + authority), e.g. `http://10.0.0.1:9200`.
     endpoints: HashMap<ClusterId, String>,
 }
@@ -38,12 +45,28 @@ pub struct OpenSearchSink {
 impl OpenSearchSink {
     /// Builds a sink that routes each cluster to its configured base URL.
     ///
-    /// The pooled client is shared across all clusters; connections are keyed by
-    /// authority internally, so per-cluster reuse is automatic.
+    /// The pooled clients are shared across all clusters; connections are keyed
+    /// by authority internally, so per-cluster reuse is automatic.
     #[must_use]
     pub fn new(endpoints: HashMap<ClusterId, String>) -> Self {
-        let client = Client::builder(TokioExecutor::new()).build_http();
-        Self { client, endpoints }
+        let client_h1 = Client::builder(TokioExecutor::new()).build_http();
+        let client_h2 = Client::builder(TokioExecutor::new())
+            .http2_only(true)
+            .build_http();
+        Self {
+            client_h1,
+            client_h2,
+            endpoints,
+        }
+    }
+
+    /// The pooled client for a resolved upstream protocol: the HTTP/2
+    /// (prior-knowledge) client for `Http2`/`Grpc`, the HTTP/1.1 client otherwise.
+    fn client_for(&self, protocol: Protocol) -> &HttpClient {
+        match protocol {
+            Protocol::Http2 | Protocol::Grpc => &self.client_h2,
+            _ => &self.client_h1,
+        }
     }
 
     /// Resolves a cluster's base URL, or a transport error if unconfigured.
@@ -71,7 +94,7 @@ impl OpenSearchSink {
             })?;
 
         let resp = self
-            .client
+            .client_for(op.protocol)
             .request(req)
             .await
             .map_err(|_| SinkError::Transport {
@@ -102,7 +125,7 @@ impl OpenSearchSink {
         let (req, fallback_id) = build_request(base, &op.target.index, &op.doc)?;
 
         let resp = self
-            .client
+            .client_for(op.protocol)
             .request(req)
             .await
             .map_err(|_| SinkError::Transport {
@@ -141,7 +164,7 @@ impl Reader for OpenSearchSink {
             })?;
 
         let resp = self
-            .client
+            .client_for(op.protocol)
             .request(req)
             .await
             .map_err(|_| SinkError::Transport {
