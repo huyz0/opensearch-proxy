@@ -11,12 +11,13 @@
 
 use std::collections::HashMap;
 
+use futures_util::stream::StreamExt as _;
 use osproxy_core::{PartitionId, Target};
 use osproxy_rewrite::{
     construct_id, inject_fields, map_logical_to_physical, map_physical_to_logical, parse_bulk,
     BulkAction, BulkItem,
 };
-use osproxy_sink::{DocOp, OpResult, Sink, WriteBatch, WriteOp};
+use osproxy_sink::{DocOp, OpResult, Sink, SinkError, WriteAck, WriteBatch, WriteOp};
 use osproxy_spi::{BodyTransform, InjectedField, InjectedValue, RequestCtx, TenancySpi};
 use osproxy_tenancy::{Resolved, TenancyRouter};
 use serde_json::{json, Value};
@@ -195,25 +196,47 @@ fn build_op(
     })
 }
 
-/// Dispatches each target's sub-batch and fills the result lines by ordinal.
+/// The most per-target sub-batches dispatched at once, so a wide fan-out cannot
+/// open an unbounded number of upstream requests (NFR-P, `docs/04` §3).
+const MAX_DISPATCH_CONCURRENCY: usize = 8;
+
+/// Dispatches the per-target sub-batches **concurrently** (bounded) and fills the
+/// result lines by ordinal.
+///
+/// Each target's batch is built up front (owning its ops), so the in-flight
+/// futures share only `&S`; results are applied to `lines` after the bounded
+/// stream drains. Completion order does not matter — every line is keyed by its
+/// original ordinal, so re-interleave stays exact regardless of which target
+/// finishes first.
 async fn dispatch_targets<S: Sink>(
     sink: &S,
     by_target: HashMap<Target, Vec<usize>>,
     prepared: &[Option<Prepared>],
     lines: &mut [Value],
 ) {
-    for (_target, ordinals) in by_target {
+    let batches = by_target.into_values().map(|ordinals| {
         let batch = ordinals
             .iter()
             .fold(WriteBatch::new(), |b, &o| match prepared[o].as_ref() {
                 Some(p) => b.with(p.op.clone()),
                 None => b,
             });
-        match sink.write(batch).await {
+        (ordinals, batch)
+    });
+
+    let results: Vec<(Vec<usize>, Result<WriteAck, SinkError>)> =
+        futures_util::stream::iter(batches)
+            .map(|(ordinals, batch)| async move { (ordinals, sink.write(batch).await) })
+            .buffer_unordered(MAX_DISPATCH_CONCURRENCY)
+            .collect()
+            .await;
+
+    for (ordinals, result) in results {
+        match result {
             Ok(ack) => {
-                for (&ordinal, result) in ordinals.iter().zip(ack.results()) {
+                for (&ordinal, op_result) in ordinals.iter().zip(ack.results()) {
                     if let Some(p) = prepared[ordinal].as_ref() {
-                        lines[ordinal] = success_line(p, result);
+                        lines[ordinal] = success_line(p, op_result);
                     }
                 }
             }

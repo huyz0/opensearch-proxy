@@ -1309,6 +1309,7 @@ dependencies = [
 name = "osproxy-engine"
 version = "0.0.0"
 dependencies = [
+ "futures-util",
  "osproxy-control",
  "osproxy-core",
  "osproxy-observe",

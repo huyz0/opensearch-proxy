@@ -47,6 +47,9 @@ hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 http-body-util = "0.1"
 bytes = "1"
+# Stream combinators for bounded-concurrency demux dispatch (buffer_unordered).
+# Already in the tree via hyper-util; no runtime/spawn needed — just polling.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # TLS via rustls behind the CryptoProvider seam. M1 uses the `ring` provider
 # (no cmake/C toolchain needed); the FIPS-validated aws-lc-rs provider drops in
 # at M6 behind the same seam (ADR-009, docs/07).
