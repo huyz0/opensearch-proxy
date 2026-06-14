@@ -11,14 +11,16 @@
 //! — implemented by the binary — is where the request meets the engine pipeline.
 #![deny(missing_docs)]
 
+mod admission;
 mod classify;
 mod handler;
 mod request;
 mod server;
 mod tls;
 
+pub use admission::IngressLimits;
 pub use classify::{classify, Classified};
 pub use handler::IngressHandler;
 pub use request::{IngressRequest, IngressResponse};
-pub use server::{serve, serve_tls};
+pub use server::{serve, serve_tls, serve_tls_with_limits, serve_with_limits};
 pub use tls::{CryptoProvider, RingProvider, TlsError};

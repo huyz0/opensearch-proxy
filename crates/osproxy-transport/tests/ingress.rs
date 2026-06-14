@@ -14,7 +14,9 @@ use hyper::{Method, Request};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use osproxy_core::EndpointKind;
-use osproxy_transport::{serve, IngressHandler, IngressRequest, IngressResponse};
+use osproxy_transport::{
+    serve, serve_with_limits, IngressHandler, IngressLimits, IngressRequest, IngressResponse,
+};
 use tokio::net::TcpListener;
 
 /// Echoes the parsed classification back as JSON so the test can assert on it.
@@ -57,6 +59,55 @@ async fn put_doc_round_trips_through_the_ingress() {
     assert!(text.contains(r#""index":"orders""#), "{text}");
     assert!(text.contains(r#""doc_id":"acme:1""#), "{text}");
     assert!(text.contains(r#""ingest":true"#), "{text}");
+}
+
+#[tokio::test]
+async fn body_over_the_per_request_cap_is_413() {
+    let limits = IngressLimits {
+        max_body_bytes: 16,
+        inflight_ceiling: 1024,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = serve_with_limits(listener, Arc::new(EchoHandler), limits).await;
+    });
+
+    let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("http://{addr}/orders/_bulk"))
+        // 20 bytes > the 16-byte per-request cap.
+        .body(Full::new(Bytes::from_static(b"01234567890123456789")))
+        .unwrap();
+    let resp = client.request(req).await.unwrap();
+    assert_eq!(resp.status(), 413);
+}
+
+#[tokio::test]
+async fn body_over_the_inflight_ceiling_is_shed_with_429() {
+    // A ceiling smaller than the request's declared size: admission cannot make
+    // room, so the request is shed with 429 + retry guidance (NFR-R3).
+    let limits = IngressLimits {
+        max_body_bytes: 1024,
+        inflight_ceiling: 8,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = serve_with_limits(listener, Arc::new(EchoHandler), limits).await;
+    });
+
+    let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("http://{addr}/orders/_bulk"))
+        // 20 bytes > the 8-byte in-flight ceiling.
+        .body(Full::new(Bytes::from_static(b"01234567890123456789")))
+        .unwrap();
+    let resp = client.request(req).await.unwrap();
+    assert_eq!(resp.status(), 429);
+    assert_eq!(resp.headers().get("retry-after").unwrap(), "1");
 }
 
 #[tokio::test]

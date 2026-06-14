@@ -17,17 +17,12 @@ use hyper_util::rt::TokioIo;
 use osproxy_spi::HttpMethod;
 use tokio::net::TcpListener;
 
+use crate::admission::{Admission, IngressLimits, Reservation};
 use crate::classify::classify;
 use crate::handler::IngressHandler;
 use crate::request::{IngressRequest, IngressResponse};
 
-/// The largest request body the ingress will buffer. Bounds memory per request
-/// (NFR-P3); single-doc ingest is far smaller. Streaming/bulk relaxes this in
-/// M3 with backpressure instead of a hard cap.
-const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
-
-/// Serves HTTP/1.1 requests on `listener`, dispatching each to `handler`, until
-/// the listener errors.
+/// Serves HTTP/1.1 requests on `listener` with the default [`IngressLimits`].
 ///
 /// # Errors
 ///
@@ -38,11 +33,35 @@ pub async fn serve<H: IngressHandler>(
     listener: TcpListener,
     handler: Arc<H>,
 ) -> std::io::Result<()> {
+    serve_with_limits(listener, handler, IngressLimits::default()).await
+}
+
+/// Serves HTTP/1.1 requests on `listener`, dispatching each to `handler` under
+/// the given memory `limits` (per-request `413`, in-flight `429`), until the
+/// listener errors.
+///
+/// # Errors
+///
+/// Returns the I/O error if accepting a connection fails.
+pub async fn serve_with_limits<H: IngressHandler>(
+    listener: TcpListener,
+    handler: Arc<H>,
+    limits: IngressLimits,
+) -> std::io::Result<()> {
+    let admission = Arc::new(Admission::new(limits.inflight_ceiling));
     loop {
         let (stream, _peer) = listener.accept().await?;
         let handler = Arc::clone(&handler);
+        let admission = Arc::clone(&admission);
         tokio::spawn(async move {
-            serve_connection(TokioIo::new(stream), handler, ConnInfo::default()).await;
+            serve_connection(
+                TokioIo::new(stream),
+                handler,
+                ConnInfo::default(),
+                limits,
+                admission,
+            )
+            .await;
         });
     }
 }
@@ -74,17 +93,38 @@ where
     H: IngressHandler,
     P: crate::tls::CryptoProvider,
 {
+    serve_tls_with_limits(listener, provider, handler, IngressLimits::default()).await
+}
+
+/// Serves HTTPS requests on `listener` under the given memory `limits`,
+/// terminating TLS with `provider`'s configuration, until the listener errors.
+///
+/// # Errors
+///
+/// Returns the I/O error if accepting a connection fails.
+pub async fn serve_tls_with_limits<H, P>(
+    listener: TcpListener,
+    provider: Arc<P>,
+    handler: Arc<H>,
+    limits: IngressLimits,
+) -> std::io::Result<()>
+where
+    H: IngressHandler,
+    P: crate::tls::CryptoProvider,
+{
     let acceptor = tokio_rustls::TlsAcceptor::from(provider.server_config());
+    let admission = Arc::new(Admission::new(limits.inflight_ceiling));
     loop {
         let (stream, _peer) = listener.accept().await?;
         let acceptor = acceptor.clone();
         let handler = Arc::clone(&handler);
+        let admission = Arc::clone(&admission);
         tokio::spawn(async move {
             // Drop the connection on handshake failure; logged via observability
             // in a later slice.
             if let Ok(tls) = acceptor.accept(stream).await {
                 let conn_info = conn_info_from_tls(&tls);
-                serve_connection(TokioIo::new(tls), handler, conn_info).await;
+                serve_connection(TokioIo::new(tls), handler, conn_info, limits, admission).await;
             }
         });
     }
@@ -104,66 +144,115 @@ fn conn_info_from_tls(tls: &tokio_rustls::server::TlsStream<tokio::net::TcpStrea
 }
 
 /// Serves HTTP/1.1 over one already-accepted byte stream (cleartext or TLS).
-async fn serve_connection<H, IO>(io: IO, handler: Arc<H>, conn_info: ConnInfo)
-where
+async fn serve_connection<H, IO>(
+    io: IO,
+    handler: Arc<H>,
+    conn_info: ConnInfo,
+    limits: IngressLimits,
+    admission: Arc<Admission>,
+) where
     H: IngressHandler,
     IO: hyper::rt::Read + hyper::rt::Write + Unpin + 'static,
 {
     let service = service_fn(move |req: Request<Incoming>| {
         let handler = Arc::clone(&handler);
         let conn_info = conn_info.clone();
-        async move { Ok::<_, Infallible>(serve_request(&*handler, req, &conn_info).await) }
+        let admission = Arc::clone(&admission);
+        async move {
+            Ok::<_, Infallible>(serve_request(&*handler, req, &conn_info, limits, &admission).await)
+        }
     });
     let _ = hyper::server::conn::http1::Builder::new()
         .serve_connection(io, service)
         .await;
 }
 
-/// Parses one request, runs the handler, and renders the response.
+/// Parses one request, runs the handler, and renders the response. The body's
+/// in-flight reservation is held across the handler call and released when the
+/// response is rendered.
 async fn serve_request<H: IngressHandler>(
     handler: &H,
     req: Request<Incoming>,
     conn_info: &ConnInfo,
+    limits: IngressLimits,
+    admission: &Arc<Admission>,
 ) -> Response<Full<Bytes>> {
-    match parse(req, conn_info).await {
-        Ok(ingress) => render(handler.handle(ingress).await),
+    match parse(req, conn_info, limits, admission).await {
+        Ok((ingress, _reservation)) => render(handler.handle(ingress).await),
         Err(early) => render(early),
     }
 }
 
-/// Parses a hyper request into an owned [`IngressRequest`], or an early
-/// [`IngressResponse`] for an unsupported method or oversized body.
+/// Parses a hyper request into an owned [`IngressRequest`] plus the in-flight
+/// [`Reservation`] covering its body, or an early [`IngressResponse`]: `405` for
+/// an unsupported method, `429` when the in-flight ceiling is reached, or `413`
+/// for a body over the per-request cap.
 async fn parse(
     req: Request<Incoming>,
     conn_info: &ConnInfo,
-) -> Result<IngressRequest, IngressResponse> {
+    limits: IngressLimits,
+    admission: &Arc<Admission>,
+) -> Result<(IngressRequest, Reservation), IngressResponse> {
     let Some(method) = map_method(req.method()) else {
         return Err(IngressResponse::json(405, error_body("method not allowed")));
     };
     let path = req.uri().path().to_owned();
-    let headers = req
+    let headers: Vec<(String, String)> = req
         .headers()
         .iter()
         .map(|(k, v)| (k.as_str().to_owned(), v.to_str().unwrap_or("").to_owned()))
         .collect();
 
-    let body = Limited::new(req.into_body(), MAX_BODY_BYTES)
+    // A declared Content-Length over the per-request cap is too large outright.
+    let declared = content_length(&headers);
+    if declared.is_some_and(|n| n > limits.max_body_bytes) {
+        return Err(IngressResponse::json(
+            413,
+            error_body("request body too large"),
+        ));
+    }
+    // Reserve the (declared, else worst-case) size against the global budget
+    // before buffering; shed with 429 + retry guidance if the ceiling is reached.
+    let reserve = declared.unwrap_or(limits.max_body_bytes);
+    let reservation = admission
+        .try_reserve(reserve)
+        .ok_or_else(overloaded_response)?;
+
+    let body = Limited::new(req.into_body(), limits.max_body_bytes)
         .collect()
         .await
         .map(|c| c.to_bytes().to_vec())
         .map_err(|_| IngressResponse::json(413, error_body("request body too large")))?;
 
     let c = classify(method, &path);
-    Ok(IngressRequest {
-        method,
-        path,
-        endpoint: c.endpoint,
-        logical_index: c.logical_index,
-        doc_id: c.doc_id,
-        headers,
-        body,
-        client_cert_subject: conn_info.client_cert_subject.clone(),
-    })
+    Ok((
+        IngressRequest {
+            method,
+            path,
+            endpoint: c.endpoint,
+            logical_index: c.logical_index,
+            doc_id: c.doc_id,
+            headers,
+            body,
+            client_cert_subject: conn_info.client_cert_subject.clone(),
+        },
+        reservation,
+    ))
+}
+
+/// The `Content-Length` header parsed to a byte count, if present and valid.
+fn content_length(headers: &[(String, String)]) -> Option<usize> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, v)| v.trim().parse().ok())
+}
+
+/// The `429` shed response with retry guidance (NFR-R3): the proxy is at its
+/// in-flight memory budget; the client should back off and retry.
+fn overloaded_response() -> IngressResponse {
+    IngressResponse::json(429, error_body("ingress overloaded, retry later"))
+        .with_header("retry-after", "1")
 }
 
 /// Maps a hyper method to the SPI's method, or `None` if unsupported.
