@@ -38,6 +38,9 @@ osproxy-config = { path = "crates/osproxy-config" }
 
 # Third-party (pinned conservatively; add as milestones need them).
 thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", default-features = false }
 
 # Lints applied to every crate that opts in via `[lints] workspace = true`.
 # See docs/08-engineering-standards.md. xtask deliberately does NOT opt in.

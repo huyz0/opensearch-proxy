@@ -1,3 +1,10 @@
+# Tests may `unwrap`/`expect`: a panic there is a test failure, which is the
+# point. Library code stays panic-free via the deny-level lints in the
+# workspace manifest (NFR-R1). Integration tests in `tests/` need this too —
+# they are separate crates, not under `#[cfg(test)]`.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
 # Complexity budgets — see docs/08-engineering-standards.md.
 too-many-lines-threshold = 60
 too-many-arguments-threshold = 7
@@ -5,7 +12,7 @@ cognitive-complexity-threshold = 15
 
 # Domain identifiers that are not missing-backticks violations in docs.
 # `..` keeps clippy's built-in defaults.
-doc-valid-idents = ["OpenSearch", "NDJSON", ".."]
+doc-valid-idents = ["OpenSearch", "NDJSON", "JSONPath", "JsonPath", ".."]
 
 # Determinism enforcement (docs/12). Reading wall-clock time or unseeded
 # randomness directly makes behavior machine-dependent and tests flaky. Code

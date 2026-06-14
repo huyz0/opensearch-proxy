@@ -61,7 +61,7 @@ fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'static str]> {
     Some(match crate_name {
         "osproxy-core" => &[],
         "osproxy-spi" => &["osproxy-core"],
-        "osproxy-tenancy" => &["osproxy-core", "osproxy-spi"],
+        "osproxy-tenancy" => &["osproxy-core", "osproxy-spi", "osproxy-rewrite"],
         "osproxy-transport" => &["osproxy-core", "osproxy-spi"],
         "osproxy-rewrite" => &["osproxy-core"],
         "osproxy-sink" => &["osproxy-core", "osproxy-spi"],

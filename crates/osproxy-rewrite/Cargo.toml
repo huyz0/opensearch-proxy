@@ -10,6 +10,11 @@ repository.workspace = true
 
 [dependencies]
 osproxy-core.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+proptest = "1"
 
 [lints]
 workspace = true

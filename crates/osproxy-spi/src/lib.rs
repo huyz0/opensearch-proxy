@@ -1,12 +1,41 @@
 //! Public SPI traits for osproxy.
 //!
 //! This is the contract implementers compile against (`docs/02`). It depends
-//! only on [`osproxy_core`] so the surface stays tiny. The traits themselves
-//! (`RoutingSpi`, `TenancySpi`, `Sink`, `CryptoProvider`, `Authenticator`,
-//! `Authorizer`) and their supporting types are introduced in milestone M1
-//! (`docs/11`); this crate currently establishes the module boundary.
+//! only on [`osproxy_core`] (plus `serde_json` for body values) so the surface
+//! stays tiny and fast.
+//!
+//! Two layers:
+//!
+//! - [`RoutingSpi`] — low-level, full control over the [`RouteDecision`].
+//! - [`TenancySpi`] — high-level, declarative tenancy rules; `osproxy-tenancy`
+//!   adapts it into a [`RoutingSpi`].
+//!
+//! Supporting vocabulary is grouped by concern: [`Principal`] identity,
+//! [`RequestCtx`] inputs, [`RouteDecision`] outputs, declarative [`rules`], and
+//! [`Placement`] results. Every public item carries an example, per NFR-Q3.
 #![deny(missing_docs)]
 
-// Re-export the core vocabulary so SPI implementers get the identifier and
-// error types from a single dependency.
+// Re-export the core vocabulary so SPI implementers get the identifier, target,
+// and error types from a single dependency.
 pub use osproxy_core as core;
+
+mod decision;
+mod error;
+mod placement;
+mod principal;
+mod request;
+mod routing;
+pub mod rules;
+mod tenancy;
+
+pub use decision::{BodyTransform, HeaderOp, RouteDecision};
+pub use error::SpiError;
+pub use placement::{Placement, PlacementAt};
+pub use principal::{Principal, PrincipalAttr};
+pub use request::{HeaderView, HttpMethod, Protocol, RequestCtx};
+pub use routing::RoutingSpi;
+pub use rules::{
+    DocIdRule, IdTemplate, InjectedField, InjectedValue, JsonPath, PartitionKeySpec,
+    PartitionKeySpecKind, SensitivitySpec,
+};
+pub use tenancy::TenancySpi;

@@ -83,6 +83,13 @@ string_id! {
     RequestId
 }
 
+string_id! {
+    /// The name of a document field. Used both for fields the proxy injects on
+    /// ingest and the fields it strips on read, so the two stay symmetric
+    /// (`docs/02` §2, `docs/03`). A name, never a value — safe in telemetry.
+    FieldName
+}
+
 /// The placement-table generation a routing decision was resolved against.
 ///
 /// Monotonically increasing. Stamped on every routed write so the sink can

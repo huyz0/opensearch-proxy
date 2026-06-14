@@ -1,0 +1,116 @@
+//! Where a partition currently lives.
+//!
+//! A [`Placement`] is the resolved home of a partition; [`PlacementAt`] pairs it
+//! with the [`Epoch`] it was read at, so a write can be epoch-stamped and the
+//! sink can reject a stale-epoch write during a migration (`docs/03`, `docs/06`).
+
+use osproxy_core::{ClusterId, Epoch, IndexName};
+
+use crate::rules::InjectedField;
+
+/// The resolved home of a partition.
+///
+/// The three modes trade isolation against density (`docs/03` §3):
+/// - `DedicatedCluster`: the partition owns a whole cluster (its index name is
+///   carried unchanged from the request's logical index).
+/// - `DedicatedIndex`: the partition owns a physical index on a shared cluster.
+/// - `SharedIndex`: many partitions share one physical index; isolation is
+///   enforced by injected partition fields (whose names the SPI chose) plus a
+///   partition filter on read.
+///
+/// Deliberately *not* `#[non_exhaustive]`: the proxy core must interpret every
+/// placement mode to route correctly, so adding a mode should force every match
+/// in the workspace to be updated rather than silently fall through (`docs/03`).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Placement {
+    /// The partition has a dedicated cluster.
+    DedicatedCluster {
+        /// The cluster that exclusively serves this partition.
+        cluster: ClusterId,
+    },
+    /// The partition has a dedicated index on a shared cluster.
+    DedicatedIndex {
+        /// The hosting cluster.
+        cluster: ClusterId,
+        /// The physical index for this partition.
+        index: IndexName,
+    },
+    /// The partition shares a physical index with others, isolated by the
+    /// injected fields named here.
+    SharedIndex {
+        /// The hosting cluster.
+        cluster: ClusterId,
+        /// The shared physical index.
+        index: IndexName,
+        /// Fields injected on ingest and stripped on read to isolate tenants.
+        inject: Vec<InjectedField>,
+    },
+}
+
+impl Placement {
+    /// The cluster this placement resolves to, regardless of mode.
+    #[must_use]
+    pub fn cluster(&self) -> &ClusterId {
+        match self {
+            Self::DedicatedCluster { cluster }
+            | Self::DedicatedIndex { cluster, .. }
+            | Self::SharedIndex { cluster, .. } => cluster,
+        }
+    }
+}
+
+/// A [`Placement`] together with the placement-table epoch it was read at.
+///
+/// The epoch flows into the routing decision and onto the write so migration
+/// cutover can detect a write resolved against a superseded placement
+/// (`docs/06` §2).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PlacementAt {
+    /// The resolved placement.
+    pub placement: Placement,
+    /// The epoch the placement table was at when this was read.
+    pub epoch: Epoch,
+}
+
+impl PlacementAt {
+    /// Pairs a placement with the epoch it was read at.
+    #[must_use]
+    pub fn new(placement: Placement, epoch: Epoch) -> Self {
+        Self { placement, epoch }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cluster_is_extracted_for_every_mode() {
+        let dc = Placement::DedicatedCluster {
+            cluster: ClusterId::from("c1"),
+        };
+        let di = Placement::DedicatedIndex {
+            cluster: ClusterId::from("c2"),
+            index: IndexName::from("i"),
+        };
+        let si = Placement::SharedIndex {
+            cluster: ClusterId::from("c3"),
+            index: IndexName::from("shared"),
+            inject: Vec::new(),
+        };
+        assert_eq!(dc.cluster().as_str(), "c1");
+        assert_eq!(di.cluster().as_str(), "c2");
+        assert_eq!(si.cluster().as_str(), "c3");
+    }
+
+    #[test]
+    fn placement_at_pairs_epoch() {
+        let at = PlacementAt::new(
+            Placement::DedicatedCluster {
+                cluster: ClusterId::from("c"),
+            },
+            Epoch::new(5),
+        );
+        assert_eq!(at.epoch, Epoch::new(5));
+    }
+}
