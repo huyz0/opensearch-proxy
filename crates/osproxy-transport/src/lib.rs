@@ -15,8 +15,10 @@ mod classify;
 mod handler;
 mod request;
 mod server;
+mod tls;
 
 pub use classify::{classify, Classified};
 pub use handler::IngressHandler;
 pub use request::{IngressRequest, IngressResponse};
-pub use server::serve;
+pub use server::{serve, serve_tls};
+pub use tls::{CryptoProvider, RingProvider, TlsError};

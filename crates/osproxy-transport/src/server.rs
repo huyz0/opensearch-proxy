@@ -42,16 +42,58 @@ pub async fn serve<H: IngressHandler>(
         let (stream, _peer) = listener.accept().await?;
         let handler = Arc::clone(&handler);
         tokio::spawn(async move {
-            let io = TokioIo::new(stream);
-            let service = service_fn(move |req: Request<Incoming>| {
-                let handler = Arc::clone(&handler);
-                async move { Ok::<_, Infallible>(serve_request(&*handler, req).await) }
-            });
-            let _ = hyper::server::conn::http1::Builder::new()
-                .serve_connection(io, service)
-                .await;
+            serve_connection(TokioIo::new(stream), handler).await;
         });
     }
+}
+
+/// Serves HTTPS requests on `listener`, terminating TLS with `provider`'s
+/// configuration, until the listener errors.
+///
+/// A TLS handshake failure is isolated to its connection (the connection is
+/// dropped); the accept loop keeps serving. The handler contract is identical to
+/// [`serve`] — TLS is transparent to it.
+///
+/// # Errors
+///
+/// Returns the I/O error if accepting a connection fails.
+pub async fn serve_tls<H, P>(
+    listener: TcpListener,
+    provider: Arc<P>,
+    handler: Arc<H>,
+) -> std::io::Result<()>
+where
+    H: IngressHandler,
+    P: crate::tls::CryptoProvider,
+{
+    let acceptor = tokio_rustls::TlsAcceptor::from(provider.server_config());
+    loop {
+        let (stream, _peer) = listener.accept().await?;
+        let acceptor = acceptor.clone();
+        let handler = Arc::clone(&handler);
+        tokio::spawn(async move {
+            // Drop the connection on handshake failure; logged via observability
+            // in a later slice.
+            if let Ok(tls) = acceptor.accept(stream).await {
+                serve_connection(TokioIo::new(tls), handler).await;
+            }
+        });
+    }
+}
+
+/// Serves HTTP/1.1 over one already-accepted byte stream (cleartext or TLS).
+async fn serve_connection<H, IO>(io: IO, handler: Arc<H>)
+where
+    H: IngressHandler,
+    IO: hyper::rt::Read + hyper::rt::Write + Unpin + 'static,
+{
+    let service = service_fn(move |req: Request<Incoming>| {
+        let handler = Arc::clone(&handler);
+        async move { Ok::<_, Infallible>(serve_request(&*handler, req).await) }
+    });
+    let _ = hyper::server::conn::http1::Builder::new()
+        .serve_connection(io, service)
+        .await;
 }
 
 /// Parses one request, runs the handler, and renders the response.

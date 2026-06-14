@@ -6,10 +6,11 @@
 //! own — the tenancy here is a minimal *reference* implementation showing how a
 //! library consumer wires the SPI.
 //!
-//! M1 serves single-document ingest in cleartext (`docs/11`); TLS, auth, and
-//! observability attach in later slices.
+//! M1 serves single-document ingest over HTTP/1.1, cleartext or TLS
+//! (`docs/11`); mTLS and the FIPS provider attach in later slices.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -20,6 +21,7 @@ use osproxy_server::handler::AppHandler;
 use osproxy_server::tenancy::ReferenceTenancy;
 use osproxy_sink::OpenSearchSink;
 use osproxy_tenancy::TenancyRouter;
+use osproxy_transport::RingProvider;
 use tokio::net::TcpListener;
 
 /// Entry point. Returns a process exit code rather than panicking, consistent
@@ -64,18 +66,60 @@ async fn run() -> Result<(), String> {
     let listener = TcpListener::bind(&bind)
         .await
         .map_err(|e| format!("binding {bind}: {e}"))?;
-    println!(
-        "osproxy listening on {bind}, upstream {upstream}, shared index {index}, auth {auth_mode}"
-    );
 
+    // TLS when both cert and key paths are configured; cleartext otherwise.
+    if let Some(provider) = load_tls_provider()? {
+        println!(
+            "osproxy listening on https://{bind}, upstream {upstream}, shared index {index}, auth {auth_mode}"
+        );
+        serve_until_signal(osproxy_transport::serve_tls(
+            listener,
+            Arc::new(provider),
+            handler,
+        ))
+        .await
+    } else {
+        println!(
+            "osproxy listening on http://{bind}, upstream {upstream}, shared index {index}, auth {auth_mode}"
+        );
+        serve_until_signal(osproxy_transport::serve(listener, handler)).await
+    }
+}
+
+/// Runs a serve future until it errors or a shutdown signal arrives.
+async fn serve_until_signal<F>(serve: F) -> Result<(), String>
+where
+    F: Future<Output = std::io::Result<()>>,
+{
     tokio::select! {
-        result = osproxy_transport::serve(listener, handler) => {
-            result.map_err(|e| format!("serving: {e}"))
-        }
+        result = serve => result.map_err(|e| format!("serving: {e}")),
         _ = tokio::signal::ctrl_c() => {
             println!("osproxy: shutdown signal received");
             Ok(())
         }
+    }
+}
+
+/// Builds a TLS provider from `OSPROXY_TLS_CERT`/`OSPROXY_TLS_KEY` (PEM file
+/// paths). Returns `None` if neither is set (cleartext), or an error if one is
+/// set without the other or the files cannot be read/parsed.
+fn load_tls_provider() -> Result<Option<RingProvider>, String> {
+    let cert_path = std::env::var("OSPROXY_TLS_CERT")
+        .ok()
+        .filter(|v| !v.is_empty());
+    let key_path = std::env::var("OSPROXY_TLS_KEY")
+        .ok()
+        .filter(|v| !v.is_empty());
+    match (cert_path, key_path) {
+        (None, None) => Ok(None),
+        (Some(cert), Some(key)) => {
+            let cert_pem = std::fs::read(&cert).map_err(|e| format!("reading {cert}: {e}"))?;
+            let key_pem = std::fs::read(&key).map_err(|e| format!("reading {key}: {e}"))?;
+            let provider = RingProvider::from_pem(&cert_pem, &key_pem)
+                .map_err(|e| format!("building TLS config: {e}"))?;
+            Ok(Some(provider))
+        }
+        _ => Err("set both OSPROXY_TLS_CERT and OSPROXY_TLS_KEY, or neither".to_owned()),
     }
 }
 

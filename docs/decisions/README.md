@@ -15,3 +15,4 @@ intent can be re-derived, not guessed (docs/10 §5).
 | [006](006-isolation-filter-or-reject.md) | Read isolation: provably filtered or request rejected — no best-effort |
 | [007](007-static-spi.md) | SPI compiled in statically; no WASM/dylib dynamic plugins |
 | [008](008-sink-trait-deferred-redundancy.md) | Write `Sink` trait; queue-based redundancy deferred behind it |
+| [009](009-m1-tls-ring-provider.md) | M1 TLS uses the `ring` provider; aws-lc-rs/FIPS at M6 behind the seam |
