@@ -23,8 +23,11 @@ pub enum EndpointKind {
     /// Count (`_count`): same partition filter as search, but returns a count
     /// rather than hits, so no response field strip.
     Count,
-    /// Read by id (`GET _doc/{id}`, `_mget`): logical→physical id transform.
+    /// Read by id (`GET _doc/{id}`): logical→physical id transform.
     GetById,
+    /// Multi-get (`_mget`): per-doc partition resolve, demux by target,
+    /// re-interleave `docs[]` — the read counterpart of `_bulk`.
+    MultiGet,
     /// Delete by id: logical→physical id transform.
     DeleteById,
     /// Cursor lifecycle (scroll, PIT): affinity pinning.
@@ -49,6 +52,7 @@ impl EndpointKind {
                 | Self::Search
                 | Self::Count
                 | Self::GetById
+                | Self::MultiGet
                 | Self::DeleteById
                 | Self::Cursor
         )
@@ -80,6 +84,7 @@ mod tests {
             EndpointKind::Search,
             EndpointKind::Count,
             EndpointKind::GetById,
+            EndpointKind::MultiGet,
             EndpointKind::DeleteById,
             EndpointKind::Cursor,
         ] {

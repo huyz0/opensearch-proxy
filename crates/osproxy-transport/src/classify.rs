@@ -41,6 +41,9 @@ pub fn classify(method: HttpMethod, path: &str) -> Classified {
         // /{index}/_search and /{index}/_count
         [index, "_search"] => classified(EndpointKind::Search, index),
         [index, "_count"] => classified(EndpointKind::Count, index),
+        // /_mget and /{index}/_mget
+        ["_mget"] => classified(EndpointKind::MultiGet, ""),
+        [index, "_mget"] => classified(EndpointKind::MultiGet, index),
         // /_bulk and /{index}/_bulk
         ["_bulk"] => Classified {
             endpoint: EndpointKind::IngestBulk,
@@ -136,6 +139,14 @@ mod tests {
         assert_eq!(
             classify(HttpMethod::Post, "/_bulk").endpoint,
             EndpointKind::IngestBulk
+        );
+        assert_eq!(
+            classify(HttpMethod::Post, "/_mget").endpoint,
+            EndpointKind::MultiGet
+        );
+        assert_eq!(
+            classify(HttpMethod::Post, "/orders/_mget").endpoint,
+            EndpointKind::MultiGet
         );
         assert_eq!(
             classify(HttpMethod::Post, "/orders/_bulk").endpoint,

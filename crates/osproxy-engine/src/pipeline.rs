@@ -108,6 +108,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             EndpointKind::IngestDoc => self.ingest_doc(ctx, trace).await,
             EndpointKind::IngestBulk => self.ingest_bulk(ctx, trace).await,
             EndpointKind::GetById => self.get_by_id(ctx, trace).await,
+            EndpointKind::MultiGet => self.multi_get(ctx, trace).await,
             EndpointKind::DeleteById => self.delete_by_id(ctx, trace).await,
             EndpointKind::Search => self.search(ctx, trace).await,
             EndpointKind::Count => self.count(ctx, trace).await,

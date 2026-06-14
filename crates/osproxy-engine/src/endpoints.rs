@@ -86,6 +86,21 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         }
     }
 
+    /// The multi-get path (`docs/04` §5): the read counterpart of `_bulk`.
+    /// Resolves the caller's partition once, then per requested document resolves
+    /// its placement, maps the logical id to the physical id, fetches it
+    /// (bounded-concurrently), and re-interleaves the shaped docs in input order.
+    ///
+    /// Like bulk, the per-document outcome is positional in the body, so no
+    /// single resolve/dispatch span is recorded; classify and egress still are.
+    pub(crate) async fn multi_get(
+        &self,
+        ctx: &RequestCtx<'_>,
+        _trace: &mut RequestTrace,
+    ) -> Result<PipelineResponse, RequestError> {
+        crate::mget::multi_get(&self.router, &self.sink, ctx).await
+    }
+
     /// The delete-by-id path (`docs/04` §5): resolve the partition, map the
     /// client's logical id to the physical id, and issue an epoch-stamped delete
     /// to the single target. The response is shaped back to the logical id/index.
