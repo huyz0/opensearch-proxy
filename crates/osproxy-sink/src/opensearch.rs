@@ -8,10 +8,12 @@
 //! the transport slice without changing this mapping.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper::{Method, Request};
+use hyper::body::Incoming;
+use hyper::{Method, Request, Response};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
@@ -62,15 +64,21 @@ impl ClusterPool {
     }
 }
 
+/// The default per-request upstream deadline: a hung upstream that accepts the
+/// connection but never responds must not stall the request forever (NFR-R7).
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// A [`Sink`] that writes directly to OpenSearch clusters over pooled HTTP.
 ///
 /// Holds a `ClusterPool` per cluster — its own base URL and pooled HTTP/1.1
 /// and HTTP/2 (prior-knowledge) clients. Each operation selects the client
 /// matching its resolved upstream [`Protocol`] (`docs/04` §7), so the proxy can
-/// speak h2 to a cluster that supports it while defaulting to h1.
+/// speak h2 to a cluster that supports it while defaulting to h1. Every dispatch
+/// is bounded by a per-request timeout so a stuck upstream fails fast (NFR-R7).
 #[derive(Debug)]
 pub struct OpenSearchSink {
     clusters: HashMap<ClusterId, ClusterPool>,
+    timeout: Duration,
 }
 
 impl OpenSearchSink {
@@ -82,7 +90,17 @@ impl OpenSearchSink {
             .into_iter()
             .map(|(cluster, base)| (cluster, ClusterPool::new(base)))
             .collect();
-        Self { clusters }
+        Self {
+            clusters,
+            timeout: DEFAULT_TIMEOUT,
+        }
+    }
+
+    /// Sets the per-request upstream timeout (builder style).
+    #[must_use]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     /// Resolves a cluster's pool, or a transport error if it is unconfigured.
@@ -90,6 +108,23 @@ impl OpenSearchSink {
         self.clusters.get(cluster).ok_or(SinkError::Transport {
             kind: "no endpoint configured for target cluster",
         })
+    }
+
+    /// Sends a request over `client`, bounded by the per-request timeout: a
+    /// transport failure or an elapsed deadline is a retryable [`SinkError`].
+    async fn send(
+        &self,
+        client: &HttpClient,
+        req: Request<Full<Bytes>>,
+        fail_kind: &'static str,
+    ) -> Result<Response<Incoming>, SinkError> {
+        match tokio::time::timeout(self.timeout, client.request(req)).await {
+            Ok(Ok(resp)) => Ok(resp),
+            Ok(Err(_)) => Err(SinkError::Transport { kind: fail_kind }),
+            Err(_elapsed) => Err(SinkError::Transport {
+                kind: "upstream timeout",
+            }),
+        }
     }
 
     /// POSTs a (partition-filtered) query body to `{index}/{verb}` and returns
@@ -106,13 +141,9 @@ impl OpenSearchSink {
                 kind: "building upstream query request",
             })?;
 
-        let resp =
-            pool.client(op.protocol)
-                .request(req)
-                .await
-                .map_err(|_| SinkError::Transport {
-                    kind: "upstream query failed",
-                })?;
+        let resp = self
+            .send(pool.client(op.protocol), req, "upstream query failed")
+            .await?;
         let status = resp.status().as_u16();
         if status >= 500 {
             return Err(SinkError::Upstream {
@@ -137,13 +168,9 @@ impl OpenSearchSink {
         let pool = self.pool_for(&op.target.cluster)?;
         let (req, fallback_id) = build_request(&pool.base, &op.target.index, &op.doc)?;
 
-        let resp =
-            pool.client(op.protocol)
-                .request(req)
-                .await
-                .map_err(|_| SinkError::Transport {
-                    kind: "upstream request failed",
-                })?;
+        let resp = self
+            .send(pool.client(op.protocol), req, "upstream request failed")
+            .await?;
         let status = resp.status().as_u16();
         if status >= 500 {
             return Err(SinkError::Upstream {
@@ -181,13 +208,9 @@ impl Reader for OpenSearchSink {
                 kind: "building upstream read request",
             })?;
 
-        let resp =
-            pool.client(op.protocol)
-                .request(req)
-                .await
-                .map_err(|_| SinkError::Transport {
-                    kind: "upstream read failed",
-                })?;
+        let resp = self
+            .send(pool.client(op.protocol), req, "upstream read failed")
+            .await?;
         let status = resp.status().as_u16();
         // 404 is a normal "document does not exist"; only 5xx is a real failure.
         if status >= 500 {

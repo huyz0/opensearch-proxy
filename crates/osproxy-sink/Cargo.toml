@@ -17,9 +17,10 @@ hyper = { workspace = true, features = ["client", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["client", "client-legacy", "http1", "http2", "tokio"] }
 http-body-util.workspace = true
 bytes.workspace = true
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "time"] }
 hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["server", "server-auto", "service", "tokio"] }
 

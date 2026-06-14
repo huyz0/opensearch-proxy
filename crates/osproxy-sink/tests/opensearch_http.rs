@@ -205,6 +205,37 @@ async fn read_from_unreachable_upstream_is_a_transport_error() {
 }
 
 #[tokio::test]
+async fn a_stuck_upstream_times_out_and_is_retryable() {
+    // A server that accepts the connection but never sends a response — the
+    // request must not hang forever; the per-request timeout fails it fast
+    // (NFR-R7) as a retryable transport error.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (_stream, _) = listener.accept().await.unwrap();
+        // Hold the connection open without ever replying.
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+    });
+
+    let sink = sink_for("eu-1", format!("http://{addr}"))
+        .with_timeout(std::time::Duration::from_millis(50));
+    let op = WriteOp::new(
+        Target::new(ClusterId::from("eu-1"), IndexName::from("i")),
+        DocOp::Index {
+            id: Some("x".to_owned()),
+            routing: None,
+            body: b"{}".to_vec(),
+        },
+        Epoch::new(1),
+    );
+    let err = sink.write(WriteBatch::single(op)).await.unwrap_err();
+    assert!(
+        err.retryable(),
+        "an upstream timeout should be retryable: {err:?}"
+    );
+}
+
+#[tokio::test]
 async fn server_error_surfaces_as_retryable_upstream() {
     // Bind then immediately drop the listener so the connection is refused,
     // standing in for an unreachable upstream.
