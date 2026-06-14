@@ -13,6 +13,7 @@
 #![deny(missing_docs)]
 
 mod error;
+mod observe;
 mod pipeline;
 mod plan;
 

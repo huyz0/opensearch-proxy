@@ -6,13 +6,21 @@
 //! sink, and shape the acknowledgement into an OpenSearch-style response. Read,
 //! bulk, and by-id paths attach here in later milestones.
 
-use osproxy_core::EndpointKind;
+use std::sync::Arc;
+
+use osproxy_core::{EndpointKind, RequestId};
+use osproxy_observe::{ClassifyInfo, EgressInfo, ExplainStore, RequestTrace};
 use osproxy_sink::{Sink, WriteAck};
 use osproxy_spi::{RequestCtx, SpiError, TenancySpi};
 use osproxy_tenancy::TenancyRouter;
+use serde_json::Value;
 
 use crate::error::RequestError;
+use crate::observe::{dispatch_info, error_context, logical_index, resolve_info, rewrite_info};
 use crate::plan::build_write_batch;
+
+/// How many recent request explanations `/debug/explain` retains per instance.
+const EXPLAIN_CAPACITY: usize = 1024;
 
 /// The response the pipeline produces for a handled request.
 ///
@@ -35,23 +43,62 @@ pub struct PipelineResponse {
 pub struct Pipeline<T, S> {
     router: TenancyRouter<T>,
     sink: S,
+    explain: Arc<ExplainStore>,
 }
 
 impl<T: TenancySpi, S: Sink> Pipeline<T, S> {
     /// Builds a pipeline from a router and a sink.
     pub fn new(router: TenancyRouter<T>, sink: S) -> Self {
-        Self { router, sink }
+        Self {
+            router,
+            sink,
+            explain: Arc::new(ExplainStore::new(EXPLAIN_CAPACITY)),
+        }
+    }
+
+    /// The assembled `/debug/explain` document for a past request, if retained.
+    #[must_use]
+    pub fn explain(&self, request_id: &RequestId) -> Option<Value> {
+        self.explain.get(request_id)
     }
 
     /// Handles an authenticated request, dispatching on its endpoint class.
+    ///
+    /// Records a shape-only causal trace for every request (success or failure)
+    /// into the explain store, so `/debug/explain/{id}` can reconstruct it
+    /// (`docs/05`).
     ///
     /// # Errors
     ///
     /// Returns [`RequestError`] if the endpoint is unsupported in M1, routing
     /// fails, the body transform fails, or the sink rejects the write.
     pub async fn handle(&self, ctx: &RequestCtx<'_>) -> Result<PipelineResponse, RequestError> {
+        let mut trace = RequestTrace::new();
+        trace.record_classify(ClassifyInfo {
+            endpoint: ctx.endpoint(),
+            logical_index: logical_index(ctx.logical_index()),
+        });
+
+        let result = self.dispatch(ctx, &mut trace).await;
+        match &result {
+            Ok(resp) => trace.record_egress(EgressInfo {
+                status: resp.status,
+                response_bytes: resp.body.len(),
+            }),
+            Err(err) => trace.record_error(error_context(err)),
+        }
+        self.explain.record(ctx.request_id().clone(), &trace);
+        result
+    }
+
+    /// Dispatches on endpoint class, recording the per-stage spans into `trace`.
+    async fn dispatch(
+        &self,
+        ctx: &RequestCtx<'_>,
+        trace: &mut RequestTrace,
+    ) -> Result<PipelineResponse, RequestError> {
         match ctx.endpoint() {
-            EndpointKind::IngestDoc => self.ingest_doc(ctx).await,
+            EndpointKind::IngestDoc => self.ingest_doc(ctx, trace).await,
             other => Err(RequestError::Spi(SpiError::UnsupportedEndpoint {
                 endpoint: other,
             })),
@@ -59,10 +106,19 @@ impl<T: TenancySpi, S: Sink> Pipeline<T, S> {
     }
 
     /// The single-document ingest path.
-    async fn ingest_doc(&self, ctx: &RequestCtx<'_>) -> Result<PipelineResponse, RequestError> {
+    async fn ingest_doc(
+        &self,
+        ctx: &RequestCtx<'_>,
+        trace: &mut RequestTrace,
+    ) -> Result<PipelineResponse, RequestError> {
         let resolved = self.router.resolve(ctx).await?;
+        trace.record_resolve(resolve_info(&resolved));
+
         let batch = build_write_batch(&resolved, ctx.body())?;
+        trace.record_rewrite(rewrite_info(&resolved, &batch));
+
         let ack = self.sink.write(batch).await?;
+        trace.record_dispatch(dispatch_info(&resolved, &ack));
         Ok(response_for(&ack))
     }
 }
@@ -208,5 +264,55 @@ mod tests {
                 endpoint: EndpointKind::Search
             })
         ));
+    }
+
+    #[tokio::test]
+    async fn explain_records_success_spans() {
+        let p = pipeline();
+        let principal = Principal::new(PrincipalId::from("svc"));
+        let rid = RequestId::from("trace-ok");
+        let headers = vec![];
+        let c = ctx(
+            &principal,
+            &rid,
+            &headers,
+            EndpointKind::IngestDoc,
+            br#"{"tenant_id":"acme","id":7}"#,
+        );
+        p.handle(&c).await.unwrap();
+
+        let doc = p.explain(&rid).expect("trace recorded");
+        assert_eq!(doc["outcome"], "ok");
+        assert_eq!(doc["spans"]["spi.resolve"]["partition_id"], "acme");
+        assert_eq!(doc["spans"]["spi.resolve"]["routing"], true);
+        assert_eq!(
+            doc["spans"]["rewrite"]["transform_kind"],
+            "inject+construct_id"
+        );
+        assert_eq!(doc["spans"]["egress"]["status"], 201);
+        assert!(doc["error"].is_null());
+    }
+
+    #[tokio::test]
+    async fn explain_records_failure_with_remediation() {
+        // A placement-missing failure: the reference table here always resolves,
+        // so drive an unsupported endpoint instead — still a recorded failure.
+        let p = pipeline();
+        let principal = Principal::new(PrincipalId::from("svc"));
+        let rid = RequestId::from("trace-err");
+        let headers = vec![];
+        let c = ctx(
+            &principal,
+            &rid,
+            &headers,
+            EndpointKind::Search,
+            br#"{"q":1}"#,
+        );
+        let _ = p.handle(&c).await;
+
+        let doc = p.explain(&rid).expect("trace recorded");
+        assert_eq!(doc["outcome"], "error");
+        assert_eq!(doc["error"]["code"], "unsupported_endpoint");
+        assert!(doc["error"]["remediation"].is_string());
     }
 }

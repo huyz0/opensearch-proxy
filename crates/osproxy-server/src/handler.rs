@@ -41,6 +41,16 @@ impl AppHandler {
 
 impl IngressHandler for AppHandler {
     async fn handle(&self, req: IngressRequest) -> IngressResponse {
+        // Proxy admin endpoint: the LLM-facing /debug/explain/{request_id}.
+        // Returns only shape-level data (docs/05 §6); it would be auth-gated in
+        // a real deployment, which attaches with the auth slice.
+        if let Some(id) = req.path.strip_prefix("/debug/explain/") {
+            return match self.pipeline.explain(&RequestId::from(id)) {
+                Some(doc) => IngressResponse::json(200, doc.to_string().into_bytes()),
+                None => IngressResponse::json(404, br#"{"error":"unknown_request_id"}"#.to_vec()),
+            };
+        }
+
         // Stub authentication: M1 has no mTLS/token yet, so every caller is the
         // same anonymous principal. Auth attaches here in the next slice.
         let principal = Principal::new(PrincipalId::from("anonymous"));
@@ -57,10 +67,13 @@ impl IngressHandler for AppHandler {
             &req.body,
         );
 
-        match self.pipeline.handle(&ctx).await {
+        // Echo the request id so a client (or LLM) can fetch its
+        // /debug/explain/{id} afterward.
+        let response = match self.pipeline.handle(&ctx).await {
             Ok(resp) => IngressResponse::json(resp.status, resp.body),
             Err(err) => IngressResponse::json(status_for(&err), error_body(&err)),
-        }
+        };
+        response.with_header("x-request-id", request_id.as_str())
     }
 }
 

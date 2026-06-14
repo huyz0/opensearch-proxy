@@ -13,6 +13,9 @@ use osproxy_spi::HttpMethod;
 pub struct IngressRequest {
     /// The HTTP method.
     pub method: HttpMethod,
+    /// The raw request path (used to route proxy admin endpoints such as
+    /// `/debug/explain/{id}` that are not OpenSearch paths).
+    pub path: String,
     /// The endpoint classification derived from method + path.
     pub endpoint: EndpointKind,
     /// The logical index from the path (pre-rewrite), empty if the path has none.
@@ -30,6 +33,8 @@ pub struct IngressRequest {
 pub struct IngressResponse {
     /// The HTTP status code.
     pub status: u16,
+    /// Extra response headers (beyond the JSON content type the transport sets).
+    pub headers: Vec<(String, String)>,
     /// The response body (JSON).
     pub body: Vec<u8>,
 }
@@ -38,6 +43,17 @@ impl IngressResponse {
     /// A JSON response with the given status and body.
     #[must_use]
     pub fn json(status: u16, body: Vec<u8>) -> Self {
-        Self { status, body }
+        Self {
+            status,
+            headers: Vec::new(),
+            body,
+        }
+    }
+
+    /// Adds a response header (builder style).
+    #[must_use]
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
     }
 }

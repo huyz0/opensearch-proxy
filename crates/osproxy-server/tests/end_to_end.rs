@@ -111,6 +111,33 @@ async fn put_doc_is_tenanted_and_forwarded_upstream() {
     assert_eq!(got.method, "PUT");
     assert_eq!(got.uri, "/osproxy-shared/_doc/acme:7?routing=acme");
     assert!(got.body.contains(r#""_tenant":"acme""#), "{}", got.body);
+
+    // The response carries the request id; fetching /debug/explain/{id} returns
+    // the shape-only causal story (blind diagnosis, docs/05 §6).
+    let request_id = resp
+        .headers()
+        .get("x-request-id")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let explain = client
+        .request(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("http://{proxy_addr}/debug/explain/{request_id}"))
+                .body(Full::new(Bytes::new()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(explain.status(), 200);
+    let doc = explain.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8(doc.to_vec()).unwrap();
+    assert!(text.contains(r#""partition_id":"acme""#), "{text}");
+    assert!(text.contains(r#""outcome":"ok""#), "{text}");
+    // No tenant values, only ids/shapes.
+    assert!(!text.contains("\"hi\""), "value leaked: {text}");
 }
 
 #[tokio::test]

@@ -87,6 +87,7 @@ async fn parse(req: Request<Incoming>) -> Result<IngressRequest, IngressResponse
     let c = classify(method, &path);
     Ok(IngressRequest {
         method,
+        path,
         endpoint: c.endpoint,
         logical_index: c.logical_index,
         doc_id: c.doc_id,
@@ -109,9 +110,13 @@ fn map_method(method: &Method) -> Option<HttpMethod> {
 
 /// Renders an [`IngressResponse`] into a hyper response, never panicking.
 fn render(out: IngressResponse) -> Response<Full<Bytes>> {
-    Response::builder()
+    let mut builder = Response::builder()
         .status(out.status)
-        .header("content-type", "application/json")
+        .header("content-type", "application/json");
+    for (name, value) in out.headers {
+        builder = builder.header(name, value);
+    }
+    builder
         .body(Full::new(Bytes::from(out.body)))
         .unwrap_or_else(|_| {
             // A well-formed status + static body cannot fail to build; fall back
