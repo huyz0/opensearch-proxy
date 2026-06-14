@@ -39,9 +39,14 @@ impl ReferenceAuthenticator {
 impl Authenticator for ReferenceAuthenticator {
     async fn authenticate(&self, creds: &ClientCredentials) -> Result<Principal, AuthError> {
         if self.is_dev() {
-            // Dev mode: name the principal after the presented token if any,
-            // else "anonymous". Never rejects.
-            let id = creds.bearer_token.as_deref().unwrap_or("anonymous");
+            // Dev mode: name the principal after a verified client certificate
+            // if mTLS was used, else the presented token, else "anonymous".
+            // Never rejects.
+            let id = creds
+                .client_cert_subject
+                .as_deref()
+                .or(creds.bearer_token.as_deref())
+                .unwrap_or("anonymous");
             return Ok(Principal::new(PrincipalId::from(id)));
         }
         let token = creds

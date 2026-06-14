@@ -51,28 +51,88 @@ pub struct RingProvider {
 }
 
 impl RingProvider {
-    /// Builds a provider from a PEM certificate chain and private key.
+    /// Builds a server-authentication-only provider from a PEM certificate chain
+    /// and private key (no client-certificate verification).
     ///
     /// # Errors
     ///
     /// Returns [`TlsError`] if the PEM cannot be parsed or rustls rejects the
     /// certificate/key pair.
     pub fn from_pem(cert_pem: &[u8], key_pem: &[u8]) -> Result<Self, TlsError> {
-        let certs = parse_certs(cert_pem)?;
-        let key = parse_key(key_pem)?;
-
         let provider = Arc::new(tokio_rustls::rustls::crypto::ring::default_provider());
-        let config = ServerConfig::builder_with_provider(provider)
+        let builder = ServerConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
             .map_err(|e| TlsError::Config(e.to_string()))?
-            .with_no_client_auth()
+            .with_no_client_auth();
+        Self::finish(builder, cert_pem, key_pem)
+    }
+
+    /// Builds a mutual-TLS provider: clients must present a certificate that
+    /// chains to a root in `client_ca_pem`, and the verified identity is exposed
+    /// to the handler.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TlsError`] if any PEM cannot be parsed or rustls rejects the
+    /// verifier or certificate/key pair.
+    pub fn from_pem_mtls(
+        cert_pem: &[u8],
+        key_pem: &[u8],
+        client_ca_pem: &[u8],
+    ) -> Result<Self, TlsError> {
+        let provider = Arc::new(tokio_rustls::rustls::crypto::ring::default_provider());
+
+        let mut roots = tokio_rustls::rustls::RootCertStore::empty();
+        for ca in parse_certs(client_ca_pem)? {
+            roots.add(ca).map_err(|e| TlsError::Config(e.to_string()))?;
+        }
+        let verifier = tokio_rustls::rustls::server::WebPkiClientVerifier::builder_with_provider(
+            Arc::new(roots),
+            provider.clone(),
+        )
+        .build()
+        .map_err(|e| TlsError::Config(e.to_string()))?;
+
+        let builder = ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| TlsError::Config(e.to_string()))?
+            .with_client_cert_verifier(verifier);
+        Self::finish(builder, cert_pem, key_pem)
+    }
+
+    /// Completes a [`ServerConfig`] from a verifier-configured builder plus the
+    /// server's own certificate and key.
+    fn finish(
+        builder: tokio_rustls::rustls::ConfigBuilder<
+            ServerConfig,
+            tokio_rustls::rustls::server::WantsServerCert,
+        >,
+        cert_pem: &[u8],
+        key_pem: &[u8],
+    ) -> Result<Self, TlsError> {
+        let certs = parse_certs(cert_pem)?;
+        let key = parse_key(key_pem)?;
+        let config = builder
             .with_single_cert(certs, key)
             .map_err(|e| TlsError::Config(e.to_string()))?;
-
         Ok(Self {
             server_config: Arc::new(config),
         })
     }
+}
+
+/// A stable identity for a verified client certificate: the lowercase hex
+/// SHA-256 fingerprint of its DER. Not the certificate material, so it is safe
+/// to carry as an id and surface in telemetry.
+#[must_use]
+pub(crate) fn cert_fingerprint(der: &[u8]) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, der);
+    let mut out = String::with_capacity(digest.as_ref().len() * 2);
+    for byte in digest.as_ref() {
+        out.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
+        out.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
+    }
+    out
 }
 
 impl CryptoProvider for RingProvider {

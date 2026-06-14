@@ -26,6 +26,10 @@ pub struct IngressRequest {
     pub headers: Vec<(String, String)>,
     /// The request body.
     pub body: Vec<u8>,
+    /// The verified client-certificate identity, if the connection was mutually
+    /// authenticated (mTLS). A stable id derived from the cert, never the raw
+    /// certificate material.
+    pub client_cert_subject: Option<String>,
 }
 
 /// The response a handler returns for the transport to write back.

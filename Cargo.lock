@@ -655,6 +655,7 @@ dependencies = [
  "osproxy-core",
  "osproxy-spi",
  "rcgen",
+ "ring",
  "thiserror",
  "tokio",
  "tokio-rustls",

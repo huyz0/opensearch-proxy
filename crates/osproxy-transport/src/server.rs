@@ -42,9 +42,17 @@ pub async fn serve<H: IngressHandler>(
         let (stream, _peer) = listener.accept().await?;
         let handler = Arc::clone(&handler);
         tokio::spawn(async move {
-            serve_connection(TokioIo::new(stream), handler).await;
+            serve_connection(TokioIo::new(stream), handler, ConnInfo::default()).await;
         });
     }
+}
+
+/// Connection-level facts shared by every request on a connection. M1 carries
+/// the verified mTLS client identity; TLS suite/version for the trace's
+/// `ingress` span attach here in a later slice.
+#[derive(Clone, Debug, Default)]
+struct ConnInfo {
+    client_cert_subject: Option<String>,
 }
 
 /// Serves HTTPS requests on `listener`, terminating TLS with `provider`'s
@@ -75,21 +83,36 @@ where
             // Drop the connection on handshake failure; logged via observability
             // in a later slice.
             if let Ok(tls) = acceptor.accept(stream).await {
-                serve_connection(TokioIo::new(tls), handler).await;
+                let conn_info = conn_info_from_tls(&tls);
+                serve_connection(TokioIo::new(tls), handler, conn_info).await;
             }
         });
     }
 }
 
+/// Extracts connection-level facts (the verified mTLS client identity) from a
+/// completed TLS handshake.
+fn conn_info_from_tls(tls: &tokio_rustls::server::TlsStream<tokio::net::TcpStream>) -> ConnInfo {
+    let (_, conn) = tls.get_ref();
+    let client_cert_subject = conn
+        .peer_certificates()
+        .and_then(<[_]>::first)
+        .map(|cert| format!("cert:{}", crate::tls::cert_fingerprint(cert.as_ref())));
+    ConnInfo {
+        client_cert_subject,
+    }
+}
+
 /// Serves HTTP/1.1 over one already-accepted byte stream (cleartext or TLS).
-async fn serve_connection<H, IO>(io: IO, handler: Arc<H>)
+async fn serve_connection<H, IO>(io: IO, handler: Arc<H>, conn_info: ConnInfo)
 where
     H: IngressHandler,
     IO: hyper::rt::Read + hyper::rt::Write + Unpin + 'static,
 {
     let service = service_fn(move |req: Request<Incoming>| {
         let handler = Arc::clone(&handler);
-        async move { Ok::<_, Infallible>(serve_request(&*handler, req).await) }
+        let conn_info = conn_info.clone();
+        async move { Ok::<_, Infallible>(serve_request(&*handler, req, &conn_info).await) }
     });
     let _ = hyper::server::conn::http1::Builder::new()
         .serve_connection(io, service)
@@ -100,8 +123,9 @@ where
 async fn serve_request<H: IngressHandler>(
     handler: &H,
     req: Request<Incoming>,
+    conn_info: &ConnInfo,
 ) -> Response<Full<Bytes>> {
-    match parse(req).await {
+    match parse(req, conn_info).await {
         Ok(ingress) => render(handler.handle(ingress).await),
         Err(early) => render(early),
     }
@@ -109,7 +133,10 @@ async fn serve_request<H: IngressHandler>(
 
 /// Parses a hyper request into an owned [`IngressRequest`], or an early
 /// [`IngressResponse`] for an unsupported method or oversized body.
-async fn parse(req: Request<Incoming>) -> Result<IngressRequest, IngressResponse> {
+async fn parse(
+    req: Request<Incoming>,
+    conn_info: &ConnInfo,
+) -> Result<IngressRequest, IngressResponse> {
     let Some(method) = map_method(req.method()) else {
         return Err(IngressResponse::json(405, error_body("method not allowed")));
     };
@@ -135,6 +162,7 @@ async fn parse(req: Request<Incoming>) -> Result<IngressRequest, IngressResponse
         doc_id: c.doc_id,
         headers,
         body,
+        client_cert_subject: conn_info.client_cert_subject.clone(),
     })
 }
 

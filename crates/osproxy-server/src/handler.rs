@@ -60,7 +60,7 @@ impl<A: Authenticator> IngressHandler for AppHandler<A> {
         // never reaches the pipeline or telemetry.
         let principal = match self
             .authenticator
-            .authenticate(&credentials_from(&req.headers))
+            .authenticate(&credentials_from(&req))
             .await
         {
             Ok(principal) => principal,
@@ -91,18 +91,18 @@ impl<A: Authenticator> IngressHandler for AppHandler<A> {
     }
 }
 
-/// Extracts client credentials from request headers. M1 reads a bearer token
-/// from `Authorization`; the mTLS client-cert subject attaches with the TLS
-/// slice.
-fn credentials_from(headers: &[(String, String)]) -> ClientCredentials {
-    let bearer_token = headers
+/// Extracts client credentials from a request: a bearer token from
+/// `Authorization` and the verified mTLS client-certificate identity, if any.
+fn credentials_from(req: &IngressRequest) -> ClientCredentials {
+    let bearer_token = req
+        .headers
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
         .and_then(|(_, v)| v.strip_prefix("Bearer "))
         .map(str::to_owned);
     ClientCredentials {
         bearer_token,
-        client_cert_subject: None,
+        client_cert_subject: req.client_cert_subject.clone(),
     }
 }
 

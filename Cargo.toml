@@ -51,6 +51,9 @@ bytes = "1"
 # (no cmake/C toolchain needed); the FIPS-validated aws-lc-rs provider drops in
 # at M6 behind the same seam (ADR-009, docs/07).
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+# Already in the tree via rustls's ring provider; used directly to fingerprint a
+# verified client certificate into a stable mTLS identity.
+ring = "0.17"
 rcgen = "0.13"
 
 # Lints applied to every crate that opts in via `[lints] workspace = true`.

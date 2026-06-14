@@ -102,7 +102,9 @@ where
 
 /// Builds a TLS provider from `OSPROXY_TLS_CERT`/`OSPROXY_TLS_KEY` (PEM file
 /// paths). Returns `None` if neither is set (cleartext), or an error if one is
-/// set without the other or the files cannot be read/parsed.
+/// set without the other or the files cannot be read/parsed. If
+/// `OSPROXY_TLS_CLIENT_CA` is also set, mutual TLS is required and clients must
+/// present a certificate chaining to that CA.
 fn load_tls_provider() -> Result<Option<RingProvider>, String> {
     let cert_path = std::env::var("OSPROXY_TLS_CERT")
         .ok()
@@ -110,17 +112,27 @@ fn load_tls_provider() -> Result<Option<RingProvider>, String> {
     let key_path = std::env::var("OSPROXY_TLS_KEY")
         .ok()
         .filter(|v| !v.is_empty());
-    match (cert_path, key_path) {
-        (None, None) => Ok(None),
-        (Some(cert), Some(key)) => {
-            let cert_pem = std::fs::read(&cert).map_err(|e| format!("reading {cert}: {e}"))?;
-            let key_pem = std::fs::read(&key).map_err(|e| format!("reading {key}: {e}"))?;
-            let provider = RingProvider::from_pem(&cert_pem, &key_pem)
-                .map_err(|e| format!("building TLS config: {e}"))?;
-            Ok(Some(provider))
+    let (cert, key) = match (cert_path, key_path) {
+        (None, None) => return Ok(None),
+        (Some(cert), Some(key)) => (cert, key),
+        _ => return Err("set both OSPROXY_TLS_CERT and OSPROXY_TLS_KEY, or neither".to_owned()),
+    };
+
+    let cert_pem = std::fs::read(&cert).map_err(|e| format!("reading {cert}: {e}"))?;
+    let key_pem = std::fs::read(&key).map_err(|e| format!("reading {key}: {e}"))?;
+
+    let provider = match std::env::var("OSPROXY_TLS_CLIENT_CA")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
+        Some(ca) => {
+            let ca_pem = std::fs::read(&ca).map_err(|e| format!("reading {ca}: {e}"))?;
+            RingProvider::from_pem_mtls(&cert_pem, &key_pem, &ca_pem)
         }
-        _ => Err("set both OSPROXY_TLS_CERT and OSPROXY_TLS_KEY, or neither".to_owned()),
+        None => RingProvider::from_pem(&cert_pem, &key_pem),
     }
+    .map_err(|e| format!("building TLS config: {e}"))?;
+    Ok(Some(provider))
 }
 
 /// Reads an environment variable, falling back to `default` if unset or empty.
