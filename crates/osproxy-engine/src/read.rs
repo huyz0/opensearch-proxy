@@ -8,9 +8,9 @@
 //! Pure and synchronous; the network hop happens in the pipeline.
 
 use osproxy_core::FieldName;
-use osproxy_rewrite::{map_logical_to_physical, strip_fields};
-use osproxy_sink::ReadOp;
-use osproxy_spi::{BodyTransform, DocIdRule};
+use osproxy_rewrite::{map_logical_to_physical, map_physical_to_logical, strip_fields, wrap_query};
+use osproxy_sink::{ReadOp, SearchOp};
+use osproxy_spi::{BodyTransform, DocIdRule, InjectedField, InjectedValue};
 use osproxy_tenancy::Resolved;
 use serde_json::Value;
 
@@ -94,6 +94,109 @@ pub(crate) fn not_found_body(logical_index: &str, logical_id: &str) -> Vec<u8> {
         "found": false,
     });
     serde_json::to_vec(&doc).unwrap_or_else(|_| b"{\"found\":false}".to_vec())
+}
+
+/// Builds the [`SearchOp`] for a resolved search request: wraps the client query
+/// in the mandatory partition filter (`docs/03` §5) and returns it with the
+/// [`ReadShape`] needed to strip the hits.
+///
+/// # Errors
+///
+/// Returns [`RequestError::Rewrite`] if the client search body is not a JSON
+/// object (or is invalid JSON).
+pub(crate) fn build_search_op(
+    resolved: &Resolved,
+    body: &[u8],
+) -> Result<(SearchOp, ReadShape), RequestError> {
+    let partition = resolved.partition.as_str();
+    let shape = read_shape(&resolved.decision.body_transform);
+    let filter = filter_terms(&resolved.decision.body_transform, partition);
+    let wrapped = wrap_query(body, &filter)?;
+    Ok((
+        SearchOp::new(resolved.decision.target.clone(), wrapped),
+        shape,
+    ))
+}
+
+/// Shapes a search hits envelope into the client's logical view: every hit's
+/// `_source` is stripped of injected tenancy fields, its `_index` reset to the
+/// logical index, its `_routing` dropped, and its `_id` mapped back to logical.
+///
+/// # Errors
+///
+/// Returns [`RequestError::Rewrite`] if the upstream body is not valid JSON, or
+/// [`RequestError::Internal`] if re-serialization fails.
+pub(crate) fn shape_hits(
+    upstream_body: &[u8],
+    logical_index: &str,
+    partition: &str,
+    shape: &ReadShape,
+) -> Result<Vec<u8>, RequestError> {
+    let mut doc: Value = serde_json::from_slice(upstream_body)
+        .map_err(|_| osproxy_rewrite::RewriteError::InvalidJson)?;
+    if let Some(hits) = doc
+        .get_mut("hits")
+        .and_then(|h| h.get_mut("hits"))
+        .and_then(Value::as_array_mut)
+    {
+        for hit in hits.iter_mut() {
+            shape_hit(hit, logical_index, partition, shape);
+        }
+    }
+    serde_json::to_vec(&doc).map_err(|_| RequestError::Internal {
+        reason: "serializing search response",
+    })
+}
+
+/// Strips one search hit in place into the client's logical view.
+fn shape_hit(hit: &mut Value, logical_index: &str, partition: &str, shape: &ReadShape) {
+    let Some(obj) = hit.as_object_mut() else {
+        return;
+    };
+    obj.insert("_index".to_owned(), Value::String(logical_index.to_owned()));
+    obj.remove("_routing");
+    if let Some(rule) = &shape.id_rule {
+        if let Some(Value::String(physical)) = obj.get("_id") {
+            if let Ok(Some(logical)) =
+                map_physical_to_logical(rule.template.as_str(), partition, physical)
+            {
+                obj.insert("_id".to_owned(), Value::String(logical));
+            }
+        }
+    }
+    if let Some(source) = obj.get_mut("_source") {
+        strip_fields(source, &shape.inject_names);
+    }
+}
+
+/// The partition filter terms `(field, value)` for the wrapped query: each
+/// injected field with its resolved value, so a search can only match documents
+/// carrying this partition's injected fields.
+fn filter_terms(transform: &BodyTransform, partition: &str) -> Vec<(FieldName, Value)> {
+    let fields = match transform {
+        BodyTransform::Inject(fields) | BodyTransform::Both { inject: fields, .. } => {
+            fields.as_slice()
+        }
+        BodyTransform::None | BodyTransform::ConstructId(_) => &[],
+    };
+    fields
+        .iter()
+        .map(|field| (field.name.clone(), injected_value(field, partition)))
+        .collect()
+}
+
+/// The concrete value of an injected field (the tenancy adapter resolves these
+/// to constants; `PartitionId` is resolved here too for robustness).
+fn injected_value(field: &InjectedField, partition: &str) -> Value {
+    match &field.value {
+        InjectedValue::Constant(v) => v.clone(),
+        // `PartitionId` resolves to the partition; a `FromPrincipal` value cannot
+        // be reconstructed here, so it falls back to the partition id too —
+        // filtering on the partition is always isolating (never a leak).
+        InjectedValue::PartitionId | InjectedValue::FromPrincipal(_) => {
+            Value::String(partition.to_owned())
+        }
+    }
 }
 
 /// Extracts the read shape (injected field names + id rule) from the body
@@ -194,5 +297,36 @@ mod tests {
         assert_eq!(doc["_index"], "orders");
         assert_eq!(doc["_id"], "7");
         assert_eq!(doc["found"], false);
+    }
+
+    #[test]
+    fn search_op_wraps_client_query_in_the_partition_filter() {
+        let (op, _) = build_search_op(
+            &resolved(shared_transform()),
+            br#"{"query":{"match_all":{}}}"#,
+        )
+        .unwrap();
+        let q: Value = serde_json::from_slice(&op.body).unwrap();
+        assert_eq!(q["query"]["bool"]["filter"][0]["term"]["_tenant"], "acme");
+        assert_eq!(q["query"]["bool"]["must"][0]["match_all"], json!({}));
+    }
+
+    #[test]
+    fn hits_are_stripped_to_the_logical_view() {
+        let upstream = br#"{
+            "hits": { "total": { "value": 1 }, "hits": [
+                { "_index": "shared", "_id": "acme:7", "_routing": "acme",
+                  "_source": { "_tenant": "acme", "msg": "hi" } }
+            ] }
+        }"#;
+        let shape = read_shape(&shared_transform());
+        let body = shape_hits(upstream, "orders", "acme", &shape).unwrap();
+        let doc: Value = serde_json::from_slice(&body).unwrap();
+        let hit = &doc["hits"]["hits"][0];
+        assert_eq!(hit["_index"], "orders");
+        assert_eq!(hit["_id"], "7");
+        assert!(hit.get("_routing").is_none());
+        assert!(hit["_source"].get("_tenant").is_none());
+        assert_eq!(hit["_source"]["msg"], "hi");
     }
 }

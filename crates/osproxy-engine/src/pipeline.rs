@@ -22,7 +22,7 @@ use crate::observe::{
     dispatch_info, error_context, logical_index, read_dispatch_info, resolve_info, rewrite_info,
 };
 use crate::plan::build_write_batch;
-use crate::read::{build_read_op, not_found_body, shape_found};
+use crate::read::{build_read_op, build_search_op, not_found_body, shape_found, shape_hits};
 
 /// How many recent request explanations `/debug/explain` retains per instance.
 const EXPLAIN_CAPACITY: usize = 1024;
@@ -67,6 +67,12 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         self.explain.get(request_id)
     }
 
+    /// The underlying sink (e.g. to inspect what an in-memory sink recorded).
+    #[must_use]
+    pub fn sink(&self) -> &S {
+        &self.sink
+    }
+
     /// Handles an authenticated request, dispatching on its endpoint class.
     ///
     /// Records a shape-only causal trace for every request (success or failure)
@@ -105,6 +111,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         match ctx.endpoint() {
             EndpointKind::IngestDoc => self.ingest_doc(ctx, trace).await,
             EndpointKind::GetById => self.get_by_id(ctx, trace).await,
+            EndpointKind::Search => self.search(ctx, trace).await,
             other => Err(RequestError::Spi(SpiError::UnsupportedEndpoint {
                 endpoint: other,
             })),
@@ -161,6 +168,34 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
                 body: not_found_body(ctx.logical_index(), logical_id),
             })
         }
+    }
+
+    /// The search/read path (`docs/04` §4): resolve the partition, wrap the
+    /// client query in the mandatory partition filter, dispatch to the single
+    /// target, and strip the injected tenancy fields from every hit so the
+    /// client sees only its own logical documents.
+    async fn search(
+        &self,
+        ctx: &RequestCtx<'_>,
+        trace: &mut RequestTrace,
+    ) -> Result<PipelineResponse, RequestError> {
+        let resolved = self.router.resolve(ctx).await?;
+        trace.record_resolve(resolve_info(&resolved));
+
+        let (search_op, shape) = build_search_op(&resolved, ctx.body())?;
+        let outcome = self.sink.search(search_op).await?;
+        trace.record_dispatch(read_dispatch_info(&resolved, outcome.status));
+
+        let body = shape_hits(
+            &outcome.body,
+            ctx.logical_index(),
+            resolved.partition.as_str(),
+            &shape,
+        )?;
+        Ok(PipelineResponse {
+            status: outcome.status,
+            body,
+        })
     }
 }
 
@@ -290,7 +325,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_ingest_endpoint_is_unsupported_in_m1() {
+    async fn unimplemented_endpoint_is_unsupported() {
+        // Bulk is tenancy-aware but not yet wired in the pipeline (M3).
         let p = pipeline();
         let principal = Principal::new(PrincipalId::from("svc"));
         let rid = RequestId::from("r");
@@ -299,14 +335,14 @@ mod tests {
             &principal,
             &rid,
             &headers,
-            EndpointKind::Search,
+            EndpointKind::IngestBulk,
             br#"{"q":1}"#,
         );
         let err = p.handle(&c).await.unwrap_err();
         assert!(matches!(
             err,
             RequestError::Spi(SpiError::UnsupportedEndpoint {
-                endpoint: EndpointKind::Search
+                endpoint: EndpointKind::IngestBulk
             })
         ));
     }
@@ -350,7 +386,7 @@ mod tests {
             &principal,
             &rid,
             &headers,
-            EndpointKind::Search,
+            EndpointKind::IngestBulk,
             br#"{"q":1}"#,
         );
         let _ = p.handle(&c).await;

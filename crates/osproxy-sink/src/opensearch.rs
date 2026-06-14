@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::ack::{OpResult, WriteAck};
 use crate::batch::{DocOp, WriteBatch, WriteOp};
 use crate::error::SinkError;
-use crate::read::{ReadOp, ReadOutcome, Reader};
+use crate::read::{ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome};
 use crate::sink::Sink;
 
 type HttpClient = Client<HttpConnector, Full<Bytes>>;
@@ -128,6 +128,44 @@ impl Reader for OpenSearchSink {
         } else {
             ReadOutcome::not_found(status, body)
         })
+    }
+
+    async fn search(&self, op: SearchOp) -> Result<SearchOutcome, SinkError> {
+        let base = self.base_for(&op.target.cluster)?;
+        let uri = format!("{base}/{}/_search", op.target.index.as_str());
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Full::new(Bytes::from(op.body)))
+            .map_err(|_| SinkError::Transport {
+                kind: "building upstream search request",
+            })?;
+
+        let resp = self
+            .client
+            .request(req)
+            .await
+            .map_err(|_| SinkError::Transport {
+                kind: "upstream search failed",
+            })?;
+        let status = resp.status().as_u16();
+        if status >= 500 {
+            return Err(SinkError::Upstream {
+                status,
+                retryable: matches!(status, 502..=504),
+            });
+        }
+        let body = resp
+            .into_body()
+            .collect()
+            .await
+            .map_err(|_| SinkError::Transport {
+                kind: "reading upstream search response",
+            })?
+            .to_bytes()
+            .to_vec();
+        Ok(SearchOutcome::new(status, body))
     }
 }
 

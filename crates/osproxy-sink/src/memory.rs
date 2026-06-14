@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use crate::ack::{OpResult, WriteAck};
 use crate::batch::{DocOp, WriteBatch};
 use crate::error::SinkError;
-use crate::read::{ReadOp, ReadOutcome, Reader};
+use crate::read::{ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome};
 use crate::sink::Sink;
 
 /// A non-persistent [`Sink`]/[`Reader`] that records batches, stores indexed
@@ -24,6 +24,9 @@ pub struct MemorySink {
     recorded: Mutex<Vec<WriteBatch>>,
     /// Indexed documents keyed by `(physical index, physical id)`.
     docs: Mutex<HashMap<(String, String), Vec<u8>>>,
+    /// Search operations received, in arrival order (for test assertions on the
+    /// wrapped query the engine dispatched).
+    searches: Mutex<Vec<SearchOp>>,
     auto_id: AtomicU64,
 }
 
@@ -42,6 +45,16 @@ impl MemorySink {
     #[must_use]
     pub fn recorded(&self) -> Vec<WriteBatch> {
         self.recorded
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The search operations received so far, in arrival order. Recovers a
+    /// poisoned lock for the same reason as [`MemorySink::recorded`].
+    #[must_use]
+    pub fn recorded_searches(&self) -> Vec<SearchOp> {
+        self.searches
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
@@ -118,6 +131,37 @@ impl Reader for MemorySink {
             Some(body) => ReadOutcome::found(200, envelope(&index, &op.id, &body, true)),
             None => ReadOutcome::not_found(404, envelope(&index, &op.id, b"null", false)),
         })
+    }
+
+    async fn search(&self, op: SearchOp) -> Result<SearchOutcome, SinkError> {
+        // A degenerate match-all: return every stored doc in the target index as
+        // a hit. It does NOT evaluate the DSL (real filtering/isolation is proven
+        // against a live cluster); it exists so the engine's query wrapping and
+        // hit-stripping can be exercised, and it records the wrapped query.
+        let index = op.target.index.as_str().to_owned();
+        let hits: Vec<serde_json::Value> = self
+            .docs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|((idx, _), _)| idx == &index)
+            .map(|((idx, id), body)| {
+                let source: serde_json::Value =
+                    serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
+                serde_json::json!({ "_index": idx, "_id": id, "_source": source })
+            })
+            .collect();
+        self.searches
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(op);
+        let body = serde_json::json!({
+            "hits": { "total": { "value": hits.len() }, "hits": hits },
+        });
+        Ok(SearchOutcome::new(
+            200,
+            serde_json::to_vec(&body).unwrap_or_else(|_| b"{}".to_vec()),
+        ))
     }
 }
 
@@ -212,6 +256,35 @@ mod tests {
             .unwrap();
         assert!(!miss.found);
         assert_eq!(miss.status, 404);
+    }
+
+    #[tokio::test]
+    async fn search_returns_stored_docs_and_records_the_query() {
+        let sink = MemorySink::new();
+        sink.write(WriteBatch::single(WriteOp::new(
+            target(),
+            DocOp::Index {
+                id: Some("acme:7".to_owned()),
+                routing: None,
+                body: br#"{"_tenant":"acme","msg":"hi"}"#.to_vec(),
+            },
+            Epoch::new(1),
+        )))
+        .await
+        .unwrap();
+
+        let wrapped = br#"{"query":{"bool":{"filter":[{"term":{"_tenant":"acme"}}]}}}"#.to_vec();
+        let out = sink
+            .search(SearchOp::new(target(), wrapped.clone()))
+            .await
+            .unwrap();
+        assert_eq!(out.status, 200);
+        let doc: serde_json::Value = serde_json::from_slice(&out.body).unwrap();
+        assert_eq!(doc["hits"]["total"]["value"], 1);
+        assert_eq!(doc["hits"]["hits"][0]["_source"]["msg"], "hi");
+        // The wrapped query the engine dispatched was recorded for assertions.
+        assert_eq!(sink.recorded_searches().len(), 1);
+        assert_eq!(sink.recorded_searches()[0].body, wrapped);
     }
 
     #[tokio::test]

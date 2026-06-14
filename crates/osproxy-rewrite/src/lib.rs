@@ -10,16 +10,19 @@
 //! (`osproxy-tenancy`) translates SPI rule types into these calls. That keeps
 //! the transforms a small, exhaustively testable leaf of the dependency graph.
 //!
-//! Bulk NDJSON demux (`docs/04` §3) and query-DSL filter wrapping (`docs/04`
-//! §4) land in M2/M3 alongside their endpoints.
+//! M2 adds query-DSL filter wrapping ([`wrap_query`], `docs/04` §4) and the
+//! logical↔physical id mapping for by-id reads. Bulk NDJSON demux (`docs/04`
+//! §3) lands in M3 alongside its endpoint.
 #![deny(missing_docs)]
 
 mod error;
 mod extract;
 mod fields;
 mod id;
+mod query;
 
 pub use error::RewriteError;
 pub use extract::extract_scalar;
 pub use fields::{inject_fields, strip_fields};
 pub use id::{construct_id, map_logical_to_physical, map_physical_to_logical};
+pub use query::wrap_query;

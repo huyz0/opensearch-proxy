@@ -38,8 +38,13 @@ pub fn classify(method: HttpMethod, path: &str) -> Classified {
             logical_index: (*index).to_owned(),
             doc_id: None,
         },
-        // /{index}/_search and /{index}/_count
-        [index, "_search" | "_count"] => classified(EndpointKind::Search, index),
+        // /{index}/_search
+        [index, "_search"] => classified(EndpointKind::Search, index),
+        // /{index}/_count shares search's filter/isolation semantics but returns
+        // a different response shape; it routes to the count endpoint, which is
+        // not wired yet (a follow-up M2 slice). Classify it distinctly so it is
+        // cleanly rejected rather than mis-dispatched as a `_search`.
+        [index, "_count"] => classified(EndpointKind::Unknown, index),
         // /_bulk and /{index}/_bulk
         ["_bulk"] => Classified {
             endpoint: EndpointKind::IngestBulk,
@@ -128,9 +133,11 @@ mod tests {
             classify(HttpMethod::Post, "/orders/_search").endpoint,
             EndpointKind::Search
         );
+        // _count is not yet wired (a follow-up slice); classified distinctly so
+        // it is cleanly rejected rather than mis-dispatched as a _search.
         assert_eq!(
             classify(HttpMethod::Get, "/orders/_count").endpoint,
-            EndpointKind::Search
+            EndpointKind::Unknown
         );
         assert_eq!(
             classify(HttpMethod::Post, "/_bulk").endpoint,

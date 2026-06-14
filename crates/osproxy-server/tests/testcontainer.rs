@@ -97,11 +97,24 @@ async fn get_with_tenant(
     url: &str,
     tenant: &str,
 ) -> Result<(u16, String), String> {
+    request_with_tenant(client, Method::GET, url, tenant, Bytes::new()).await
+}
+
+/// A request carrying the `x-tenant` partition header (for header-routed reads
+/// and searches).
+async fn request_with_tenant(
+    client: &HttpClient,
+    method: Method,
+    url: &str,
+    tenant: &str,
+    body: Bytes,
+) -> Result<(u16, String), String> {
     let req = Request::builder()
-        .method(Method::GET)
+        .method(method)
         .uri(url)
+        .header("content-type", "application/json")
         .header("x-tenant", tenant)
-        .body(Full::new(Bytes::new()))
+        .body(Full::new(body))
         .map_err(|e| e.to_string())?;
     let resp: Response<_> = client.request(req).await.map_err(|e| e.to_string())?;
     let status = resp.status().as_u16();
@@ -198,6 +211,64 @@ async fn ingest_round_trips_to_real_opensearch() {
     let miss: serde_json::Value = serde_json::from_str(&miss).unwrap();
     assert_eq!(miss["_id"], "999");
     assert_eq!(miss["found"], false);
+}
+
+#[tokio::test]
+#[ignore = "requires Docker; run with --ignored"]
+async fn search_is_isolated_to_the_callers_partition() {
+    let client: HttpClient = Client::builder(TokioExecutor::new()).build_http();
+    let (_container, os_base) = start_opensearch().await;
+    assert!(
+        wait_ready(&client, &os_base).await,
+        "opensearch did not become ready"
+    );
+    let proxy = spawn_proxy(os_base.clone()).await;
+
+    // Two tenants ingest into the same shared index through the proxy.
+    for (tenant, id, msg) in [("acme", 1, "acme-doc"), ("globex", 1, "globex-doc")] {
+        let body = format!(r#"{{"tenant_id":"{tenant}","id":{id},"msg":"{msg}"}}"#);
+        let (status, b) = send(
+            &client,
+            Method::POST,
+            &format!("{proxy}/orders/_doc"),
+            Bytes::from(body),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, 201, "{b}");
+    }
+    // Make the writes visible to search.
+    let _ = send(
+        &client,
+        Method::POST,
+        &format!("{os_base}/{INDEX}/_refresh"),
+        Bytes::new(),
+    )
+    .await
+    .unwrap();
+
+    // acme searches match_all *through the proxy*: it sees only its own document
+    // — the mandatory partition filter isolates it from globex (docs/03 §5).
+    let (status, hits) = request_with_tenant(
+        &client,
+        Method::POST,
+        &format!("{proxy}/orders/_search"),
+        "acme",
+        Bytes::from_static(br#"{"query":{"match_all":{}}}"#),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, 200, "{hits}");
+    let parsed: serde_json::Value = serde_json::from_str(&hits).unwrap();
+    let hits_arr = parsed["hits"]["hits"].as_array().unwrap();
+    assert_eq!(hits_arr.len(), 1, "expected only acme's doc: {hits}");
+    let hit = &hits_arr[0];
+    assert_eq!(hit["_index"], "orders");
+    assert_eq!(hit["_id"], "1");
+    assert!(hit["_source"].get("_tenant").is_none(), "{hits}");
+    assert_eq!(hit["_source"]["msg"], "acme-doc");
+    // Globex's value never appears in acme's results.
+    assert!(!hits.contains("globex-doc"), "isolation breach: {hits}");
 }
 
 #[tokio::test]

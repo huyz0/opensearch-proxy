@@ -108,6 +108,55 @@ async fn read(
     p.handle(&ctx).await.unwrap()
 }
 
+async fn search(p: &Pipeline<SharedTenancy, MemorySink>, body: &[u8]) -> PipelineResponse {
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("s");
+    let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::Search,
+        Protocol::Http1,
+        "orders",
+        HeaderView::new(&headers),
+        body,
+    );
+    p.handle(&ctx).await.unwrap()
+}
+
+#[tokio::test]
+async fn search_filters_the_query_and_strips_hits() {
+    let p = pipeline();
+    write(&p, br#"{"tenant_id":"acme","id":7,"msg":"hello"}"#).await;
+
+    let resp = search(&p, br#"{"query":{"match":{"msg":"hello"}}}"#).await;
+    assert_eq!(resp.status, 200);
+    let doc: Value = serde_json::from_slice(&resp.body).unwrap();
+    let hit = &doc["hits"]["hits"][0];
+    // The client sees a logical hit: logical index/id, no tenancy machinery.
+    assert_eq!(hit["_index"], "orders");
+    assert_eq!(hit["_id"], "7");
+    assert!(hit["_source"].get("_tenant").is_none());
+    assert_eq!(hit["_source"]["msg"], "hello");
+}
+
+#[tokio::test]
+async fn search_dispatches_a_query_wrapped_in_the_mandatory_filter() {
+    let p = pipeline();
+    // An adversarial client query that tries to reach another tenant's docs.
+    search(&p, br#"{"query":{"term":{"_tenant":"globex"}}}"#).await;
+
+    // The query actually dispatched upstream nests the client's query under
+    // `must` with the proxy's partition `filter` as an inseparable sibling — the
+    // client cannot escape it (docs/03 §5).
+    let dispatched = p.sink().recorded_searches();
+    assert_eq!(dispatched.len(), 1);
+    let q: Value = serde_json::from_slice(&dispatched[0].body).unwrap();
+    assert_eq!(q["query"]["bool"]["filter"][0]["term"]["_tenant"], "acme");
+    assert_eq!(q["query"]["bool"]["must"][0]["term"]["_tenant"], "globex");
+}
+
 #[tokio::test]
 async fn get_by_id_returns_the_logical_document() {
     let p = pipeline();

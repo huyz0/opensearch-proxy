@@ -71,11 +71,49 @@ impl ReadOutcome {
     }
 }
 
+/// A search operation against a resolved [`Target`].
+///
+/// The body is the **already-wrapped** query (the tenancy partition filter has
+/// been applied, `docs/04` §4); the reader forwards it verbatim.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SearchOp {
+    /// The physical destination to search.
+    pub target: Target,
+    /// The query body to forward upstream (already partition-filtered).
+    pub body: Vec<u8>,
+}
+
+impl SearchOp {
+    /// Constructs a search operation.
+    #[must_use]
+    pub fn new(target: Target, body: Vec<u8>) -> Self {
+        Self { target, body }
+    }
+}
+
+/// The outcome of a search: the upstream status and raw response body (the
+/// hits, before the read-path field strip).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SearchOutcome {
+    /// The upstream HTTP status.
+    pub status: u16,
+    /// The raw upstream response body (the hits envelope).
+    pub body: Vec<u8>,
+}
+
+impl SearchOutcome {
+    /// Constructs a search outcome.
+    #[must_use]
+    pub fn new(status: u16, body: Vec<u8>) -> Self {
+        Self { status, body }
+    }
+}
+
 /// Where reads come from.
 ///
 /// The read counterpart of [`Sink`](crate::Sink). Kept separate because a read
 /// is inherently direct-to-cluster: a redundancy `QueueSink` can absorb writes
-/// but cannot answer a get-by-id.
+/// but cannot answer a get-by-id or a search.
 ///
 /// # Invariants
 ///
@@ -94,4 +132,15 @@ pub trait Reader: Send + Sync {
         &self,
         op: ReadOp,
     ) -> impl std::future::Future<Output = Result<ReadOutcome, SinkError>> + Send;
+
+    /// Runs a search, returning the raw hits envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SinkError`] if the upstream cannot be reached or returns a
+    /// server error.
+    fn search(
+        &self,
+        op: SearchOp,
+    ) -> impl std::future::Future<Output = Result<SearchOutcome, SinkError>> + Send;
 }
