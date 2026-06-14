@@ -36,9 +36,12 @@ see. Only review a **green** diff — fix mechanical failures first.
 
 ## Enforced by
 
-- The repo `/code-review` and `/security-review` commands on the diff.
-- `.github/workflows/quality-review.yml` — Claude PR review (needs the
-  `ANTHROPIC_API_KEY` secret; advisory).
+- The **`quality-reviewer` subagent** (`.claude/agents/quality-reviewer.md`),
+  spawned via the Task tool before finishing a unit of work — this is the primary
+  Tier 2 mechanism (no CI secret, runs in the agent itself).
+- The **`/quality-review`** command (`.claude/commands/quality-review.md`) to run
+  it on demand against the current diff or a range.
+- The repo `/code-review` and `/security-review` commands as additional passes.
 
 ## Deep dive
 

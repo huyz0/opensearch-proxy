@@ -29,7 +29,9 @@ ready.
 
 ## Enforced by
 
-- `cargo xtask ci` (fmt, clippy `-D warnings`, test, doc, budgets, skills).
+- `cargo xtask ci` (fmt, clippy `-D warnings`, arch, test, doc, budgets, skills).
+- **Tier 2 before done**: spawn the `quality-reviewer` subagent (or run
+  `/quality-review`) on the green diff — see the `quality-review` skill.
 - Repo's `/code-review` and `/security-review` tooling on the diff (docs/10 §3).
 
 ## Deep dive

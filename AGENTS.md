@@ -85,5 +85,8 @@ Skills are the process source of truth; `docs/` are the deep-dives.
 - **Minimal, in the right place** — a cross-layer import, a panic on the request
   path, or a value in a log is the signal to invert a dependency, return a typed
   error, or pass a shape instead.
+- **Before declaring work done**, after `cargo xtask ci` is green, run the Tier 2
+  semantic review: spawn the `quality-reviewer` subagent or run `/quality-review`
+  (docs/12). It is agent-native — no CI secret.
 - **Update docs/skills in the same change** — drift is a bug.
 - **Roadmap**: build in milestone order, [`docs/11-roadmap.md`](docs/11-roadmap.md).

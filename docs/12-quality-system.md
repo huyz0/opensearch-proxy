@@ -65,16 +65,24 @@ What a linter cannot judge, the LLM reviews against the skills system:
   inflate coverage? (Backed periodically by `cargo-mutants` in Tier 1.)
 - **Adherence to the invariants** in `AGENTS.md` and the relevant skill.
 
-Driven by the `quality-review` skill, which defines the rubric. Surfaced via the
-repo's `/code-review` and `/security-review` and the `quality-review` CI
-workflow (Claude PR review). High-confidence findings gate; uncertain ones
-advise.
+Driven by the `quality-review` skill, which defines the rubric. It runs through
+the **AI agent's own capabilities — not a CI secret**: the `quality-reviewer`
+subagent (`.claude/agents/`) is spawned before finishing a unit of work, and the
+`/quality-review` command runs it on demand; the repo's `/code-review` and
+`/security-review` are additional passes. High-confidence findings gate; uncertain
+ones advise.
+
+Why agent-native rather than a CI bot: the review belongs in the same loop that
+writes the code, needs no shared secret or external service, and reads the same
+skills the author follows — so the bar is identical and the feedback is immediate.
 
 ## How the tiers interact
 
 1. Tier 1 runs first (`cargo xtask ci` locally, the CI gate remotely). If it is
    red, Tier 2 is not worth spending — fix the mechanical failures first.
-2. Tier 2 reviews the green diff for what judgment is needed.
+2. Tier 2 reviews the green diff for what judgment is needed: spawn the
+   `quality-reviewer` subagent (or run `/quality-review`) before declaring the
+   work done.
 3. A finding that recurs and *can* be made deterministic graduates to Tier 1
    (e.g. a naming convention becomes a lint). The deterministic tier grows;
    the LLM is never asked to police what a check could.
