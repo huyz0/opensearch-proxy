@@ -8,8 +8,13 @@
 // tasks, not `#[test]` fns), so the test-only unwrap allowance does not reach
 // it; an unwrap here is a test failure, which is the intent.
 #![allow(clippy::unwrap_used)]
+// JUSTIFY(file-length): a cohesive suite of mock-upstream integration tests, each
+// a self-contained scenario (request construction, h2 selection, sharded pools,
+// breaker eviction, pool reuse) sharing one mock-server harness; splitting it
+// would scatter the shared scaffolding without adding clarity.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use http_body_util::{BodyExt, Full};
@@ -65,6 +70,38 @@ async fn start_mock(response: &'static str) -> (String, Arc<Mutex<Captured>>) {
     });
 
     (format!("http://{addr}"), captured)
+}
+
+/// Starts a long-lived mock that accepts *many* connections and serves every
+/// request on each, counting how many TCP connections it accepted. Lets a test
+/// prove the sink's pool reuses one connection across many requests rather than
+/// reconnecting per request.
+async fn start_pooled_mock(response: &'static str) -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepts = Arc::new(AtomicUsize::new(0));
+    let accepts_for_task = Arc::clone(&accepts);
+
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            accepts_for_task.fetch_add(1, Ordering::Relaxed);
+            tokio::spawn(async move {
+                let service = service_fn(move |_req: Request<Incoming>| async move {
+                    Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from(
+                        response,
+                    ))))
+                });
+                let _ = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                )
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
+            });
+        }
+    });
+
+    (format!("http://{addr}"), accepts)
 }
 
 fn sink_for(cluster: &str, base: String) -> OpenSearchSink {
@@ -333,4 +370,42 @@ async fn unconfigured_cluster_is_a_transport_error() {
         Epoch::new(1),
     );
     assert!(sink.write(WriteBatch::single(op)).await.is_err());
+}
+
+#[tokio::test]
+async fn repeated_writes_reuse_one_pooled_connection() {
+    // The M4 "pool reuse rates verified" exit gate (docs/11): many sequential
+    // writes to one cluster must ride a single pooled connection, not reconnect
+    // each time — proven from both ends (server accepts) and the sink's own
+    // connection-open counter.
+    const WRITES: u64 = 5;
+    let (base, accepts) = start_pooled_mock(r#"{"_id":"a:1","result":"created"}"#).await;
+    let sink = sink_for("eu-1", base);
+
+    for _ in 0..WRITES {
+        let op = WriteOp::new(
+            Target::new(ClusterId::from("eu-1"), IndexName::from("orders")),
+            DocOp::Index {
+                id: Some("1".to_owned()),
+                routing: None,
+                body: b"{}".to_vec(),
+            },
+            Epoch::new(1),
+        );
+        sink.write(WriteBatch::single(op)).await.unwrap();
+    }
+
+    // The server accepted exactly one TCP connection for all the writes.
+    assert_eq!(
+        accepts.load(Ordering::Relaxed),
+        1,
+        "all writes must share one pooled connection"
+    );
+
+    // The sink's own counters agree: one connection opened, every write but the
+    // first rode a reused connection.
+    let stats = sink.pool_stats(&ClusterId::from("eu-1")).unwrap();
+    assert_eq!(stats.opened, 1, "pool opened exactly one connection");
+    assert_eq!(stats.dispatched, WRITES);
+    assert_eq!(stats.reused(), WRITES - 1, "pool reuse rate verified");
 }

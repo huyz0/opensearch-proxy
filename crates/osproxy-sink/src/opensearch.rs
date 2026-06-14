@@ -8,6 +8,7 @@
 //! the transport slice without changing this mapping.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,12 +26,13 @@ use serde_json::Value;
 use crate::ack::{OpResult, WriteAck};
 use crate::batch::{WriteBatch, WriteOp};
 use crate::breaker::Breaker;
+use crate::conn::{CountingConnector, PoolStats};
 use crate::error::SinkError;
 use crate::read::{CountOutcome, ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome};
 use crate::sink::Sink;
 use crate::wire::{build_request, doc_uri, parse_result};
 
-type HttpClient = Client<HttpConnector, Full<Bytes>>;
+type HttpClient = Client<CountingConnector<HttpConnector>, Full<Bytes>>;
 
 /// One cluster's base URL plus its own pooled HTTP/1.1 and HTTP/2 clients.
 ///
@@ -45,18 +47,36 @@ struct ClusterPool {
     /// Passive health breaker: a run of failures opens it and the cluster is
     /// shed until a cooldown elapses (health-checked eviction).
     breaker: Breaker,
+    /// TCP connections this pool has opened (h1 + h2), shared with the counting
+    /// connectors wrapping both clients.
+    opened: Arc<AtomicU64>,
+    /// Requests dispatched to this cluster; `dispatched - opened` is pool reuse.
+    dispatched: AtomicU64,
 }
 
 impl ClusterPool {
-    /// Builds the per-cluster pools for a base URL.
+    /// Builds the per-cluster pools for a base URL, each wrapped in a counting
+    /// connector so the pool's connection reuse is observable (NFR-P).
     fn new(base: String) -> Self {
+        let opened = Arc::new(AtomicU64::new(0));
+        let connector = || CountingConnector::new(HttpConnector::new(), Arc::clone(&opened));
         Self {
             base,
-            client_h1: Client::builder(TokioExecutor::new()).build_http(),
+            client_h1: Client::builder(TokioExecutor::new()).build(connector()),
             client_h2: Client::builder(TokioExecutor::new())
                 .http2_only(true)
-                .build_http(),
+                .build(connector()),
             breaker: Breaker::default(),
+            opened,
+            dispatched: AtomicU64::new(0),
+        }
+    }
+
+    /// A snapshot of this pool's connection-reuse counters.
+    fn stats(&self) -> PoolStats {
+        PoolStats {
+            opened: self.opened.load(Ordering::Relaxed),
+            dispatched: self.dispatched.load(Ordering::Relaxed),
         }
     }
 
@@ -149,6 +169,15 @@ impl OpenSearchSink {
         self
     }
 
+    /// A snapshot of a cluster's connection-reuse counters, or `None` if the
+    /// cluster is unconfigured. Lets operators (and tests) verify the pool is
+    /// amortizing handshakes — connections opened far below requests dispatched
+    /// (NFR-P; the `docs/11` M4 "pool reuse rates verified" exit gate).
+    #[must_use]
+    pub fn pool_stats(&self, cluster: &ClusterId) -> Option<PoolStats> {
+        self.clusters.get(cluster).map(ClusterPool::stats)
+    }
+
     /// Resolves a cluster's pool, or a transport error if it is unconfigured.
     fn pool_for(&self, cluster: &ClusterId) -> Result<&ClusterPool, SinkError> {
         self.clusters.get(cluster).ok_or(SinkError::Transport {
@@ -174,6 +203,7 @@ impl OpenSearchSink {
                 kind: "cluster shed (circuit open)",
             });
         }
+        pool.dispatched.fetch_add(1, Ordering::Relaxed);
         match tokio::time::timeout(self.timeout, pool.client(protocol).request(req)).await {
             Ok(Ok(resp)) => {
                 pool.breaker.record_success();

@@ -45,6 +45,9 @@ tokio = { version = "1", default-features = false }
 # us TCP+TLS connection reuse (NFR-P) without hand-rolling a pool.
 hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
+# The `Service<Uri>` trait the pooled client's connector implements; we wrap it
+# to count real TCP connection opens for pool-reuse telemetry (NFR-P).
+tower-service = { version = "0.3", default-features = false }
 http-body-util = "0.1"
 bytes = "1"
 # Stream combinators for bounded-concurrency demux dispatch (buffer_unordered).

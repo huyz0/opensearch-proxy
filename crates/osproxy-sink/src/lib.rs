@@ -17,6 +17,7 @@
 mod ack;
 mod batch;
 mod breaker;
+mod conn;
 mod error;
 mod memory;
 mod opensearch;
@@ -26,6 +27,7 @@ mod wire;
 
 pub use ack::{OpResult, WriteAck};
 pub use batch::{DocOp, WriteBatch, WriteOp};
+pub use conn::PoolStats;
 pub use error::SinkError;
 pub use memory::MemorySink;
 pub use opensearch::OpenSearchSink;
