@@ -1335,6 +1335,7 @@ dependencies = [
 name = "osproxy-rewrite"
 version = "0.0.0"
 dependencies = [
+ "dhat",
  "osproxy-core",
  "proptest",
  "serde_json",
