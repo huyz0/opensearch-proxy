@@ -45,8 +45,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       # `--lib --tests` excludes benches (iai-callgrind needs valgrind, absent
-      # here) and matches what `cargo xtask test` measures.
-      - run: cargo llvm-cov --workspace --lib --tests --fail-under-lines 90 --ignore-filename-regex 'xtask|osproxy-server'
+      # here) and matches what `cargo xtask test` measures. We exclude only the
+      # binary entrypoint (osproxy-server/src/main.rs is process wiring run by no
+      # test) and xtask — the server's *library* code (auth, handler, tenancy)
+      # is tested and must be counted.
+      - run: cargo llvm-cov --workspace --lib --tests --fail-under-lines 90 --ignore-filename-regex 'xtask|osproxy-server/src/main\.rs'
 
   perf:
     name: Deterministic perf (iai-callgrind)
