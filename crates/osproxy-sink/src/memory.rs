@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use crate::ack::{OpResult, WriteAck};
 use crate::batch::{DocOp, WriteBatch};
 use crate::error::SinkError;
-use crate::read::{ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome};
+use crate::read::{CountOutcome, ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome};
 use crate::sink::Sink;
 
 /// A non-persistent [`Sink`]/[`Reader`] that records batches, stores indexed
@@ -163,6 +163,24 @@ impl Reader for MemorySink {
             serde_json::to_vec(&body).unwrap_or_else(|_| b"{}".to_vec()),
         ))
     }
+
+    async fn count(&self, op: SearchOp) -> Result<CountOutcome, SinkError> {
+        // Degenerate match-all count: every stored doc in the target index (the
+        // DSL is not evaluated; real filtering is proven against a live cluster).
+        let index = op.target.index.as_str().to_owned();
+        let count = self
+            .docs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .filter(|(idx, _)| idx == &index)
+            .count();
+        self.searches
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(op);
+        Ok(CountOutcome::new(200, count as u64))
+    }
 }
 
 /// Builds the OpenSearch get-by-id response envelope around a stored document.
@@ -285,6 +303,30 @@ mod tests {
         // The wrapped query the engine dispatched was recorded for assertions.
         assert_eq!(sink.recorded_searches().len(), 1);
         assert_eq!(sink.recorded_searches()[0].body, wrapped);
+    }
+
+    #[tokio::test]
+    async fn count_returns_the_number_of_stored_docs() {
+        let sink = MemorySink::new();
+        for id in ["acme:1", "acme:2"] {
+            sink.write(WriteBatch::single(WriteOp::new(
+                target(),
+                DocOp::Index {
+                    id: Some(id.to_owned()),
+                    routing: None,
+                    body: b"{}".to_vec(),
+                },
+                Epoch::new(1),
+            )))
+            .await
+            .unwrap();
+        }
+        let out = sink
+            .count(SearchOp::new(target(), b"{}".to_vec()))
+            .await
+            .unwrap();
+        assert_eq!(out.status, 200);
+        assert_eq!(out.count, 2);
     }
 
     #[tokio::test]

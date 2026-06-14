@@ -296,6 +296,28 @@ async fn search_is_isolated_to_the_callers_partition() {
     assert_eq!(hit["_source"]["msg"], "acme-doc");
     // Globex's value never appears in acme's results.
     assert!(!hits.contains("globex-doc"), "isolation breach: {hits}");
+
+    // _count is scoped to the partition too: acme counts only its own docs.
+    assert_count_is_partition_scoped(&client, &proxy).await;
+}
+
+/// `_count` through the proxy returns only the caller partition's total.
+async fn assert_count_is_partition_scoped(client: &HttpClient, proxy: &str) {
+    let (status, counted) = request_with_tenant(
+        client,
+        Method::POST,
+        &format!("{proxy}/orders/_count"),
+        "acme",
+        Bytes::from_static(br#"{"query":{"match_all":{}}}"#),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, 200, "{counted}");
+    let counted: serde_json::Value = serde_json::from_str(&counted).unwrap();
+    assert_eq!(
+        counted["count"], 1,
+        "count must be partition-scoped: {counted}"
+    );
 }
 
 #[tokio::test]

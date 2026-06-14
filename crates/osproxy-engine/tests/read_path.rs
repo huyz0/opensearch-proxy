@@ -143,6 +143,39 @@ async fn search(p: &Pipeline<SharedTenancy, MemorySink>, body: &[u8]) -> Pipelin
     p.handle(&ctx).await.unwrap()
 }
 
+async fn count(p: &Pipeline<SharedTenancy, MemorySink>, body: &[u8]) -> PipelineResponse {
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("c");
+    let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::Count,
+        Protocol::Http1,
+        "orders",
+        HeaderView::new(&headers),
+        body,
+    );
+    p.handle(&ctx).await.unwrap()
+}
+
+#[tokio::test]
+async fn count_returns_a_partition_scoped_total() {
+    let p = pipeline();
+    write(&p, br#"{"tenant_id":"acme","id":7,"msg":"hello"}"#).await;
+
+    let resp = count(&p, br#"{"query":{"match_all":{}}}"#).await;
+    assert_eq!(resp.status, 200);
+    let doc: Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(doc["count"], 1);
+
+    // The count dispatched the same mandatory partition filter as a search.
+    let q: Value =
+        serde_json::from_slice(&p.sink().recorded_searches().last().unwrap().body).unwrap();
+    assert_eq!(q["query"]["bool"]["filter"][0]["term"]["_tenant"], "acme");
+}
+
 #[tokio::test]
 async fn search_filters_the_query_and_strips_hits() {
     let p = pipeline();

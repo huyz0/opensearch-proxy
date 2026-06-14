@@ -125,6 +125,28 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             body,
         })
     }
+
+    /// The count path (`docs/04` §4): same mandatory partition filter as search,
+    /// but the upstream returns only a total, so there is nothing to strip — the
+    /// count is already scoped to the caller's partition.
+    pub(crate) async fn count(
+        &self,
+        ctx: &RequestCtx<'_>,
+        trace: &mut RequestTrace,
+    ) -> Result<PipelineResponse, RequestError> {
+        let resolved = self.router.resolve(ctx).await?;
+        trace.record_resolve(resolve_info(&resolved));
+
+        let (search_op, _shape) = build_search_op(&resolved, ctx.body())?;
+        let outcome = self.sink.count(search_op).await?;
+        trace.record_dispatch(read_dispatch_info(&resolved, outcome.status));
+
+        let body = format!(r#"{{"count":{}}}"#, outcome.count).into_bytes();
+        Ok(PipelineResponse {
+            status: outcome.status,
+            body,
+        })
+    }
 }
 
 /// Shapes a write acknowledgement into an OpenSearch-style ingest response.

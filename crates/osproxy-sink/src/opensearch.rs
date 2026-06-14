@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::ack::{OpResult, WriteAck};
 use crate::batch::{DocOp, WriteBatch, WriteOp};
 use crate::error::SinkError;
-use crate::read::{ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome};
+use crate::read::{CountOutcome, ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome};
 use crate::sink::Sink;
 
 type HttpClient = Client<HttpConnector, Full<Bytes>>;
@@ -53,6 +53,46 @@ impl OpenSearchSink {
             .ok_or(SinkError::Transport {
                 kind: "no endpoint configured for target cluster",
             })
+    }
+
+    /// POSTs a (partition-filtered) query body to `{index}/{verb}` and returns
+    /// the upstream status and raw response body. Shared by search and count.
+    async fn post_query(&self, verb: &str, op: &SearchOp) -> Result<(u16, Vec<u8>), SinkError> {
+        let base = self.base_for(&op.target.cluster)?;
+        let uri = format!("{base}/{}/{verb}", op.target.index.as_str());
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Full::new(Bytes::from(op.body.clone())))
+            .map_err(|_| SinkError::Transport {
+                kind: "building upstream query request",
+            })?;
+
+        let resp = self
+            .client
+            .request(req)
+            .await
+            .map_err(|_| SinkError::Transport {
+                kind: "upstream query failed",
+            })?;
+        let status = resp.status().as_u16();
+        if status >= 500 {
+            return Err(SinkError::Upstream {
+                status,
+                retryable: matches!(status, 502..=504),
+            });
+        }
+        let body = resp
+            .into_body()
+            .collect()
+            .await
+            .map_err(|_| SinkError::Transport {
+                kind: "reading upstream query response",
+            })?
+            .to_bytes()
+            .to_vec();
+        Ok((status, body))
     }
 
     /// Sends a single operation and parses its result.
@@ -131,41 +171,17 @@ impl Reader for OpenSearchSink {
     }
 
     async fn search(&self, op: SearchOp) -> Result<SearchOutcome, SinkError> {
-        let base = self.base_for(&op.target.cluster)?;
-        let uri = format!("{base}/{}/_search", op.target.index.as_str());
-        let req = Request::builder()
-            .method(Method::POST)
-            .uri(uri)
-            .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(op.body)))
-            .map_err(|_| SinkError::Transport {
-                kind: "building upstream search request",
-            })?;
-
-        let resp = self
-            .client
-            .request(req)
-            .await
-            .map_err(|_| SinkError::Transport {
-                kind: "upstream search failed",
-            })?;
-        let status = resp.status().as_u16();
-        if status >= 500 {
-            return Err(SinkError::Upstream {
-                status,
-                retryable: matches!(status, 502..=504),
-            });
-        }
-        let body = resp
-            .into_body()
-            .collect()
-            .await
-            .map_err(|_| SinkError::Transport {
-                kind: "reading upstream search response",
-            })?
-            .to_bytes()
-            .to_vec();
+        let (status, body) = self.post_query("_search", &op).await?;
         Ok(SearchOutcome::new(status, body))
+    }
+
+    async fn count(&self, op: SearchOp) -> Result<CountOutcome, SinkError> {
+        let (status, body) = self.post_query("_count", &op).await?;
+        let count = serde_json::from_slice::<Value>(&body)
+            .ok()
+            .and_then(|v| v.get("count").and_then(Value::as_u64))
+            .unwrap_or(0);
+        Ok(CountOutcome::new(status, count))
     }
 }
 

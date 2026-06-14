@@ -109,6 +109,23 @@ impl SearchOutcome {
     }
 }
 
+/// The outcome of a count: the upstream status and the matched document count.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CountOutcome {
+    /// The upstream HTTP status.
+    pub status: u16,
+    /// The number of matching documents.
+    pub count: u64,
+}
+
+impl CountOutcome {
+    /// Constructs a count outcome.
+    #[must_use]
+    pub fn new(status: u16, count: u64) -> Self {
+        Self { status, count }
+    }
+}
+
 /// Where reads come from.
 ///
 /// The read counterpart of [`Sink`](crate::Sink). Kept separate because a read
@@ -143,4 +160,18 @@ pub trait Reader: Send + Sync {
         &self,
         op: SearchOp,
     ) -> impl std::future::Future<Output = Result<SearchOutcome, SinkError>> + Send;
+
+    /// Counts the documents matching a (partition-filtered) query.
+    ///
+    /// Takes the same [`SearchOp`] as [`Reader::search`] — the wrapped query is
+    /// identical — but hits the count endpoint, returning only the total.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SinkError`] if the upstream cannot be reached or returns a
+    /// server error.
+    fn count(
+        &self,
+        op: SearchOp,
+    ) -> impl std::future::Future<Output = Result<CountOutcome, SinkError>> + Send;
 }

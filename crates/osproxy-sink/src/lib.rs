@@ -27,5 +27,5 @@ pub use batch::{DocOp, WriteBatch, WriteOp};
 pub use error::SinkError;
 pub use memory::MemorySink;
 pub use opensearch::OpenSearchSink;
-pub use read::{ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome};
+pub use read::{CountOutcome, ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome};
 pub use sink::Sink;

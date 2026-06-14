@@ -17,9 +17,12 @@ pub enum EndpointKind {
     IngestDoc,
     /// Bulk ingest (`_bulk`): demux by partition, re-interleave `items[]`.
     IngestBulk,
-    /// Search/read (`_search`, `_count`, `_msearch`): partition filter +
-    /// response field strip, single target.
+    /// Search/read (`_search`, `_msearch`): partition filter + response field
+    /// strip, single target.
     Search,
+    /// Count (`_count`): same partition filter as search, but returns a count
+    /// rather than hits, so no response field strip.
+    Count,
     /// Read by id (`GET _doc/{id}`, `_mget`): logical→physical id transform.
     GetById,
     /// Delete by id: logical→physical id transform.
@@ -44,6 +47,7 @@ impl EndpointKind {
             Self::IngestDoc
                 | Self::IngestBulk
                 | Self::Search
+                | Self::Count
                 | Self::GetById
                 | Self::DeleteById
                 | Self::Cursor
@@ -74,6 +78,7 @@ mod tests {
             EndpointKind::IngestDoc,
             EndpointKind::IngestBulk,
             EndpointKind::Search,
+            EndpointKind::Count,
             EndpointKind::GetById,
             EndpointKind::DeleteById,
             EndpointKind::Cursor,
