@@ -1,0 +1,8 @@
+# Complexity budgets — see docs/08-engineering-standards.md.
+too-many-lines-threshold = 60
+too-many-arguments-threshold = 7
+cognitive-complexity-threshold = 15
+
+# Domain identifiers that are not missing-backticks violations in docs.
+# `..` keeps clippy's built-in defaults.
+doc-valid-idents = ["OpenSearch", "NDJSON", ".."]

@@ -1,0 +1,15 @@
+[package]
+name = "osproxy-observe"
+description = "Observability: shape-only span schema, runtime diagnostics directives, /debug/explain assembly."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+osproxy-core.workspace = true
+
+[lints]
+workspace = true

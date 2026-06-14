@@ -1,0 +1,28 @@
+# cargo-deny configuration — supply-chain, license, and advisory gates.
+# See docs/08-engineering-standards.md §6.
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# Permissive licenses compatible with shipping an Apache-2.0 project.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcard-dependencies = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

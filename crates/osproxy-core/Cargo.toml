@@ -1,0 +1,15 @@
+[package]
+name = "osproxy-core"
+description = "Core data model, identifier newtypes, and error taxonomy for osproxy. No I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

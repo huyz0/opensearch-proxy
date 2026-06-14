@@ -1,0 +1,21 @@
+[package]
+name = "osproxy-engine"
+description = "Pipeline orchestration: auth -> resolve -> rewrite -> sink -> reverse."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+osproxy-core.workspace = true
+osproxy-spi.workspace = true
+osproxy-tenancy.workspace = true
+osproxy-rewrite.workspace = true
+osproxy-sink.workspace = true
+osproxy-control.workspace = true
+osproxy-observe.workspace = true
+
+[lints]
+workspace = true

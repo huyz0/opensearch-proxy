@@ -1,0 +1,69 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/osproxy-core",
+    "crates/osproxy-spi",
+    "crates/osproxy-tenancy",
+    "crates/osproxy-transport",
+    "crates/osproxy-rewrite",
+    "crates/osproxy-sink",
+    "crates/osproxy-control",
+    "crates/osproxy-observe",
+    "crates/osproxy-engine",
+    "crates/osproxy-config",
+    "crates/osproxy-server",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.94"
+license = "Apache-2.0"
+authors = ["Huy Nguyen"]
+repository = "https://github.com/huyz0/opensearch-proxy"
+
+[workspace.dependencies]
+# Internal crates (path deps; versions track the workspace).
+osproxy-core = { path = "crates/osproxy-core" }
+osproxy-spi = { path = "crates/osproxy-spi" }
+osproxy-tenancy = { path = "crates/osproxy-tenancy" }
+osproxy-transport = { path = "crates/osproxy-transport" }
+osproxy-rewrite = { path = "crates/osproxy-rewrite" }
+osproxy-sink = { path = "crates/osproxy-sink" }
+osproxy-control = { path = "crates/osproxy-control" }
+osproxy-observe = { path = "crates/osproxy-observe" }
+osproxy-engine = { path = "crates/osproxy-engine" }
+osproxy-config = { path = "crates/osproxy-config" }
+
+# Third-party (pinned conservatively; add as milestones need them).
+thiserror = "2"
+
+# Lints applied to every crate that opts in via `[lints] workspace = true`.
+# See docs/08-engineering-standards.md. xtask deliberately does NOT opt in.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+# Reliability: no panics reachable from library code (NFR-R1).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+# Structure / no-god-* budgets (docs/08). Soft (warn) so a `// JUSTIFY` review
+# decision can keep them; CI greps for unjustified overflows separately.
+too_many_lines = "warn"
+too_many_arguments = "warn"
+cognitive_complexity = "warn"
+# General quality.
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"

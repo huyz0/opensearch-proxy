@@ -1,0 +1,16 @@
+[package]
+name = "osproxy-transport"
+description = "Wire I/O: HTTP/1.1, HTTP/2, gRPC ingress, upstream connection pools, TLS, CryptoProvider."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+osproxy-core.workspace = true
+osproxy-spi.workspace = true
+
+[lints]
+workspace = true

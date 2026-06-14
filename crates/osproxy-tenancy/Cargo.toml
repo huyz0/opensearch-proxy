@@ -1,0 +1,16 @@
+[package]
+name = "osproxy-tenancy"
+description = "High-level tenancy SPI; implements the low-level RoutingSpi from tenancy rules."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+osproxy-core.workspace = true
+osproxy-spi.workspace = true
+
+[lints]
+workspace = true

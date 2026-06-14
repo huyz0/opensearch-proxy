@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  gate:
+    name: Build & full gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Mirrors `cargo xtask ci` (fmt, clippy, test, doc, budgets) but as
+      # discrete steps so a failure is attributed precisely in the UI.
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --all-targets
+
+      - name: Doc (deny warnings) + doc tests
+        run: |
+          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
+          cargo test --workspace --doc
+
+      - name: Size & complexity budgets
+        run: cargo xtask budgets
+
+  deny:
+    name: Supply chain (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  coverage:
+    name: Coverage (>=90%)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Coverage gate
+        run: cargo llvm-cov --workspace --fail-under-lines 90 --ignore-filename-regex 'xtask|osproxy-server'
