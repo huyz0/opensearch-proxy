@@ -6,3 +6,13 @@ cognitive-complexity-threshold = 15
 # Domain identifiers that are not missing-backticks violations in docs.
 # `..` keeps clippy's built-in defaults.
 doc-valid-idents = ["OpenSearch", "NDJSON", ".."]
+
+# Determinism enforcement (docs/12). Reading wall-clock time or unseeded
+# randomness directly makes behavior machine-dependent and tests flaky. Code
+# must take a `osproxy_core::time::Clock` instead. The sole sanctioned call
+# sites live in `SystemClock` and carry an `#[allow]` with a reason.
+disallowed-methods = [
+    { path = "std::time::Instant::now", reason = "inject osproxy_core::time::Clock instead (docs/12)" },
+    { path = "std::time::SystemTime::now", reason = "inject osproxy_core::time::Clock instead (docs/12)" },
+    { path = "std::time::Instant::elapsed", reason = "compute from two Clock::now() reads (docs/12)" },
+]

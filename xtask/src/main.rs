@@ -8,8 +8,10 @@
 //!   doc       Build docs (warnings denied) and run doc tests.
 //!   budgets   Check size budgets and that overflows carry a `// JUSTIFY`.
 //!   skills    Validate .agents/skills/*/SKILL.md (size + frontmatter).
+//!   arch      Static crate dependency-direction / acyclicity check.
+//!   bench     Deterministic instruction-count microbenchmarks (needs valgrind).
 //!
-//! See docs/08-engineering-standards.md and docs/10-review-process.md.
+//! See docs/08-engineering-standards.md, docs/10-review-process.md, docs/12.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -24,6 +26,8 @@ fn main() -> ExitCode {
         "doc" => doc(),
         "budgets" => budgets(),
         "skills" => skills(),
+        "arch" => arch(),
+        "bench" => bench(),
         other => Err(format!("unknown command: {other}\n{USAGE}")),
     };
     match result {
@@ -35,17 +39,128 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: cargo xtask <ci|fmt|clippy|test|doc|budgets|skills>";
+const USAGE: &str = "usage: cargo xtask <ci|fmt|clippy|test|doc|budgets|skills|arch|bench>";
 
 fn run_ci() -> Result<(), String> {
     fmt()?;
     clippy()?;
+    arch()?;
     test()?;
     doc()?;
     budgets()?;
     skills()?;
     println!("\nxtask: all gates passed ✓");
     Ok(())
+}
+
+/// The allowed direct internal dependencies of each crate. This is the
+/// authoritative dependency DAG (docs/01 §2); it is acyclic by construction, so
+/// verifying each crate's actual internal deps are a subset proves the whole
+/// graph stays downward-only and cycle-free (docs/12).
+fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'static str]> {
+    Some(match crate_name {
+        "osproxy-core" => &[],
+        "osproxy-spi" => &["osproxy-core"],
+        "osproxy-tenancy" => &["osproxy-core", "osproxy-spi"],
+        "osproxy-transport" => &["osproxy-core", "osproxy-spi"],
+        "osproxy-rewrite" => &["osproxy-core"],
+        "osproxy-sink" => &["osproxy-core", "osproxy-spi"],
+        "osproxy-control" => &["osproxy-core"],
+        "osproxy-observe" => &["osproxy-core"],
+        "osproxy-config" => &["osproxy-core"],
+        "osproxy-engine" => &[
+            "osproxy-core",
+            "osproxy-spi",
+            "osproxy-tenancy",
+            "osproxy-rewrite",
+            "osproxy-sink",
+            "osproxy-control",
+            "osproxy-observe",
+        ],
+        "osproxy-server" => &["osproxy-core", "osproxy-config", "osproxy-engine"],
+        _ => return None,
+    })
+}
+
+/// Static architecture check: every crate's actual internal dependencies must be
+/// a subset of its allowed set in `allowed_internal_deps`. Fails on an undeclared
+/// dependency (an upward or sideways edge) or an unknown crate.
+fn arch() -> Result<(), String> {
+    println!("xtask: checking crate dependency graph");
+    let crates_dir = workspace_root().join("crates");
+    let mut manifests = Vec::new();
+    collect_named_files(&crates_dir, "Cargo.toml", &mut manifests);
+
+    let mut violations = Vec::new();
+    for manifest in &manifests {
+        let text = std::fs::read_to_string(manifest)
+            .map_err(|e| format!("read {}: {e}", manifest.display()))?;
+        let name = package_name(&text)
+            .ok_or_else(|| format!("no [package] name in {}", manifest.display()))?;
+        let Some(allowed) = allowed_internal_deps(&name) else {
+            violations.push(format!(
+                "  unknown crate `{name}` — add it to allowed_internal_deps"
+            ));
+            continue;
+        };
+        for dep in internal_deps(&text) {
+            if !allowed.contains(&dep.as_str()) {
+                violations.push(format!(
+                    "  {name} -> {dep} is not an allowed dependency edge"
+                ));
+            }
+        }
+    }
+
+    if violations.is_empty() {
+        println!("xtask: dependency graph ok ({} crates)", manifests.len());
+        Ok(())
+    } else {
+        Err(format!(
+            "architecture check failed (see docs/01 §2):\n{}",
+            violations.join("\n")
+        ))
+    }
+}
+
+/// Extracts the `name = "..."` from a manifest's `[package]` section.
+fn package_name(manifest: &str) -> Option<String> {
+    manifest
+        .lines()
+        .skip_while(|l| l.trim() != "[package]")
+        .skip(1)
+        .take_while(|l| !l.trim_start().starts_with('['))
+        .find_map(|l| {
+            let rest = l
+                .trim()
+                .strip_prefix("name")?
+                .trim_start()
+                .strip_prefix('=')?;
+            Some(rest.trim().trim_matches('"').to_owned())
+        })
+}
+
+/// Returns the internal (`osproxy-*`) crates this manifest depends on. Internal
+/// deps are declared as `osproxy-x.workspace = true`.
+fn internal_deps(manifest: &str) -> Vec<String> {
+    manifest
+        .lines()
+        .filter_map(|l| {
+            let t = l.trim();
+            if t.starts_with("osproxy-") && t.contains("workspace") {
+                Some(t.split(['.', ' ']).next()?.to_owned())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Runs the deterministic instruction-count microbenchmarks. Requires valgrind +
+/// iai-callgrind-runner; intended for CI (docs/12). Not part of `ci` because it
+/// needs valgrind, which is not present on every dev box.
+fn bench() -> Result<(), String> {
+    cargo(&["bench", "--workspace"], &[])
 }
 
 fn fmt() -> Result<(), String> {
@@ -67,7 +182,10 @@ fn clippy() -> Result<(), String> {
 }
 
 fn test() -> Result<(), String> {
-    cargo(&["test", "--workspace", "--all-targets"], &[])
+    // `--lib --bins --tests` excludes `--benches`: iai-callgrind benches need
+    // valgrind to run and would fail outside CI. clippy still lints them via its
+    // own `--all-targets`.
+    cargo(&["test", "--workspace", "--lib", "--bins", "--tests"], &[])
 }
 
 fn doc() -> Result<(), String> {

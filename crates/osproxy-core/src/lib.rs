@@ -13,6 +13,8 @@
 //!   requests (`docs/02` §5).
 //! - [`error`] — the request-path [`error::ErrorContext`] taxonomy that makes
 //!   every failure typed, contextual, and LLM-diagnosable (`docs/02` §4).
+//! - [`time`] — the [`time::Clock`] seam that keeps time deterministic and
+//!   testable (`docs/12`).
 //!
 //! The module tree is intentionally flat and small; each concept lives in its
 //! own file (`docs/08` §2).
@@ -21,7 +23,9 @@
 pub mod endpoint;
 pub mod error;
 pub mod ids;
+pub mod time;
 
 pub use endpoint::EndpointKind;
 pub use error::{ErrorCode, ErrorContext};
 pub use ids::{ClusterId, Epoch, IndexName, PartitionId, PrincipalId, RequestId};
+pub use time::{Clock, Instant, ManualClock, SystemClock};

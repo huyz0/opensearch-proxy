@@ -50,6 +50,7 @@ Read the docs in order; they are the source of truth for the design.
 | [docs/09-testing-and-quality.md](docs/09-testing-and-quality.md) | Test strategy, **≥90% semantic coverage**, test quality |
 | [docs/10-review-process.md](docs/10-review-process.md) | Design & code review gates |
 | [docs/11-roadmap.md](docs/11-roadmap.md) | Milestones and the first vertical slice |
+| [docs/12-quality-system.md](docs/12-quality-system.md) | Two-tier quality: deterministic gates + LLM semantic review |
 | [docs/specs/](docs/specs/) | Vendored external specs & references (OpenSearch API, FIPS, OTel) |
 
 ## Status

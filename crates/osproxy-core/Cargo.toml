@@ -11,5 +11,16 @@ repository.workspace = true
 [dependencies]
 thiserror.workspace = true
 
+[dev-dependencies]
+proptest = "1"
+dhat = "0.3"
+iai-callgrind = "0.14"
+
 [lints]
 workspace = true
+
+# Deterministic instruction-count microbenchmarks (docs/12). Run in CI under
+# valgrind via `cargo xtask bench`; never part of the local `ci` gate.
+[[bench]]
+name = "core_bench"
+harness = false

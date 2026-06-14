@@ -30,8 +30,11 @@ ADRs in [`docs/decisions/`](docs/decisions/).
    skill.
 6. **Telemetry is shape-only and read-only** — never tenant values or secrets in
    any log/trace. See the **observability** skill.
-7. **Keep the gates green** — `cargo xtask ci` must pass before a task is done;
-   new behavior needs tests (≥90% semantic coverage).
+7. **Time is injected, never read directly.** `Instant::now`/`SystemTime::now`
+   are banned; take a `osproxy_core::time::Clock`. See the **performance** skill.
+8. **Keep the gates green** — `cargo xtask ci` must pass before a task is done;
+   new behavior needs tests (≥90% semantic coverage). Quality is two-tier:
+   deterministic gates + LLM semantic review (docs/12).
 
 ## Commands
 
@@ -47,6 +50,8 @@ blocks on failure. Run it before calling a task done:
 | Docs + doc tests | `cargo xtask doc` |
 | Size/complexity budgets | `cargo xtask budgets` |
 | Skill-system lint | `cargo xtask skills` |
+| Architecture (dep graph) | `cargo xtask arch` |
+| Deterministic perf (CI) | `cargo xtask bench` (needs valgrind) |
 
 **Commits**: `commit-msg` allows only `feat|fix|docs|test|chore|refactor|perf|
 build|ci` + optional `(scope)` + lowercase description, and requires the
@@ -65,6 +70,8 @@ Skills are the process source of truth; `docs/` are the deep-dives.
 | Bulk demux / query rewrite / pooling | `pipeline` | [04](docs/04-request-pipeline.md) |
 | Traces / `/debug/explain` / no-leak | `observability` | [05](docs/05-observability.md) |
 | Tests / coverage / property tests | `testing` | [09](docs/09-testing-and-quality.md) |
+| Perf / memory / determinism / `core::time` | `performance` | [12](docs/12-quality-system.md) |
+| Reviewing a diff (semantic/design) | `quality-review` | [12](docs/12-quality-system.md) |
 | TLS / FIPS / crypto boundary | `fips` | [07](docs/07-fips-and-crypto.md) |
 | Commits / hooks / finishing | `git-workflow`, `code-review` | [10](docs/10-review-process.md) |
 | Editing skills | `manage-skills` | — |
