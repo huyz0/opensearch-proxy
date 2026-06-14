@@ -276,6 +276,49 @@ async fn action_line_id_is_mapped_logical_to_physical() {
 }
 
 #[tokio::test]
+async fn large_bulk_flushes_mid_stream_without_dropping_or_reordering() {
+    use std::fmt::Write as _;
+    // More than the engine's FLUSH_THRESHOLD (256) acme ops, so at least one
+    // sub-batch is flushed mid-stream before the body is fully parsed. The
+    // re-interleave and storage must survive that flush boundary intact.
+    const COUNT: usize = 600;
+    let p = pipeline();
+    let mut body = String::new();
+    for id in 0..COUNT {
+        let _ = write!(
+            body,
+            "{{\"index\":{{}}}}\n{{\"tenant_id\":\"acme\",\"id\":{id},\"msg\":\"m{id}\"}}\n"
+        );
+    }
+    let resp = bulk(&p, body.as_bytes()).await;
+    assert_eq!(resp.status, 200);
+    let doc: Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(doc["errors"], false, "no errors expected");
+    let items = doc["items"].as_array().unwrap();
+    assert_eq!(items.len(), COUNT);
+    // Every item is in input order, each echoing its own id, all created.
+    for (id, item) in items.iter().enumerate() {
+        assert_eq!(item["index"]["_id"], id.to_string(), "order preserved");
+        assert_eq!(item["index"]["status"], 201);
+    }
+
+    // A doc from the first (mid-stream) flush and one from the final flush are
+    // both stored — nothing was dropped at the boundary.
+    for id in ["0", "599"] {
+        let hit = p
+            .sink()
+            .get(ReadOp::new(
+                target("acme-idx"),
+                format!("acme:{id}"),
+                Some("acme".into()),
+            ))
+            .await
+            .unwrap();
+        assert!(hit.found, "acme:{id} should be stored");
+    }
+}
+
+#[tokio::test]
 async fn create_action_routes_through_the_create_op() {
     let p = pipeline();
     // A `create` carries the same tenancy rewrite as `index`, but the demuxed op

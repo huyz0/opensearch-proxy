@@ -9,6 +9,10 @@
 //! unresolved partition) is positioned in place; the bulk as a whole still
 //! returns 200 with `errors: true`. The per-item preparation lives in
 //! [`crate::bulkprep`]; this module owns the orchestration and the response.
+//!
+//! Memory is bounded (NFR-P7): a target's sub-batch is flushed as soon as it
+//! reaches [`FLUSH_THRESHOLD`], so the transformed working set stays a bounded
+//! multiple of the threshold rather than growing to the whole body.
 
 use std::collections::HashMap;
 
@@ -23,6 +27,17 @@ use serde_json::{json, Value};
 use crate::bulkprep::{prepare, Prepared};
 use crate::error::RequestError;
 use crate::pipeline::PipelineResponse;
+
+/// The largest a single target's sub-batch grows before it is flushed mid-stream,
+/// bounding the transformed working set held in memory (NFR-P7).
+const FLUSH_THRESHOLD: usize = 256;
+
+/// The most per-target sub-batches dispatched at once in the final flush, so a
+/// wide fan-out cannot open an unbounded number of upstream requests (NFR-P).
+const MAX_DISPATCH_CONCURRENCY: usize = 8;
+
+/// One target's buffered `(ordinal, prepared-op)` entries awaiting dispatch.
+type Entries = Vec<(usize, Prepared)>;
 
 /// Runs a `_bulk` request: parse, demux by target, dispatch, re-interleave.
 ///
@@ -39,27 +54,29 @@ pub(crate) async fn ingest_bulk<T: TenancySpi, S: Sink>(
     let items = parse_bulk(ctx.body())?;
     let n = items.len();
 
-    // Per-item response line (filled now for failures, after dispatch for the
-    // rest) and the per-target demux (ordinals into `prepared`).
+    // Per-item response line (filled now for failures, on flush for the rest) and
+    // the per-target demux buffers. A target flushes once it reaches
+    // FLUSH_THRESHOLD, so the transformed working set stays bounded (NFR-P7).
     let mut lines: Vec<Value> = vec![Value::Null; n];
-    let mut prepared: Vec<Option<Prepared>> = (0..n).map(|_| None).collect();
-    let mut by_target: HashMap<Target, Vec<usize>> = HashMap::new();
+    let mut buffers: HashMap<Target, Entries> = HashMap::new();
     let mut cache: HashMap<(PartitionId, String), Resolved> = HashMap::new();
 
     for (ordinal, item) in items.into_iter().enumerate() {
         match prepare(router, ctx, &mut cache, item).await {
             Ok(p) => {
-                by_target
-                    .entry(p.op.target.clone())
-                    .or_default()
-                    .push(ordinal);
-                prepared[ordinal] = Some(p);
+                let target = p.op.target.clone();
+                let buf = buffers.entry(target.clone()).or_default();
+                buf.push((ordinal, p));
+                if buf.len() >= FLUSH_THRESHOLD {
+                    let entries = buffers.remove(&target).unwrap_or_default();
+                    flush(sink, &entries, &mut lines).await;
+                }
             }
             Err(fail) => lines[ordinal] = fail.into_line(),
         }
     }
 
-    dispatch_targets(sink, by_target, &prepared, &mut lines).await;
+    flush_remaining(sink, buffers, &mut lines).await;
 
     let errors = lines.iter().any(is_error_line);
     let body = json!({ "took": 0, "errors": errors, "items": lines });
@@ -71,56 +88,59 @@ pub(crate) async fn ingest_bulk<T: TenancySpi, S: Sink>(
     })
 }
 
-/// The most per-target sub-batches dispatched at once, so a wide fan-out cannot
-/// open an unbounded number of upstream requests (NFR-P, `docs/04` §3).
-const MAX_DISPATCH_CONCURRENCY: usize = 8;
+/// Flushes one target's sub-batch in place: dispatch it and apply each result to
+/// `lines` by its original ordinal. Awaited inline, so the transformed bytes are
+/// freed before parsing resumes (the mid-stream backpressure that bounds memory).
+async fn flush<S: Sink>(sink: &S, entries: &[(usize, Prepared)], lines: &mut [Value]) {
+    let batch = build_batch(entries);
+    apply_results(entries, sink.write(batch).await, lines);
+}
 
-/// Dispatches the per-target sub-batches **concurrently** (bounded) and fills the
-/// result lines by ordinal.
-///
-/// Each target's batch is built up front (owning its ops), so the in-flight
-/// futures share only `&S`; results are applied to `lines` after the bounded
-/// stream drains. Completion order does not matter — every line is keyed by its
-/// original ordinal, so re-interleave stays exact regardless of which target
-/// finishes first.
-async fn dispatch_targets<S: Sink>(
+/// Flushes every remaining target's sub-batch **concurrently** (bounded), then
+/// applies the results by ordinal. Completion order cannot disturb re-interleave —
+/// every line is keyed by its original ordinal.
+async fn flush_remaining<S: Sink>(
     sink: &S,
-    by_target: HashMap<Target, Vec<usize>>,
-    prepared: &[Option<Prepared>],
+    buffers: HashMap<Target, Entries>,
     lines: &mut [Value],
 ) {
-    let batches = by_target.into_values().map(|ordinals| {
-        let batch = ordinals
-            .iter()
-            .fold(WriteBatch::new(), |b, &o| match prepared[o].as_ref() {
-                Some(p) => b.with(p.op.clone()),
-                None => b,
-            });
-        (ordinals, batch)
-    });
+    let pending = buffers.into_values().filter(|v| !v.is_empty());
+    let results: Vec<(Entries, Result<WriteAck, SinkError>)> = futures_util::stream::iter(pending)
+        .map(|entries| async move {
+            let r = sink.write(build_batch(&entries)).await;
+            (entries, r)
+        })
+        .buffer_unordered(MAX_DISPATCH_CONCURRENCY)
+        .collect()
+        .await;
 
-    let results: Vec<(Vec<usize>, Result<WriteAck, SinkError>)> =
-        futures_util::stream::iter(batches)
-            .map(|(ordinals, batch)| async move { (ordinals, sink.write(batch).await) })
-            .buffer_unordered(MAX_DISPATCH_CONCURRENCY)
-            .collect()
-            .await;
+    for (entries, result) in results {
+        apply_results(&entries, result, lines);
+    }
+}
 
-    for (ordinals, result) in results {
-        match result {
-            Ok(ack) => {
-                for (&ordinal, op_result) in ordinals.iter().zip(ack.results()) {
-                    if let Some(p) = prepared[ordinal].as_ref() {
-                        lines[ordinal] = success_line(p, op_result);
-                    }
-                }
+/// Builds the [`WriteBatch`] for a target's buffered entries.
+fn build_batch(entries: &[(usize, Prepared)]) -> WriteBatch {
+    entries
+        .iter()
+        .fold(WriteBatch::new(), |b, (_, p)| b.with(p.op.clone()))
+}
+
+/// Applies a sub-batch's outcome to the response lines by ordinal.
+fn apply_results(
+    entries: &[(usize, Prepared)],
+    result: Result<WriteAck, SinkError>,
+    lines: &mut [Value],
+) {
+    match result {
+        Ok(ack) => {
+            for ((ordinal, p), op_result) in entries.iter().zip(ack.results()) {
+                lines[*ordinal] = success_line(p, op_result);
             }
-            Err(_) => {
-                for &ordinal in &ordinals {
-                    if let Some(p) = prepared[ordinal].as_ref() {
-                        lines[ordinal] = upstream_failure_line(p);
-                    }
-                }
+        }
+        Err(_) => {
+            for (ordinal, p) in entries {
+                lines[*ordinal] = upstream_failure_line(p);
             }
         }
     }
