@@ -13,7 +13,9 @@
 #![deny(missing_docs)]
 
 mod error;
+mod pipeline;
 mod plan;
 
 pub use error::RequestError;
+pub use pipeline::{Pipeline, PipelineResponse};
 pub use plan::build_write_batch;
