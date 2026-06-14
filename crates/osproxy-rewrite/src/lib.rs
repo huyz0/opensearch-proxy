@@ -15,12 +15,14 @@
 //! §3) lands in M3 alongside its endpoint.
 #![deny(missing_docs)]
 
+mod bulk;
 mod error;
 mod extract;
 mod fields;
 mod id;
 mod query;
 
+pub use bulk::{parse_bulk, BulkAction, BulkItem};
 pub use error::RewriteError;
 pub use extract::extract_scalar;
 pub use fields::{inject_fields, strip_fields};

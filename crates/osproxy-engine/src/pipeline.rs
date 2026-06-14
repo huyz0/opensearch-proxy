@@ -106,6 +106,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
     ) -> Result<PipelineResponse, RequestError> {
         match ctx.endpoint() {
             EndpointKind::IngestDoc => self.ingest_doc(ctx, trace).await,
+            EndpointKind::IngestBulk => self.ingest_bulk(ctx, trace).await,
             EndpointKind::GetById => self.get_by_id(ctx, trace).await,
             EndpointKind::DeleteById => self.delete_by_id(ctx, trace).await,
             EndpointKind::Search => self.search(ctx, trace).await,
@@ -223,7 +224,7 @@ mod tests {
 
     #[tokio::test]
     async fn unimplemented_endpoint_is_unsupported() {
-        // Bulk is tenancy-aware but not yet wired in the pipeline (M3).
+        // Cursor is tenancy-aware but not yet wired in the pipeline (M5).
         let p = pipeline();
         let principal = Principal::new(PrincipalId::from("svc"));
         let rid = RequestId::from("r");
@@ -232,14 +233,14 @@ mod tests {
             &principal,
             &rid,
             &headers,
-            EndpointKind::IngestBulk,
+            EndpointKind::Cursor,
             br#"{"q":1}"#,
         );
         let err = p.handle(&c).await.unwrap_err();
         assert!(matches!(
             err,
             RequestError::Spi(SpiError::UnsupportedEndpoint {
-                endpoint: EndpointKind::IngestBulk
+                endpoint: EndpointKind::Cursor
             })
         ));
     }

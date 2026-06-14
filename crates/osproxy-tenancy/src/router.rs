@@ -47,7 +47,7 @@ impl<T: TenancySpi> TenancyRouter<T> {
         &self.spi
     }
 
-    /// Resolves the full routing plan for `ctx`.
+    /// Resolves the full routing plan for `ctx` (the single-document path).
     ///
     /// # Errors
     ///
@@ -60,13 +60,46 @@ impl<T: TenancySpi> TenancyRouter<T> {
                 endpoint: ctx.endpoint(),
             });
         }
-        // A single document parses cheaply; bulk streaming is M3 (docs/04 §3).
         let doc = serde_json::from_slice::<Value>(ctx.body()).ok();
-        let partition = resolve_partition(&self.spi.partition_key(), ctx, doc.as_ref())?;
-        let at = self.spi.placement_for(&partition).await?;
-        let target = target_for(&at.placement, ctx.logical_index());
-        let body_transform = self.build_transform(&at.placement, &partition, ctx)?;
+        let partition = self.resolve_partition(ctx, doc.as_ref())?;
+        self.resolve_placement(ctx, partition, ctx.logical_index())
+            .await
+    }
 
+    /// Resolves just the partition id for a request and document, without a
+    /// placement lookup. The per-document entry point for bulk demux (`docs/04`
+    /// §3), where each operation carries its own source.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SpiError::PartitionUnresolved`] if no configured source yields
+    /// the partition.
+    pub fn resolve_partition(
+        &self,
+        ctx: &RequestCtx<'_>,
+        doc: Option<&Value>,
+    ) -> Result<PartitionId, SpiError> {
+        resolve_partition(&self.spi.partition_key(), ctx, doc)
+    }
+
+    /// Resolves a known partition to its placement and the routing plan for a
+    /// given logical index. Separated from [`Self::resolve_partition`] so a bulk
+    /// request can resolve the partition per document but cache the placement
+    /// per partition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SpiError`] if no placement exists or the configured transforms
+    /// are invalid (e.g. a shared-index id rule that omits the partition).
+    pub async fn resolve_placement(
+        &self,
+        ctx: &RequestCtx<'_>,
+        partition: PartitionId,
+        logical_index: &str,
+    ) -> Result<Resolved, SpiError> {
+        let at = self.spi.placement_for(&partition).await?;
+        let target = target_for(&at.placement, logical_index);
+        let body_transform = self.build_transform(&at.placement, &partition, ctx)?;
         let decision = RouteDecision {
             target,
             upstream_protocol: ctx.protocol(),

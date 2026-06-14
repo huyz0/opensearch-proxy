@@ -9,6 +9,11 @@
 
 // Test scaffolding (helpers + spawned server/container, not `#[test]` fns).
 #![allow(clippy::unwrap_used)]
+// JUSTIFY(file-length): the live-OpenSearch exit gate — several end-to-end
+// scenarios (ingest, by-id read/delete, search/count isolation, bulk demux,
+// blind diagnosis) share one set of container/proxy scaffolding helpers.
+// Splitting into multiple files would duplicate that ~120-line scaffold per
+// file (and spin extra containers); keeping them together is the cohesive unit.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -318,6 +323,64 @@ async fn assert_count_is_partition_scoped(client: &HttpClient, proxy: &str) {
         counted["count"], 1,
         "count must be partition-scoped: {counted}"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires Docker; run with --ignored"]
+async fn bulk_demux_round_trips_to_real_opensearch() {
+    let client: HttpClient = Client::builder(TokioExecutor::new()).build_http();
+    let (_container, os_base) = start_opensearch().await;
+    assert!(
+        wait_ready(&client, &os_base).await,
+        "opensearch did not become ready"
+    );
+    let proxy = spawn_proxy(os_base.clone()).await;
+
+    // A mixed-partition bulk through the proxy: two acme docs and one globex.
+    let ndjson = concat!(
+        "{\"index\":{}}\n{\"tenant_id\":\"acme\",\"id\":1,\"msg\":\"a1\"}\n",
+        "{\"index\":{}}\n{\"tenant_id\":\"globex\",\"id\":2,\"msg\":\"g2\"}\n",
+        "{\"index\":{}}\n{\"tenant_id\":\"acme\",\"id\":3,\"msg\":\"a3\"}\n",
+    );
+    let (status, body) = send(
+        &client,
+        Method::POST,
+        &format!("{proxy}/orders/_bulk"),
+        Bytes::from_static(ndjson.as_bytes()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, 200, "{body}");
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["errors"], false, "{body}");
+    let items = parsed["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    for item in items {
+        assert_eq!(item["index"]["status"], 201, "{body}");
+    }
+
+    let _ = send(
+        &client,
+        Method::POST,
+        &format!("{os_base}/{INDEX}/_refresh"),
+        Bytes::new(),
+    )
+    .await
+    .unwrap();
+
+    // acme sees exactly its two bulk docs; globex's is isolated out.
+    let (status, counted) = request_with_tenant(
+        &client,
+        Method::POST,
+        &format!("{proxy}/orders/_count"),
+        "acme",
+        Bytes::from_static(br#"{"query":{"match_all":{}}}"#),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, 200, "{counted}");
+    let counted: serde_json::Value = serde_json::from_str(&counted).unwrap();
+    assert_eq!(counted["count"], 2, "acme bulk docs, isolated: {counted}");
 }
 
 #[tokio::test]

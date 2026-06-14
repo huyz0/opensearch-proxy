@@ -37,6 +37,20 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         Ok(response_for(&ack))
     }
 
+    /// The bulk-ingest path (`docs/04` §3): parse the NDJSON body, demux the
+    /// operations by target, dispatch, and re-interleave the per-item results.
+    ///
+    /// Bulk spans many partitions/targets, so the per-operation outcome lives
+    /// positionally in the response body rather than in a single resolve/dispatch
+    /// span; `handle` still records the classify and egress shapes.
+    pub(crate) async fn ingest_bulk(
+        &self,
+        ctx: &RequestCtx<'_>,
+        _trace: &mut RequestTrace,
+    ) -> Result<PipelineResponse, RequestError> {
+        crate::bulk::ingest_bulk(&self.router, &self.sink, ctx).await
+    }
+
     /// The get-by-id read path (`docs/04` §5): resolve the partition, map the
     /// client's logical id to the physical id, fetch it, and shape the stored
     /// document back into the client's logical view (injected fields stripped).

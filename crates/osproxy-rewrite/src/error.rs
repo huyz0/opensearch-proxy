@@ -44,6 +44,11 @@ pub enum RewriteError {
         placeholder: String,
     },
 
+    /// A `_bulk` action line is not a single-key `{verb: {…}}` object, names an
+    /// unknown verb, or an action that needs a source line has none.
+    #[error("malformed _bulk action line")]
+    MalformedBulkAction,
+
     /// An id template cannot be reversed to recover a logical id on the read
     /// path: a logical→physical mapping needs exactly one `{body.<path>}`
     /// placeholder (the natural key), so a template with none or several is not
