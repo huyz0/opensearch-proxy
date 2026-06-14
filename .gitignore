@@ -1,0 +1,15 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock          # this is a library workspace; keep lockfile out of crates, re-add for the binary if desired
+
+# Coverage / profiling
+/coverage
+*.profraw
+dhat-heap.json
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
