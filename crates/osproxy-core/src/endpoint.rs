@@ -17,9 +17,13 @@ pub enum EndpointKind {
     IngestDoc,
     /// Bulk ingest (`_bulk`): demux by partition, re-interleave `items[]`.
     IngestBulk,
-    /// Search/read (`_search`, `_msearch`): partition filter + response field
-    /// strip, single target.
+    /// Search/read (`_search`): partition filter + response field strip,
+    /// single target.
     Search,
+    /// Multi-search (`_msearch`): per-search partition filter + hit strip,
+    /// demux by target, re-interleave `responses[]` — the search counterpart of
+    /// `_bulk`.
+    MultiSearch,
     /// Count (`_count`): same partition filter as search, but returns a count
     /// rather than hits, so no response field strip.
     Count,
@@ -50,6 +54,7 @@ impl EndpointKind {
             Self::IngestDoc
                 | Self::IngestBulk
                 | Self::Search
+                | Self::MultiSearch
                 | Self::Count
                 | Self::GetById
                 | Self::MultiGet
@@ -82,6 +87,7 @@ mod tests {
             EndpointKind::IngestDoc,
             EndpointKind::IngestBulk,
             EndpointKind::Search,
+            EndpointKind::MultiSearch,
             EndpointKind::Count,
             EndpointKind::GetById,
             EndpointKind::MultiGet,

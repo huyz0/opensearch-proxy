@@ -21,6 +21,7 @@ mod extract;
 mod fields;
 mod id;
 mod mget;
+mod msearch;
 mod query;
 
 pub use bulk::{parse_bulk, BulkAction, BulkItem};
@@ -29,4 +30,5 @@ pub use extract::extract_scalar;
 pub use fields::{inject_fields, strip_fields};
 pub use id::{construct_id, map_logical_to_physical, map_physical_to_logical};
 pub use mget::{parse_mget, MgetItem};
+pub use msearch::{parse_msearch, MsearchItem};
 pub use query::wrap_query;

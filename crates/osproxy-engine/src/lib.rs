@@ -18,6 +18,7 @@ mod bulk;
 mod endpoints;
 mod error;
 mod mget;
+mod msearch;
 mod observe;
 mod pipeline;
 mod plan;

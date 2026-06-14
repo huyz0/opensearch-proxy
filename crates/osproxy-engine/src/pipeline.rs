@@ -111,6 +111,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             EndpointKind::MultiGet => self.multi_get(ctx, trace).await,
             EndpointKind::DeleteById => self.delete_by_id(ctx, trace).await,
             EndpointKind::Search => self.search(ctx, trace).await,
+            EndpointKind::MultiSearch => self.multi_search(ctx, trace).await,
             EndpointKind::Count => self.count(ctx, trace).await,
             other => Err(RequestError::Spi(SpiError::UnsupportedEndpoint {
                 endpoint: other,

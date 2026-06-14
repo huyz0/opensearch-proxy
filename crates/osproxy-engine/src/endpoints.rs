@@ -155,6 +155,20 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         })
     }
 
+    /// The multi-search path (`docs/04` §4): the search counterpart of `_bulk`.
+    /// Resolves the caller's partition once, then per search resolves its
+    /// placement, wraps the client query in the mandatory partition filter, runs
+    /// it (bounded-concurrently), and re-interleaves the stripped responses in
+    /// input order. Per-search outcome is positional in the body, so no single
+    /// resolve/dispatch span is recorded; classify and egress still are.
+    pub(crate) async fn multi_search(
+        &self,
+        ctx: &RequestCtx<'_>,
+        _trace: &mut RequestTrace,
+    ) -> Result<PipelineResponse, RequestError> {
+        crate::msearch::multi_search(&self.router, &self.sink, ctx).await
+    }
+
     /// The count path (`docs/04` §4): same mandatory partition filter as search,
     /// but the upstream returns only a total, so there is nothing to strip — the
     /// count is already scoped to the caller's partition.
