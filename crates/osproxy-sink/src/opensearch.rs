@@ -8,6 +8,7 @@
 //! the transport slice without changing this mapping.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -17,12 +18,13 @@ use hyper::{Method, Request, Response};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use osproxy_core::ClusterId;
+use osproxy_core::{Clock, ClusterId, SystemClock};
 use osproxy_spi::Protocol;
 use serde_json::Value;
 
 use crate::ack::{OpResult, WriteAck};
 use crate::batch::{WriteBatch, WriteOp};
+use crate::breaker::Breaker;
 use crate::error::SinkError;
 use crate::read::{CountOutcome, ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome};
 use crate::sink::Sink;
@@ -40,6 +42,9 @@ struct ClusterPool {
     base: String,
     client_h1: HttpClient,
     client_h2: HttpClient,
+    /// Passive health breaker: a run of failures opens it and the cluster is
+    /// shed until a cooldown elapses (health-checked eviction).
+    breaker: Breaker,
 }
 
 impl ClusterPool {
@@ -51,6 +56,7 @@ impl ClusterPool {
             client_h2: Client::builder(TokioExecutor::new())
                 .http2_only(true)
                 .build_http(),
+            breaker: Breaker::default(),
         }
     }
 
@@ -68,17 +74,38 @@ impl ClusterPool {
 /// connection but never responds must not stall the request forever (NFR-R7).
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How many consecutive transport/timeout failures open a cluster's breaker.
+const DEFAULT_FAILURE_THRESHOLD: u32 = 5;
+
+/// How long a cluster is shed once its breaker opens, before a half-open trial.
+const DEFAULT_COOLDOWN: Duration = Duration::from_secs(5);
+
 /// A [`Sink`] that writes directly to OpenSearch clusters over pooled HTTP.
 ///
 /// Holds a `ClusterPool` per cluster — its own base URL and pooled HTTP/1.1
 /// and HTTP/2 (prior-knowledge) clients. Each operation selects the client
 /// matching its resolved upstream [`Protocol`] (`docs/04` §7), so the proxy can
 /// speak h2 to a cluster that supports it while defaulting to h1. Every dispatch
-/// is bounded by a per-request timeout so a stuck upstream fails fast (NFR-R7).
-#[derive(Debug)]
+/// is bounded by a per-request timeout so a stuck upstream fails fast (NFR-R7),
+/// and a per-cluster circuit breaker sheds a cluster that keeps failing.
 pub struct OpenSearchSink {
     clusters: HashMap<ClusterId, ClusterPool>,
     timeout: Duration,
+    failure_threshold: u32,
+    cooldown: Duration,
+    clock: Arc<dyn Clock>,
+}
+
+impl std::fmt::Debug for OpenSearchSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The injected `Clock` is not `Debug`; the rest is the useful shape.
+        f.debug_struct("OpenSearchSink")
+            .field("clusters", &self.clusters)
+            .field("timeout", &self.timeout)
+            .field("failure_threshold", &self.failure_threshold)
+            .field("cooldown", &self.cooldown)
+            .finish_non_exhaustive()
+    }
 }
 
 impl OpenSearchSink {
@@ -93,6 +120,9 @@ impl OpenSearchSink {
         Self {
             clusters,
             timeout: DEFAULT_TIMEOUT,
+            failure_threshold: DEFAULT_FAILURE_THRESHOLD,
+            cooldown: DEFAULT_COOLDOWN,
+            clock: Arc::new(SystemClock),
         }
     }
 
@@ -103,6 +133,22 @@ impl OpenSearchSink {
         self
     }
 
+    /// Sets the circuit-breaker thresholds: open after `failure_threshold`
+    /// consecutive failures, shed for `cooldown` before a half-open trial.
+    #[must_use]
+    pub fn with_breaker(mut self, failure_threshold: u32, cooldown: Duration) -> Self {
+        self.failure_threshold = failure_threshold;
+        self.cooldown = cooldown;
+        self
+    }
+
+    /// Swaps the clock the breaker reads (tests inject a `ManualClock`).
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
     /// Resolves a cluster's pool, or a transport error if it is unconfigured.
     fn pool_for(&self, cluster: &ClusterId) -> Result<&ClusterPool, SinkError> {
         self.clusters.get(cluster).ok_or(SinkError::Transport {
@@ -110,20 +156,41 @@ impl OpenSearchSink {
         })
     }
 
-    /// Sends a request over `client`, bounded by the per-request timeout: a
-    /// transport failure or an elapsed deadline is a retryable [`SinkError`].
+    /// Sends a request to a cluster's pool, bounded by the per-request timeout
+    /// and gated by the cluster's circuit breaker.
+    ///
+    /// A shed request (breaker open) and a transport/timeout failure are both
+    /// retryable [`SinkError`]s; failures feed the breaker so a persistently
+    /// failing cluster is evicted until it recovers (health-checked eviction).
     async fn send(
         &self,
-        client: &HttpClient,
+        pool: &ClusterPool,
+        protocol: Protocol,
         req: Request<Full<Bytes>>,
         fail_kind: &'static str,
     ) -> Result<Response<Incoming>, SinkError> {
-        match tokio::time::timeout(self.timeout, client.request(req)).await {
-            Ok(Ok(resp)) => Ok(resp),
-            Ok(Err(_)) => Err(SinkError::Transport { kind: fail_kind }),
-            Err(_elapsed) => Err(SinkError::Transport {
-                kind: "upstream timeout",
-            }),
+        if !pool.breaker.allows(self.clock.now(), self.cooldown) {
+            return Err(SinkError::Transport {
+                kind: "cluster shed (circuit open)",
+            });
+        }
+        match tokio::time::timeout(self.timeout, pool.client(protocol).request(req)).await {
+            Ok(Ok(resp)) => {
+                pool.breaker.record_success();
+                Ok(resp)
+            }
+            Ok(Err(_)) => {
+                pool.breaker
+                    .record_failure(self.clock.now(), self.failure_threshold);
+                Err(SinkError::Transport { kind: fail_kind })
+            }
+            Err(_elapsed) => {
+                pool.breaker
+                    .record_failure(self.clock.now(), self.failure_threshold);
+                Err(SinkError::Transport {
+                    kind: "upstream timeout",
+                })
+            }
         }
     }
 
@@ -142,7 +209,7 @@ impl OpenSearchSink {
             })?;
 
         let resp = self
-            .send(pool.client(op.protocol), req, "upstream query failed")
+            .send(pool, op.protocol, req, "upstream query failed")
             .await?;
         let status = resp.status().as_u16();
         if status >= 500 {
@@ -169,7 +236,7 @@ impl OpenSearchSink {
         let (req, fallback_id) = build_request(&pool.base, &op.target.index, &op.doc)?;
 
         let resp = self
-            .send(pool.client(op.protocol), req, "upstream request failed")
+            .send(pool, op.protocol, req, "upstream request failed")
             .await?;
         let status = resp.status().as_u16();
         if status >= 500 {
@@ -209,7 +276,7 @@ impl Reader for OpenSearchSink {
             })?;
 
         let resp = self
-            .send(pool.client(op.protocol), req, "upstream read failed")
+            .send(pool, op.protocol, req, "upstream read failed")
             .await?;
         let status = resp.status().as_u16();
         // 404 is a normal "document does not exist"; only 5xx is a real failure.

@@ -16,6 +16,7 @@
 
 mod ack;
 mod batch;
+mod breaker;
 mod error;
 mod memory;
 mod opensearch;

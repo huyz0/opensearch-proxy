@@ -205,6 +205,66 @@ async fn read_from_unreachable_upstream_is_a_transport_error() {
 }
 
 #[tokio::test]
+async fn a_failing_cluster_is_evicted_then_retried_after_cooldown() {
+    use osproxy_core::ManualClock;
+    use osproxy_sink::SinkError;
+
+    // A dead endpoint: every dispatch is a fast connection failure.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+
+    let clock = Arc::new(ManualClock::new());
+    let mut endpoints = HashMap::new();
+    endpoints.insert(ClusterId::from("eu-1"), format!("http://{addr}"));
+    let sink = OpenSearchSink::new(endpoints)
+        .with_clock(clock.clone())
+        .with_breaker(2, std::time::Duration::from_secs(5));
+
+    let write = || async {
+        sink.write(WriteBatch::single(WriteOp::new(
+            Target::new(ClusterId::from("eu-1"), IndexName::from("i")),
+            DocOp::Index {
+                id: Some("x".to_owned()),
+                routing: None,
+                body: b"{}".to_vec(),
+            },
+            Epoch::new(1),
+        )))
+        .await
+        .unwrap_err()
+    };
+
+    // Two real connection failures trip the breaker (threshold 2).
+    let kind = |e: SinkError| match e {
+        SinkError::Transport { kind } => kind,
+        other => unreachable!("expected transport error, got {other:?}"),
+    };
+    assert!(
+        !kind(write().await).contains("circuit"),
+        "1st is a real attempt"
+    );
+    assert!(
+        !kind(write().await).contains("circuit"),
+        "2nd is a real attempt"
+    );
+
+    // The cluster is now shed — the next request fails fast without attempting.
+    assert!(
+        kind(write().await).contains("circuit"),
+        "evicted cluster must be shed"
+    );
+
+    // After the cooldown a half-open trial is attempted again (it still fails,
+    // since the endpoint is dead — but it is no longer shed outright).
+    clock.advance(std::time::Duration::from_secs(6));
+    assert!(
+        !kind(write().await).contains("circuit"),
+        "after cooldown the cluster is retried"
+    );
+}
+
+#[tokio::test]
 async fn a_stuck_upstream_times_out_and_is_retryable() {
     // A server that accepts the connection but never sends a response — the
     // request must not hang forever; the per-request timeout fails it fast
