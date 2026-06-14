@@ -66,7 +66,9 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Coverage gate
-        run: cargo llvm-cov --workspace --fail-under-lines 90 --ignore-filename-regex 'xtask|osproxy-server'
+        # `--lib --tests` excludes benches (iai-callgrind needs valgrind, absent
+        # in this job) and matches what `cargo xtask test` measures.
+        run: cargo llvm-cov --workspace --lib --tests --fail-under-lines 90 --ignore-filename-regex 'xtask|osproxy-server'
 
   perf:
     name: Deterministic perf (iai-callgrind)
@@ -78,8 +80,9 @@ jobs:
       - name: Install valgrind
         run: sudo apt-get update && sudo apt-get install -y valgrind
       - name: Install iai-callgrind-runner
+        # Must match the iai-callgrind dev-dependency version in osproxy-core.
         uses: taiki-e/install-action@v2
         with:
-          tool: iai-callgrind-runner
+          tool: iai-callgrind-runner@0.14.2
       - name: Instruction-count benchmarks
         run: cargo xtask bench

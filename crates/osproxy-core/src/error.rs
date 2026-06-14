@@ -141,10 +141,33 @@ impl std::error::Error for ErrorContext {}
 mod tests {
     use super::*;
 
+    /// Every variant's slug and Display, so each `as_slug` arm is exercised and
+    /// slugs stay stable, distinct, and lowercase (they are part of the public
+    /// contract — operators and LLMs match on them).
     #[test]
-    fn slugs_are_stable_and_lowercase() {
-        assert_eq!(ErrorCode::StaleEpoch.as_slug(), "stale_epoch");
-        assert_eq!(ErrorCode::StaleEpoch.to_string(), "stale_epoch");
+    fn every_error_code_has_a_stable_distinct_slug() {
+        let all = [
+            ErrorCode::PartitionUnresolved,
+            ErrorCode::PlacementMissing,
+            ErrorCode::PlacementBackendUnavailable,
+            ErrorCode::UnsupportedEndpoint,
+            ErrorCode::StaleEpoch,
+            ErrorCode::AuthFailed,
+            ErrorCode::Unauthorized,
+            ErrorCode::UpstreamFailed,
+            ErrorCode::Overloaded,
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for code in all {
+            let slug = code.as_slug();
+            assert_eq!(slug, code.to_string(), "Display must equal as_slug");
+            assert!(
+                slug.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "{slug} must be lowercase snake_case"
+            );
+            assert!(seen.insert(slug), "duplicate slug {slug}");
+        }
+        assert_eq!(seen.len(), all.len());
     }
 
     #[test]

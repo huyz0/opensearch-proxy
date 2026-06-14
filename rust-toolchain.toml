@@ -1,4 +1,8 @@
 [toolchain]
-channel = "stable"
-components = ["rustfmt", "clippy"]
+# Pinned to an exact version so clippy's lint set is identical locally and in CI
+# (a floating "stable" drifts and breaks the gate unpredictably). Bumping this is
+# a deliberate event — see docs/12. rust-toolchain.toml takes precedence over the
+# CI runner's default toolchain, so this single line is the source of truth.
+channel = "1.94.1"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
 profile = "default"

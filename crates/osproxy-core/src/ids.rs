@@ -148,5 +148,7 @@ mod tests {
         assert_eq!(Epoch::ZERO.next(), Epoch::new(1));
         assert!(Epoch::new(1) > Epoch::ZERO);
         assert_eq!(Epoch::new(u64::MAX).next(), Epoch::new(u64::MAX));
+        // Display renders the bare generation number (used in trace attributes).
+        assert_eq!(Epoch::new(42).to_string(), "42");
     }
 }

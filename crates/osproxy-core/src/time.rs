@@ -92,7 +92,7 @@ impl ManualClock {
 
 impl Clock for ManualClock {
     fn now(&self) -> Instant {
-        Instant(self.nanos.lock().map(|n| *n).unwrap_or(0))
+        Instant(self.nanos.lock().map_or(0, |n| *n))
     }
 }
 
