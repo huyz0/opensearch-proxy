@@ -134,13 +134,8 @@ where
 /// Extracts connection-level facts (the verified mTLS client identity) from a
 /// completed TLS handshake.
 fn conn_info_from_tls(tls: &tokio_rustls::server::TlsStream<tokio::net::TcpStream>) -> ConnInfo {
-    let (_, conn) = tls.get_ref();
-    let client_cert_subject = conn
-        .peer_certificates()
-        .and_then(<[_]>::first)
-        .map(|cert| format!("cert:{}", crate::tls::cert_fingerprint(cert.as_ref())));
     ConnInfo {
-        client_cert_subject,
+        client_cert_subject: crate::tls::client_subject_from_tls(tls),
     }
 }
 

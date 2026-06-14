@@ -124,6 +124,19 @@ impl RingProvider {
     }
 }
 
+/// The verified mTLS client identity from a completed handshake, if the peer
+/// presented a certificate: a stable `cert:{fingerprint}` id, never the
+/// certificate material. Shared by the HTTP and gRPC ingress paths.
+#[must_use]
+pub(crate) fn client_subject_from_tls(
+    tls: &tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+) -> Option<String> {
+    let (_, conn) = tls.get_ref();
+    conn.peer_certificates()
+        .and_then(<[_]>::first)
+        .map(|cert| format!("cert:{}", cert_fingerprint(cert.as_ref())))
+}
+
 /// A stable identity for a verified client certificate: the lowercase hex
 /// SHA-256 fingerprint of its DER. Not the certificate material, so it is safe
 /// to carry as an id and surface in telemetry.

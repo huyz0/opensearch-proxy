@@ -21,7 +21,7 @@ use osproxy_server::handler::AppHandler;
 use osproxy_server::tenancy::ReferenceTenancy;
 use osproxy_sink::OpenSearchSink;
 use osproxy_tenancy::TenancyRouter;
-use osproxy_transport::RingProvider;
+use osproxy_transport::{IngressHandler, RingProvider};
 use tokio::net::TcpListener;
 
 /// Entry point. Returns a process exit code rather than panicking, consistent
@@ -67,6 +67,10 @@ async fn run() -> Result<(), String> {
         .await
         .map_err(|e| format!("binding {bind}: {e}"))?;
 
+    // TLS when both cert and key paths are configured; cleartext otherwise. The
+    // same provider terminates the HTTP and gRPC listeners.
+    let provider = load_tls_provider()?.map(Arc::new);
+
     // Optional gRPC ingress on its own listener, driving the same handler
     // (same pipeline, tenancy, and observability) as the HTTP front door.
     if let Some(grpc_bind) = std::env::var("OSPROXY_GRPC_BIND")
@@ -76,31 +80,49 @@ async fn run() -> Result<(), String> {
         let grpc_listener = TcpListener::bind(&grpc_bind)
             .await
             .map_err(|e| format!("binding gRPC {grpc_bind}: {e}"))?;
-        let grpc_handler = Arc::clone(&handler);
-        println!("osproxy gRPC listening on grpc://{grpc_bind}");
-        tokio::spawn(async move {
-            if let Err(e) = osproxy_transport::serve_grpc(grpc_listener, grpc_handler).await {
-                eprintln!("osproxy: gRPC serve error: {e}");
-            }
-        });
+        spawn_grpc(
+            grpc_listener,
+            provider.clone(),
+            Arc::clone(&handler),
+            &grpc_bind,
+        );
     }
 
-    // TLS when both cert and key paths are configured; cleartext otherwise.
-    if let Some(provider) = load_tls_provider()? {
+    if let Some(provider) = provider {
         println!(
             "osproxy listening on https://{bind}, upstream {upstream}, shared index {index}, auth {auth_mode}"
         );
-        serve_until_signal(osproxy_transport::serve_tls(
-            listener,
-            Arc::new(provider),
-            handler,
-        ))
-        .await
+        serve_until_signal(osproxy_transport::serve_tls(listener, provider, handler)).await
     } else {
         println!(
             "osproxy listening on http://{bind}, upstream {upstream}, shared index {index}, auth {auth_mode}"
         );
         serve_until_signal(osproxy_transport::serve(listener, handler)).await
+    }
+}
+
+/// Spawns the gRPC ingress on its own listener, over TLS when a `provider` is
+/// configured (matching the HTTP listener) and cleartext otherwise.
+fn spawn_grpc<H: IngressHandler>(
+    listener: TcpListener,
+    provider: Option<Arc<RingProvider>>,
+    handler: Arc<H>,
+    grpc_bind: &str,
+) {
+    if let Some(provider) = provider {
+        println!("osproxy gRPC listening on grpcs://{grpc_bind}");
+        tokio::spawn(async move {
+            if let Err(e) = osproxy_transport::serve_grpc_tls(listener, provider, handler).await {
+                eprintln!("osproxy: gRPC serve error: {e}");
+            }
+        });
+    } else {
+        println!("osproxy gRPC listening on grpc://{grpc_bind}");
+        tokio::spawn(async move {
+            if let Err(e) = osproxy_transport::serve_grpc(listener, handler).await {
+                eprintln!("osproxy: gRPC serve error: {e}");
+            }
+        });
     }
 }
 

@@ -31,7 +31,7 @@ tonic-prost-build.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time"] }
 hyper = { workspace = true, features = ["client"] }
 hyper-util = { workspace = true, features = ["client", "client-legacy", "http1", "http2", "tokio"] }
-tonic = { workspace = true, features = ["server", "router", "transport", "channel"] }
+tonic = { workspace = true, features = ["server", "router", "transport", "channel", "tls-ring"] }
 rcgen.workspace = true
 
 [lints]
