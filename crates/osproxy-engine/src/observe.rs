@@ -50,18 +50,22 @@ pub(crate) fn dispatch_info(resolved: &Resolved, ack: &WriteAck) -> DispatchInfo
     DispatchInfo {
         cluster: resolved.decision.target.cluster.clone(),
         upstream_status: ack.results().first().map_or(0, |r| r.status),
-        // Pool reuse telemetry from the sink attaches in M4; unknown for now.
-        pool_reuse: false,
+        pool_reuse: ack.pool_reuse(),
     }
 }
 
-/// Builds the `dispatch` span for a read from the resolved target and the
-/// upstream read status (a get-by-id has no write ack).
-pub(crate) fn read_dispatch_info(resolved: &Resolved, upstream_status: u16) -> DispatchInfo {
+/// Builds the `dispatch` span for a read from the resolved target, the upstream
+/// read status, and whether the read reused a pooled connection (a get-by-id or
+/// query has no write ack).
+pub(crate) fn read_dispatch_info(
+    resolved: &Resolved,
+    upstream_status: u16,
+    pool_reuse: bool,
+) -> DispatchInfo {
     DispatchInfo {
         cluster: resolved.decision.target.cluster.clone(),
         upstream_status,
-        pool_reuse: false,
+        pool_reuse,
     }
 }
 

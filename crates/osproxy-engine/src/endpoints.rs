@@ -68,7 +68,11 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         let (read_op, shape) = build_read_op(&resolved, logical_id)?;
 
         let outcome = self.sink.get(read_op).await?;
-        trace.record_dispatch(read_dispatch_info(&resolved, outcome.status));
+        trace.record_dispatch(read_dispatch_info(
+            &resolved,
+            outcome.status,
+            outcome.pool_reuse,
+        ));
 
         if outcome.found {
             let body = shape_found(
@@ -141,7 +145,11 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
 
         let (search_op, shape) = build_search_op(&resolved, ctx.body())?;
         let outcome = self.sink.search(search_op).await?;
-        trace.record_dispatch(read_dispatch_info(&resolved, outcome.status));
+        trace.record_dispatch(read_dispatch_info(
+            &resolved,
+            outcome.status,
+            outcome.pool_reuse,
+        ));
 
         let body = shape_hits(
             &outcome.body,
@@ -182,7 +190,11 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
 
         let (search_op, _shape) = build_search_op(&resolved, ctx.body())?;
         let outcome = self.sink.count(search_op).await?;
-        trace.record_dispatch(read_dispatch_info(&resolved, outcome.status));
+        trace.record_dispatch(read_dispatch_info(
+            &resolved,
+            outcome.status,
+            outcome.pool_reuse,
+        ));
 
         let body = format!(r#"{{"count":{}}}"#, outcome.count).into_bytes();
         Ok(PipelineResponse {

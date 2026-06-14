@@ -382,7 +382,7 @@ async fn repeated_writes_reuse_one_pooled_connection() {
     let (base, accepts) = start_pooled_mock(r#"{"_id":"a:1","result":"created"}"#).await;
     let sink = sink_for("eu-1", base);
 
-    for _ in 0..WRITES {
+    for i in 0..WRITES {
         let op = WriteOp::new(
             Target::new(ClusterId::from("eu-1"), IndexName::from("orders")),
             DocOp::Index {
@@ -392,7 +392,14 @@ async fn repeated_writes_reuse_one_pooled_connection() {
             },
             Epoch::new(1),
         );
-        sink.write(WriteBatch::single(op)).await.unwrap();
+        let ack = sink.write(WriteBatch::single(op)).await.unwrap();
+        // The ack's pool-reuse flag (which feeds the dispatch span) is false for
+        // the first, cold write and true once the pool is warm.
+        assert_eq!(
+            ack.pool_reuse(),
+            i > 0,
+            "write {i} reuse flag must reflect a warm pool"
+        );
     }
 
     // The server accepted exactly one TCP connection for all the writes.

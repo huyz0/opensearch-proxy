@@ -59,6 +59,8 @@ pub struct ReadOutcome {
     pub found: bool,
     /// The raw upstream response body (the stored document when `found`).
     pub body: Vec<u8>,
+    /// Whether this read rode a reused pooled connection (NFR-P telemetry).
+    pub pool_reuse: bool,
 }
 
 impl ReadOutcome {
@@ -69,6 +71,7 @@ impl ReadOutcome {
             status,
             found: true,
             body,
+            pool_reuse: false,
         }
     }
 
@@ -79,7 +82,15 @@ impl ReadOutcome {
             status,
             found: false,
             body,
+            pool_reuse: false,
         }
+    }
+
+    /// Records whether the dispatch reused a pooled connection (builder style).
+    #[must_use]
+    pub fn with_pool_reuse(mut self, reused: bool) -> Self {
+        self.pool_reuse = reused;
+        self
     }
 }
 
@@ -125,13 +136,26 @@ pub struct SearchOutcome {
     pub status: u16,
     /// The raw upstream response body (the hits envelope).
     pub body: Vec<u8>,
+    /// Whether this search rode a reused pooled connection (NFR-P telemetry).
+    pub pool_reuse: bool,
 }
 
 impl SearchOutcome {
     /// Constructs a search outcome.
     #[must_use]
     pub fn new(status: u16, body: Vec<u8>) -> Self {
-        Self { status, body }
+        Self {
+            status,
+            body,
+            pool_reuse: false,
+        }
+    }
+
+    /// Records whether the dispatch reused a pooled connection (builder style).
+    #[must_use]
+    pub fn with_pool_reuse(mut self, reused: bool) -> Self {
+        self.pool_reuse = reused;
+        self
     }
 }
 
@@ -142,13 +166,26 @@ pub struct CountOutcome {
     pub status: u16,
     /// The number of matching documents.
     pub count: u64,
+    /// Whether this count rode a reused pooled connection (NFR-P telemetry).
+    pub pool_reuse: bool,
 }
 
 impl CountOutcome {
     /// Constructs a count outcome.
     #[must_use]
     pub fn new(status: u16, count: u64) -> Self {
-        Self { status, count }
+        Self {
+            status,
+            count,
+            pool_reuse: false,
+        }
+    }
+
+    /// Records whether the dispatch reused a pooled connection (builder style).
+    #[must_use]
+    pub fn with_pool_reuse(mut self, reused: bool) -> Self {
+        self.pool_reuse = reused;
+        self
     }
 }
 

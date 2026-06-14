@@ -35,13 +35,31 @@ impl OpResult {
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct WriteAck {
     results: Vec<OpResult>,
+    pool_reuse: bool,
 }
 
 impl WriteAck {
     /// An ack with the given per-operation results.
     #[must_use]
     pub fn new(results: Vec<OpResult>) -> Self {
-        Self { results }
+        Self {
+            results,
+            pool_reuse: false,
+        }
+    }
+
+    /// Records whether the dispatch(es) rode reused pooled connections — true
+    /// only when every operation in the batch reused one (NFR-P telemetry).
+    #[must_use]
+    pub fn with_pool_reuse(mut self, reused: bool) -> Self {
+        self.pool_reuse = reused;
+        self
+    }
+
+    /// Whether this batch's dispatch rode reused pooled connection(s).
+    #[must_use]
+    pub fn pool_reuse(&self) -> bool {
+        self.pool_reuse
     }
 
     /// The per-operation results, in batch order.

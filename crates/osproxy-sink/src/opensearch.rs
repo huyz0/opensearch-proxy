@@ -191,23 +191,30 @@ impl OpenSearchSink {
     /// A shed request (breaker open) and a transport/timeout failure are both
     /// retryable [`SinkError`]s; failures feed the breaker so a persistently
     /// failing cluster is evicted until it recovers (health-checked eviction).
+    ///
+    /// On success returns the response plus whether it rode a *reused* pooled
+    /// connection: the counting connector only opens (and counts) a connection
+    /// when the pool has none to reuse, so an unchanged open-count across the
+    /// request means it reused one (NFR-P telemetry).
     async fn send(
         &self,
         pool: &ClusterPool,
         protocol: Protocol,
         req: Request<Full<Bytes>>,
         fail_kind: &'static str,
-    ) -> Result<Response<Incoming>, SinkError> {
+    ) -> Result<(Response<Incoming>, bool), SinkError> {
         if !pool.breaker.allows(self.clock.now(), self.cooldown) {
             return Err(SinkError::Transport {
                 kind: "cluster shed (circuit open)",
             });
         }
         pool.dispatched.fetch_add(1, Ordering::Relaxed);
+        let opens_before = pool.opened.load(Ordering::Relaxed);
         match tokio::time::timeout(self.timeout, pool.client(protocol).request(req)).await {
             Ok(Ok(resp)) => {
                 pool.breaker.record_success();
-                Ok(resp)
+                let reused = pool.opened.load(Ordering::Relaxed) == opens_before;
+                Ok((resp, reused))
             }
             Ok(Err(_)) => {
                 pool.breaker
@@ -226,7 +233,11 @@ impl OpenSearchSink {
 
     /// POSTs a (partition-filtered) query body to `{index}/{verb}` and returns
     /// the upstream status and raw response body. Shared by search and count.
-    async fn post_query(&self, verb: &str, op: &SearchOp) -> Result<(u16, Vec<u8>), SinkError> {
+    async fn post_query(
+        &self,
+        verb: &str,
+        op: &SearchOp,
+    ) -> Result<(u16, Vec<u8>, bool), SinkError> {
         let pool = self.pool_for(&op.target.cluster)?;
         let uri = format!("{}/{}/{verb}", pool.base, op.target.index.as_str());
         let req = Request::builder()
@@ -238,7 +249,7 @@ impl OpenSearchSink {
                 kind: "building upstream query request",
             })?;
 
-        let resp = self
+        let (resp, reused) = self
             .send(pool, op.protocol, req, "upstream query failed")
             .await?;
         let status = resp.status().as_u16();
@@ -257,15 +268,16 @@ impl OpenSearchSink {
             })?
             .to_bytes()
             .to_vec();
-        Ok((status, body))
+        Ok((status, body, reused))
     }
 
-    /// Sends a single operation and parses its result.
-    async fn dispatch(&self, op: &WriteOp) -> Result<OpResult, SinkError> {
+    /// Sends a single operation and parses its result, with whether the dispatch
+    /// reused a pooled connection.
+    async fn dispatch(&self, op: &WriteOp) -> Result<(OpResult, bool), SinkError> {
         let pool = self.pool_for(&op.target.cluster)?;
         let (req, fallback_id) = build_request(&pool.base, &op.target.index, &op.doc)?;
 
-        let resp = self
+        let (resp, reused) = self
             .send(pool, op.protocol, req, "upstream request failed")
             .await?;
         let status = resp.status().as_u16();
@@ -284,7 +296,7 @@ impl OpenSearchSink {
                 kind: "reading upstream response",
             })?
             .to_bytes();
-        Ok(parse_result(&body, fallback_id, status))
+        Ok((parse_result(&body, fallback_id, status), reused))
     }
 }
 
@@ -305,7 +317,7 @@ impl Reader for OpenSearchSink {
                 kind: "building upstream read request",
             })?;
 
-        let resp = self
+        let (resp, reused) = self
             .send(pool, op.protocol, req, "upstream read failed")
             .await?;
         let status = resp.status().as_u16();
@@ -329,21 +341,22 @@ impl Reader for OpenSearchSink {
             ReadOutcome::found(status, body)
         } else {
             ReadOutcome::not_found(status, body)
-        })
+        }
+        .with_pool_reuse(reused))
     }
 
     async fn search(&self, op: SearchOp) -> Result<SearchOutcome, SinkError> {
-        let (status, body) = self.post_query("_search", &op).await?;
-        Ok(SearchOutcome::new(status, body))
+        let (status, body, reused) = self.post_query("_search", &op).await?;
+        Ok(SearchOutcome::new(status, body).with_pool_reuse(reused))
     }
 
     async fn count(&self, op: SearchOp) -> Result<CountOutcome, SinkError> {
-        let (status, body) = self.post_query("_count", &op).await?;
+        let (status, body, reused) = self.post_query("_count", &op).await?;
         let count = serde_json::from_slice::<Value>(&body)
             .ok()
             .and_then(|v| v.get("count").and_then(Value::as_u64))
             .unwrap_or(0);
-        Ok(CountOutcome::new(status, count))
+        Ok(CountOutcome::new(status, count).with_pool_reuse(reused))
     }
 }
 
@@ -352,9 +365,14 @@ impl Sink for OpenSearchSink {
         // M1 batches are single-op; the loop is the M3 bulk seam (writes to one
         // target are issued in order to preserve item positioning).
         let mut results = Vec::with_capacity(batch.len());
+        // The whole batch counts as reuse only if every op rode a pooled
+        // connection (an empty batch trivially did).
+        let mut all_reused = true;
         for op in batch.ops() {
-            results.push(self.dispatch(op).await?);
+            let (result, reused) = self.dispatch(op).await?;
+            results.push(result);
+            all_reused &= reused;
         }
-        Ok(WriteAck::new(results))
+        Ok(WriteAck::new(results).with_pool_reuse(all_reused))
     }
 }
