@@ -6,5 +6,6 @@
 //! without spawning a process.
 #![deny(missing_docs)]
 
+pub mod auth;
 pub mod handler;
 pub mod tenancy;

@@ -20,6 +20,7 @@ use hyper_util::client::legacy::Client;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use osproxy_core::{ClusterId, IndexName};
 use osproxy_engine::Pipeline;
+use osproxy_server::auth::ReferenceAuthenticator;
 use osproxy_server::handler::AppHandler;
 use osproxy_server::tenancy::ReferenceTenancy;
 use osproxy_sink::OpenSearchSink;
@@ -81,10 +82,10 @@ async fn put_doc_is_tenanted_and_forwarded_upstream() {
     // The exact wiring the binary builds.
     let sink = OpenSearchSink::new(endpoints);
     let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
-    let handler = Arc::new(AppHandler::new(Pipeline::new(
-        TenancyRouter::new(tenancy),
-        sink,
-    )));
+    let handler = Arc::new(AppHandler::new(
+        Pipeline::new(TenancyRouter::new(tenancy), sink),
+        ReferenceAuthenticator::dev(),
+    ));
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy_addr = listener.local_addr().unwrap();
@@ -148,10 +149,10 @@ async fn unresolved_partition_returns_client_error() {
     endpoints.insert(cluster.clone(), upstream);
     let sink = OpenSearchSink::new(endpoints);
     let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
-    let handler = Arc::new(AppHandler::new(Pipeline::new(
-        TenancyRouter::new(tenancy),
-        sink,
-    )));
+    let handler = Arc::new(AppHandler::new(
+        Pipeline::new(TenancyRouter::new(tenancy), sink),
+        ReferenceAuthenticator::dev(),
+    ));
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy_addr = listener.local_addr().unwrap();
@@ -171,4 +172,57 @@ async fn unresolved_partition_returns_client_error() {
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("partition_unresolved"), "{text}");
+}
+
+#[tokio::test]
+async fn token_auth_rejects_missing_and_accepts_valid() {
+    let (upstream, _captured) = start_upstream().await;
+    let cluster = ClusterId::from("default");
+    let mut endpoints = HashMap::new();
+    endpoints.insert(cluster.clone(), upstream);
+    let sink = OpenSearchSink::new(endpoints);
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
+
+    let mut tokens = HashMap::new();
+    tokens.insert("s3cr3t".to_owned(), "svc-ingest".to_owned());
+    let handler = Arc::new(AppHandler::new(
+        Pipeline::new(TenancyRouter::new(tenancy), sink),
+        ReferenceAuthenticator::new(tokens),
+    ));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = osproxy_transport::serve(listener, handler).await;
+    });
+
+    let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
+    let body = || Full::new(Bytes::from_static(br#"{"tenant_id":"acme","id":7}"#));
+
+    // No token => 401.
+    let unauth = client
+        .request(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("http://{proxy_addr}/orders/_doc"))
+                .body(body())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauth.status(), 401);
+
+    // Valid token => 201.
+    let ok = client
+        .request(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("http://{proxy_addr}/orders/_doc"))
+                .header("authorization", "Bearer s3cr3t")
+                .body(body())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 201);
 }

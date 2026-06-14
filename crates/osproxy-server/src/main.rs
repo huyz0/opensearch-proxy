@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use osproxy_core::{ClusterId, IndexName};
 use osproxy_engine::Pipeline;
+use osproxy_server::auth::ReferenceAuthenticator;
 use osproxy_server::handler::AppHandler;
 use osproxy_server::tenancy::ReferenceTenancy;
 use osproxy_sink::OpenSearchSink;
@@ -48,12 +49,24 @@ async fn run() -> Result<(), String> {
 
     let tenancy = ReferenceTenancy::new(cluster, IndexName::from(index.as_str()));
     let pipeline = Pipeline::new(TenancyRouter::new(tenancy), sink);
-    let handler = Arc::new(AppHandler::new(pipeline));
+
+    let tokens = parse_tokens(&env_or("OSPROXY_TOKENS", ""));
+    let auth_mode = if tokens.is_empty() {
+        "dev (open)"
+    } else {
+        "token"
+    };
+    let handler = Arc::new(AppHandler::new(
+        pipeline,
+        ReferenceAuthenticator::new(tokens),
+    ));
 
     let listener = TcpListener::bind(&bind)
         .await
         .map_err(|e| format!("binding {bind}: {e}"))?;
-    println!("osproxy listening on {bind}, upstream {upstream}, shared index {index}");
+    println!(
+        "osproxy listening on {bind}, upstream {upstream}, shared index {index}, auth {auth_mode}"
+    );
 
     tokio::select! {
         result = osproxy_transport::serve(listener, handler) => {
@@ -72,4 +85,14 @@ fn env_or(key: &str, default: &str) -> String {
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| default.to_owned())
+}
+
+/// Parses a `token=principal,token2=principal2` list into a map. An empty input
+/// yields an empty map, which puts the authenticator in permissive dev mode.
+fn parse_tokens(spec: &str) -> HashMap<String, String> {
+    spec.split(',')
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(token, principal)| (token.trim().to_owned(), principal.trim().to_owned()))
+        .filter(|(token, principal)| !token.is_empty() && !principal.is_empty())
+        .collect()
 }

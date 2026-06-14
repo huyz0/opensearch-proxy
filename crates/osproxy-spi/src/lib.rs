@@ -19,6 +19,7 @@
 // and error types from a single dependency.
 pub use osproxy_core as core;
 
+mod auth;
 mod decision;
 mod error;
 mod placement;
@@ -28,6 +29,7 @@ mod routing;
 pub mod rules;
 mod tenancy;
 
+pub use auth::{Action, AuthError, Authenticator, Authorizer, ClientCredentials};
 pub use decision::{BodyTransform, HeaderOp, RouteDecision};
 pub use error::SpiError;
 pub use placement::{Placement, PlacementAt};
