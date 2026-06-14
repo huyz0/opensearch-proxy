@@ -13,6 +13,7 @@
 
 mod admission;
 mod classify;
+mod grpc;
 mod handler;
 mod request;
 mod server;
@@ -20,6 +21,7 @@ mod tls;
 
 pub use admission::IngressLimits;
 pub use classify::{classify, Classified};
+pub use grpc::serve_grpc;
 pub use handler::IngressHandler;
 pub use request::{IngressRequest, IngressResponse};
 pub use server::{serve, serve_tls, serve_tls_with_limits, serve_with_limits};

@@ -67,6 +67,24 @@ async fn run() -> Result<(), String> {
         .await
         .map_err(|e| format!("binding {bind}: {e}"))?;
 
+    // Optional gRPC ingress on its own listener, driving the same handler
+    // (same pipeline, tenancy, and observability) as the HTTP front door.
+    if let Some(grpc_bind) = std::env::var("OSPROXY_GRPC_BIND")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
+        let grpc_listener = TcpListener::bind(&grpc_bind)
+            .await
+            .map_err(|e| format!("binding gRPC {grpc_bind}: {e}"))?;
+        let grpc_handler = Arc::clone(&handler);
+        println!("osproxy gRPC listening on grpc://{grpc_bind}");
+        tokio::spawn(async move {
+            if let Err(e) = osproxy_transport::serve_grpc(grpc_listener, grpc_handler).await {
+                eprintln!("osproxy: gRPC serve error: {e}");
+            }
+        });
+    }
+
     // TLS when both cert and key paths are configured; cleartext otherwise.
     if let Some(provider) = load_tls_provider()? {
         println!(

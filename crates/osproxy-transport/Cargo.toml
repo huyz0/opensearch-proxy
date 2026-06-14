@@ -19,11 +19,19 @@ bytes.workspace = true
 tokio = { workspace = true, features = ["rt", "net"] }
 tokio-rustls.workspace = true
 ring.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+prost.workspace = true
+tokio-stream.workspace = true
+
+[build-dependencies]
+tonic-prost-build.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time"] }
 hyper = { workspace = true, features = ["client"] }
 hyper-util = { workspace = true, features = ["client", "client-legacy", "http1", "http2", "tokio"] }
+tonic = { workspace = true, features = ["server", "router", "transport", "channel"] }
 rcgen.workspace = true
 
 [lints]

@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+// The proxy's own gRPC ingress surface (docs/11 M4). A thin, protocol-specific
+// front door: every RPC is adapted to the same `IngressRequest` the HTTP path
+// produces and driven through the identical engine pipeline, so tenancy,
+// isolation, and observability are unchanged across protocols.
+package osproxy.v1;
+
+// Document ingest over gRPC. Mirrors a `PUT/POST /{index}/_doc[/{id}]`.
+service DocumentService {
+  // Indexes a single document, constructing the physical id and injecting
+  // tenancy fields exactly as the REST ingest path does.
+  rpc Index(IndexRequest) returns (IndexReply);
+}
+
+message IndexRequest {
+  // The logical (client-facing) index name.
+  string index = 1;
+  // The client document id; empty means "auto-assign" (POST semantics).
+  string id = 2;
+  // The document body as JSON bytes (the same payload a REST client would PUT).
+  bytes document = 3;
+}
+
+message IndexReply {
+  // The upstream HTTP status the ingest resolved to (201 created, etc.).
+  uint32 status = 1;
+  // The JSON response body (value-free on error: stable code + retryable).
+  bytes body = 2;
+  // The proxy request id, so a caller can fetch /debug/explain/{request_id}.
+  string request_id = 3;
+}

@@ -61,6 +61,15 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 # verified client certificate into a stable mTLS identity.
 ring = "0.17"
 rcgen = "0.13"
+# gRPC ingress (docs/11 M4). tonic serves the proxy's DocumentService over h2;
+# tonic-prost is the runtime prost codec, prost the message runtime, and
+# tonic-prost-build the build-time codegen (needs `protoc`). tokio-stream adapts
+# a bound TcpListener into tonic's incoming-connection stream.
+tonic = { version = "0.14", default-features = false, features = ["server", "router", "transport", "codegen", "channel"] }
+tonic-prost = "0.14"
+prost = "0.14"
+tonic-prost-build = "0.14"
+tokio-stream = { version = "0.1", default-features = false, features = ["net"] }
 # Live integration tests against a real OpenSearch container (the M1 exit gate).
 # Requires a running Docker daemon; the tests are #[ignore]'d so CI without
 # Docker stays green.
