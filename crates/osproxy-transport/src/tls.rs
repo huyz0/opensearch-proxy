@@ -112,9 +112,12 @@ impl RingProvider {
     ) -> Result<Self, TlsError> {
         let certs = parse_certs(cert_pem)?;
         let key = parse_key(key_pem)?;
-        let config = builder
+        let mut config = builder
             .with_single_cert(certs, key)
             .map_err(|e| TlsError::Config(e.to_string()))?;
+        // Advertise HTTP/2 (preferred) then HTTP/1.1 via ALPN so a TLS client can
+        // negotiate h2; the auto ingress builder serves whichever is selected.
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
         Ok(Self {
             server_config: Arc::new(config),
         })

@@ -108,3 +108,16 @@ async fn put_doc_round_trips_over_tls() {
 fn invalid_pem_is_rejected() {
     assert!(RingProvider::from_pem(b"not a cert", b"not a key").is_err());
 }
+
+#[test]
+fn alpn_advertises_h2_then_http11() {
+    use osproxy_transport::CryptoProvider;
+    let tc = test_cert();
+    let provider = RingProvider::from_pem(tc.cert_pem.as_bytes(), tc.key_pem.as_bytes()).unwrap();
+    // h2 preferred, http/1.1 as the fallback — so a TLS client negotiates HTTP/2
+    // when it can, and the auto ingress builder serves whichever is selected.
+    assert_eq!(
+        provider.server_config().alpn_protocols,
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+    );
+}

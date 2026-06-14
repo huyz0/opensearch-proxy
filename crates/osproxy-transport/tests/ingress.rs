@@ -111,6 +111,39 @@ async fn body_over_the_inflight_ceiling_is_shed_with_429() {
 }
 
 #[tokio::test]
+async fn request_round_trips_over_http2() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = serve(listener, Arc::new(EchoHandler)).await;
+    });
+
+    // A prior-knowledge h2c client: no h1, no upgrade — the request must travel
+    // over HTTP/2, which the auto ingress builder serves on the same listener.
+    let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new())
+        .http2_only(true)
+        .build_http();
+    let req = Request::builder()
+        .method(Method::PUT)
+        .uri(format!("http://{addr}/orders/_doc/acme:1"))
+        .header("content-type", "application/json")
+        .body(Full::new(Bytes::from_static(br#"{"tenant_id":"acme"}"#)))
+        .unwrap();
+
+    let resp = client.request(req).await.unwrap();
+    assert_eq!(resp.status(), 201);
+    assert_eq!(
+        resp.version(),
+        hyper::Version::HTTP_2,
+        "must be served over h2"
+    );
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains(r#""index":"orders""#), "{text}");
+    assert!(text.contains(r#""ingest":true"#), "{text}");
+}
+
+#[tokio::test]
 async fn unsupported_method_gets_405() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

@@ -1,9 +1,10 @@
-//! The HTTP/1.1 cleartext ingress loop.
+//! The HTTP ingress loop (HTTP/1.1 and HTTP/2).
 //!
 //! Accepts connections, parses each request into an [`IngressRequest`], invokes
-//! the [`IngressHandler`], and writes the response. TLS termination behind the
-//! `CryptoProvider` seam (`docs/07`) and HTTP/2 attach here in a later slice
-//! without changing the handler contract.
+//! the [`IngressHandler`], and writes the response. Each connection is served by
+//! hyper-util's protocol-auto builder, which negotiates HTTP/1.1 or HTTP/2 per
+//! connection — h2c by the HTTP/2 preface on cleartext, h2 by ALPN on TLS
+//! (`docs/07`). The handler contract is identical across protocols.
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -13,7 +14,7 @@ use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use osproxy_spi::HttpMethod;
 use tokio::net::TcpListener;
 
@@ -162,7 +163,7 @@ async fn serve_connection<H, IO>(
             Ok::<_, Infallible>(serve_request(&*handler, req, &conn_info, limits, &admission).await)
         }
     });
-    let _ = hyper::server::conn::http1::Builder::new()
+    let _ = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
         .serve_connection(io, service)
         .await;
 }
