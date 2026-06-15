@@ -40,6 +40,7 @@ osproxy-observe = { path = "crates/osproxy-observe" }
 osproxy-otlp = { path = "crates/osproxy-otlp" }
 osproxy-engine = { path = "crates/osproxy-engine" }
 osproxy-config = { path = "crates/osproxy-config" }
+osproxy-bench = { path = "crates/osproxy-bench" }
 
 # Third-party (pinned conservatively; add as milestones need them).
 thiserror = "2"

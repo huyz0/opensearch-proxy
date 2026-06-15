@@ -43,6 +43,7 @@ http-body-util.workspace = true
 bytes.workspace = true
 serde_json.workspace = true
 testcontainers.workspace = true
+osproxy-bench.workspace = true
 
 [lints]
 workspace = true

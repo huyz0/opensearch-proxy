@@ -1603,6 +1603,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "osproxy-bench",
  "osproxy-config",
  "osproxy-core",
  "osproxy-engine",

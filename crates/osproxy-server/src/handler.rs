@@ -60,6 +60,13 @@ impl<A: Authenticator> AppHandler<A> {
         }
     }
 
+    /// The pipeline this handler serves — a read-only accessor for introspection
+    /// (e.g. the perf harness reading upstream `pool_stats` after a load run).
+    #[must_use]
+    pub fn pipeline(&self) -> &AppPipeline {
+        &self.pipeline
+    }
+
     /// Sets the structured per-request logger (builder style). Default: no logs.
     #[must_use]
     pub fn with_request_log(mut self, request_log: Box<dyn RequestLog>) -> Self {

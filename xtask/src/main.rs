@@ -98,6 +98,8 @@ fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'static str]> {
             "osproxy-tenancy",
             "osproxy-sink",
             "osproxy-otlp",
+            // dev-only: the #[ignore]'d perf harness reads NFR-P profile types.
+            "osproxy-bench",
         ],
         // Pure NFR-P profile vocabulary (percentiles, profile, judge). The
         // Docker-backed load runner that fills a profile in is a later, env-gated
