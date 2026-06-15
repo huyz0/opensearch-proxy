@@ -68,8 +68,64 @@ module lacked one of the six approved suites.
 
 ## 5. Cryptographic boundary diagram
 
-`[DIAGRAM: what data crosses the module boundary — TLS handshake, record
-encryption/decryption — and what stays outside]`
+The **cryptographic boundary is the AWS-LC-FIPS module** (the CMVP-validated C
+library) — *not* the proxy, *not* rustls, *not* the aws-lc-rs bindings. Every
+cryptographic operation crosses into that module; nothing cryptographic happens
+outside it. The proxy's own code does **zero** crypto: it produces and consumes
+plaintext and drives the TLS protocol state machine, which in turn calls the
+module for all key agreement, signing/verification, AEAD, hashing, and random.
+
+```
+   downstream client                                          upstream OpenSearch
+        │  TLS ciphertext (wire)                                   ▲  TLS ciphertext
+        ▼                                                          │
+┌───────────────────────────────────────────────────────────────────────────────┐
+│ osproxy process (NOT in the cryptographic boundary)                             │
+│                                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐  │
+│  │ osproxy request pipeline — routing, tenancy, rewrite, sink   PLAINTEXT    │  │
+│  │ only. Never sees keys or ciphertext. (osproxy-engine/-rewrite/-sink…)     │  │
+│  └─────────────────────────────────────────────────────────────────────────┘  │
+│                          ▲ plaintext records                                    │
+│                          ▼                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐  │
+│  │ rustls — TLS 1.2/1.3 PROTOCOL state machine (handshake orchestration,     │  │
+│  │ record framing, suite/version policy = FIPS_APPROVED_SUITES/FIPS_VERSIONS).│ │
+│  │ Holds no crypto of its own; delegates every primitive across the boundary. │ │
+│  └─────────────────────────────────────────────────────────────────────────┘  │
+│                          │  FFI calls (aws-lc-rs → aws-lc-fips-sys, thin shim,  │
+│                          ▼  no crypto of their own)                              │
+│  ╔═══════════════════════════════════════════════════════════════════════════╗ │
+│  ║ ▓▓▓ CRYPTOGRAPHIC BOUNDARY — AWS-LC-FIPS (CMVP-validated module) ▓▓▓       ║ │
+│  ║   • ECDHE key agreement            • RSA/ECDSA signature verify            ║ │
+│  ║   • AES-128/256-GCM AEAD (record encrypt / decrypt)                        ║ │
+│  ║   • SHA-256/384 (handshake transcript + mTLS cert fingerprint)             ║ │
+│  ║   • approved DRBG (random)                                                 ║ │
+│  ║   Secret keys are GENERATED AND USED HERE and never cross back out.        ║ │
+│  ╚═══════════════════════════════════════════════════════════════════════════╝ │
+└───────────────────────────────────────────────────────────────────────────────┘
+```
+
+**What crosses the boundary (in → out):**
+
+| Into the module | Out of the module |
+|-----------------|-------------------|
+| Plaintext TLS records to encrypt | Ciphertext records |
+| Ciphertext TLS records to decrypt | Plaintext records |
+| Peer key shares, certificates, transcript bytes | Shared secret / session keys (kept inside), verify pass/fail |
+| Bytes to hash (transcript, cert DER) | Digest |
+| Randomness requests | Random bytes |
+
+**What never crosses out:** private keys, the ECDHE shared secret, and derived
+session/traffic keys — they are created and consumed inside the module. The proxy
+holds only plaintext payloads and opaque handles; a memory disclosure in proxy
+code cannot leak key material, because key material is never in proxy code.
+
+The mTLS client **fingerprint** is a SHA-256 of the peer certificate DER computed
+*through the module* (`cert_fingerprint`, cfg-selected to aws-lc-rs in the FIPS
+build), so even that incidental hash stays inside the boundary — no non-validated
+crypto is linked into a FIPS artifact (enforced by the mutually-exclusive build
+features, ADR-009).
 
 ## 6. Sign-off
 
