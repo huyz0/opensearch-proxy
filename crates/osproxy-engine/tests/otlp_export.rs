@@ -14,8 +14,8 @@ use osproxy_core::{
 };
 use osproxy_engine::Pipeline;
 use osproxy_observe::{
-    DiagLevel, DiagnosticsDirective, DirectiveMatch, DirectiveSet, DirectiveVerifier,
-    InMemoryDirectiveStore, SpanExporter,
+    BreakGlassBuffer, DiagLevel, DiagnosticsDirective, DirectiveMatch, DirectiveSet,
+    DirectiveVerifier, InMemoryDirectiveStore, SpanExporter,
 };
 use osproxy_sink::MemorySink;
 use osproxy_spi::{
@@ -220,6 +220,44 @@ async fn publishing_to_the_fleet_store_flips_export_without_rebuilding_the_pipel
         1,
         "clearing the fleet store stops further export (count unchanged)"
     );
+}
+
+#[tokio::test]
+async fn a_ring_buffer_directive_captures_into_the_break_glass_tape() {
+    // Break-glass is off by default: no capture until a ring_buffer directive.
+    let clock = Arc::new(ManualClock::new());
+    let tape = Arc::new(BreakGlassBuffer::new(8));
+    let store = Arc::new(InMemoryDirectiveStore::new());
+    let p = pipeline()
+        .with_clock(clock.clone())
+        .with_baseline_level(DiagLevel::Off)
+        .with_directive_store(store.clone())
+        .with_break_glass(tape.clone());
+
+    // No directive: nothing captured (and no exporter is even configured).
+    ingest(&p, &RequestId::from("r")).await;
+    assert!(tape.is_empty(), "no ring_buffer directive → empty tape");
+
+    // An operator flips a ring_buffer directive on: matching requests are taped.
+    store.publish(DirectiveSet::from_directives(vec![DiagnosticsDirective {
+        id: "break-glass".to_owned(),
+        match_: DirectiveMatch::all(),
+        level: DiagLevel::Off, // capture does not require a raised export level
+        sample_per_mille: 1000,
+        expires_at: clock.now().saturating_add(Duration::from_secs(3600)),
+        ring_buffer: true,
+    }]));
+    ingest(&p, &RequestId::from("r1")).await;
+    ingest(&p, &RequestId::from("r2")).await;
+
+    let captured = tape.snapshot();
+    assert_eq!(
+        captured.len(),
+        2,
+        "each matching request is captured in order"
+    );
+    assert_eq!(captured[0]["request_id"], "r1");
+    assert_eq!(captured[1]["request_id"], "r2");
 }
 
 #[tokio::test]

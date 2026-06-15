@@ -12,8 +12,9 @@ use std::sync::Arc;
 
 use osproxy_core::{Clock, EndpointKind, RequestId, SystemClock};
 use osproxy_observe::{
-    resource_spans, ClassifyInfo, DiagLevel, DirectiveSet, DirectiveStore, DirectiveVerifier,
-    EgressInfo, ExplainStore, NoVerifier, NoopExporter, RequestAttrs, RequestTrace, SpanExporter,
+    explain_json, resource_spans, BreakGlassBuffer, ClassifyInfo, DiagLevel, DirectiveSet,
+    DirectiveStore, DirectiveVerifier, EgressInfo, ExplainStore, NoVerifier, NoopExporter,
+    RequestAttrs, RequestTrace, SpanExporter,
 };
 use osproxy_sink::{Reader, Sink};
 use osproxy_spi::{RequestCtx, SpiError, TenancySpi};
@@ -25,6 +26,10 @@ use crate::observe::{error_context, logical_index};
 
 /// How many recent request explanations `/debug/explain` retains per instance.
 const EXPLAIN_CAPACITY: usize = 1024;
+
+/// How many explanations the break-glass tape holds once a `ring_buffer`
+/// directive turns it on. Bounded so an "on" directive cannot grow memory.
+const BREAK_GLASS_CAPACITY: usize = 256;
 
 /// The response the pipeline produces for a handled request.
 ///
@@ -59,6 +64,17 @@ pub struct Pipeline<T, S> {
     /// can flip verbosity without a restart. Defaults to an empty static set.
     directive_store: Arc<dyn DirectiveStore>,
     verifier: Arc<dyn DirectiveVerifier>,
+    /// The break-glass tape, captured into only when a `ring_buffer` directive
+    /// applies to a request. Empty (near-zero cost) until then.
+    break_glass: Arc<BreakGlassBuffer>,
+}
+
+/// The diagnostics decision for one request: how much to record/export, and
+/// whether to capture it into the break-glass tape.
+#[derive(Clone, Copy)]
+struct Diagnostics {
+    level: DiagLevel,
+    capture: bool,
 }
 
 impl<T, S> std::fmt::Debug for Pipeline<T, S> {
@@ -90,6 +106,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             // a constant snapshot. Swap it for a fleet store via builder.
             directive_store: Arc::new(Arc::new(DirectiveSet::new())),
             verifier: Arc::new(NoVerifier),
+            break_glass: Arc::new(BreakGlassBuffer::new(BREAK_GLASS_CAPACITY)),
         }
     }
 
@@ -157,10 +174,25 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         self
     }
 
+    /// Shares the break-glass tape (builder style), so a debug endpoint can read
+    /// the captured sequence and tests can inspect it.
+    #[must_use]
+    pub fn with_break_glass(mut self, break_glass: Arc<BreakGlassBuffer>) -> Self {
+        self.break_glass = break_glass;
+        self
+    }
+
     /// The assembled `/debug/explain` document for a past request, if retained.
     #[must_use]
     pub fn explain(&self, request_id: &RequestId) -> Option<Value> {
         self.explain.get(request_id)
+    }
+
+    /// The break-glass tape — the explanations captured while a `ring_buffer`
+    /// directive was in effect (`docs/05` §5).
+    #[must_use]
+    pub fn break_glass(&self) -> &Arc<BreakGlassBuffer> {
+        &self.break_glass
     }
 
     /// The underlying sink (e.g. to inspect what an in-memory sink recorded).
@@ -208,10 +240,20 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         }
         self.explain.record(ctx.request_id().clone(), &trace);
 
+        let diag = self.diagnostics(ctx, &trace);
+
+        // Break-glass: capture the explanation into the bounded tape when a
+        // `ring_buffer` directive selected this request (`docs/05` §5). Off by
+        // default, so this stays empty until an operator flips it on.
+        if diag.capture {
+            self.break_glass
+                .capture(explain_json(ctx.request_id(), &trace));
+        }
+
         // Export the span when an exporter is active AND the diagnostics level for
         // this request reaches at least `Shape` — so directives can restrict export
         // to a targeted, sampled subset (`docs/05` §3). Background, best-effort.
-        if exporting && self.diag_level(ctx, &trace) >= DiagLevel::Shape {
+        if exporting && diag.level >= DiagLevel::Shape {
             let end_nanos = self.clock.unix_nanos();
             if let Some(payload) = resource_spans(
                 &self.service_name,
@@ -226,10 +268,12 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         result
     }
 
-    /// The effective diagnostics level for a finished request: the baseline
-    /// raised by any directive that targets it (by tenant/index/principal/
-    /// endpoint), evaluated at the current time so expiry/sampling apply.
-    fn diag_level(&self, ctx: &RequestCtx<'_>, trace: &RequestTrace) -> DiagLevel {
+    /// The diagnostics decision for a finished request: the baseline level raised
+    /// by any directive that targets it (by tenant/index/principal/endpoint),
+    /// plus whether any applying directive wants break-glass capture. Evaluated at
+    /// the current time so expiry/sampling apply; the directive store is polled
+    /// fresh and the signed header verified exactly once.
+    fn diagnostics(&self, ctx: &RequestCtx<'_>, trace: &RequestTrace) -> Diagnostics {
         let attrs = RequestAttrs {
             tenant: trace.resolved_partition(),
             index: ctx.logical_index(),
@@ -240,20 +284,22 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         let request = ctx.request_id();
         // Poll the fleet directive store fresh (a cheap Arc clone of the current
         // snapshot) so a published flip takes effect without a restart.
-        let mut level = self
-            .baseline
-            .max(self.directive_store.load().evaluate(&attrs, now, request));
+        let snapshot = self.directive_store.load();
+        let mut level = self.baseline.max(snapshot.evaluate(&attrs, now, request));
+        let mut capture = snapshot.wants_ring_buffer(&attrs, now, request);
         // Fold in a verified single-request directive from the signed
         // `X-Debug-Directive` header, if present and valid (`docs/05` §3).
-        if let Some(from_header) = ctx
+        if let Some(directive) = ctx
             .headers()
             .get("x-debug-directive")
             .and_then(|h| self.verifier.verify(h))
-            .and_then(|d| d.level_if_applies(&attrs, now, request))
         {
-            level = level.max(from_header);
+            if let Some(from_header) = directive.level_if_applies(&attrs, now, request) {
+                level = level.max(from_header);
+                capture |= directive.ring_buffer;
+            }
         }
-        level
+        Diagnostics { level, capture }
     }
 
     /// Dispatches on endpoint class, recording the per-stage spans into `trace`.

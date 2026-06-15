@@ -15,6 +15,7 @@
 //! payload for export (the wire emission is the I/O layer's job, M7).
 #![deny(missing_docs)]
 
+mod breakglass;
 mod directive;
 mod explain;
 mod export;
@@ -22,6 +23,7 @@ mod otlp;
 mod store;
 mod trace;
 
+pub use breakglass::BreakGlassBuffer;
 pub use directive::{
     DiagLevel, DiagnosticsDirective, DirectiveMatch, DirectiveSet, DirectiveVerifier, NoVerifier,
     RequestAttrs,

@@ -124,6 +124,22 @@ same `DirectiveStore` trait unchanged, keeping a watched local snapshot so
 an absolute expiry, so even a published set that is never replaced self-expires
 at evaluation — a forgotten fleet "on" turns itself off.
 
+### 3c. Break-glass ring buffer
+
+When a directive sets `ring_buffer: true`, every request it selects is captured —
+in order — into a bounded in-memory tape (`BreakGlassBuffer`), independent of
+OTLP export and of the diagnostics level. This is the forensic affordance for the
+case where a *class* of request is failing and the ids aren't known up front:
+flip a `ring_buffer` directive (fleet store or signed header) and read back the
+last N matching explanations as a sequence.
+
+Single-instance by design (the tape lives on the instance that handled the
+requests) and bounded (capacity-evicted), so it costs nothing until a directive
+turns it on and cannot grow without limit once on. Each entry is the same
+shape-only explain document, so the tape carries no tenant value, body, or
+credential. The pipeline exposes it via `break_glass()` for a debug endpoint to
+read.
+
 ## 4. `/debug/explain`
 
 Not OTel — a synchronous JSON assembly of a single request's decision chain for
