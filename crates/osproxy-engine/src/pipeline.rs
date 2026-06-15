@@ -10,8 +10,11 @@
 
 use std::sync::Arc;
 
-use osproxy_core::{EndpointKind, RequestId};
-use osproxy_observe::{ClassifyInfo, EgressInfo, ExplainStore, RequestTrace};
+use osproxy_core::{Clock, EndpointKind, RequestId, SystemClock};
+use osproxy_observe::{
+    resource_spans, ClassifyInfo, EgressInfo, ExplainStore, NoopExporter, RequestTrace,
+    SpanExporter,
+};
 use osproxy_sink::{Reader, Sink};
 use osproxy_spi::{RequestCtx, SpiError, TenancySpi};
 use osproxy_tenancy::TenancyRouter;
@@ -40,22 +43,39 @@ pub struct PipelineResponse {
 /// Generic over the [`TenancySpi`] implementation and the [`Sink`], so the hot
 /// path is monomorphized (no dyn dispatch) and tests can swap in an in-memory
 /// sink.
-#[derive(Debug)]
 pub struct Pipeline<T, S> {
     pub(crate) router: TenancyRouter<T>,
     pub(crate) sink: S,
     pub(crate) retry: crate::RetryPolicy,
     explain: Arc<ExplainStore>,
+    exporter: Arc<dyn SpanExporter>,
+    clock: Arc<dyn Clock>,
+    service_name: String,
+}
+
+impl<T, S> std::fmt::Debug for Pipeline<T, S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The injected exporter/clock are not `Debug`; show the rest of the shape.
+        f.debug_struct("Pipeline")
+            .field("retry", &self.retry)
+            .field("service_name", &self.service_name)
+            .field("exporting", &self.exporter.enabled())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
-    /// Builds a pipeline from a router and a sink (default backend-retry policy).
+    /// Builds a pipeline from a router and a sink (default backend-retry policy,
+    /// no span export).
     pub fn new(router: TenancyRouter<T>, sink: S) -> Self {
         Self {
             router,
             sink,
             retry: crate::RetryPolicy::default(),
             explain: Arc::new(ExplainStore::new(EXPLAIN_CAPACITY)),
+            exporter: Arc::new(NoopExporter),
+            clock: Arc::new(SystemClock),
+            service_name: "osproxy".to_owned(),
         }
     }
 
@@ -63,6 +83,27 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
     #[must_use]
     pub fn with_retry_policy(mut self, retry: crate::RetryPolicy) -> Self {
         self.retry = retry;
+        self
+    }
+
+    /// Sets the OTLP span exporter (builder style). Default is no export.
+    #[must_use]
+    pub fn with_exporter(mut self, exporter: Arc<dyn SpanExporter>) -> Self {
+        self.exporter = exporter;
+        self
+    }
+
+    /// Swaps the clock used to stamp span timestamps (tests inject a `ManualClock`).
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// Sets the `service.name` reported on exported spans (builder style).
+    #[must_use]
+    pub fn with_service_name(mut self, service_name: impl Into<String>) -> Self {
+        self.service_name = service_name.into();
         self
     }
 
@@ -89,6 +130,15 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
     /// Returns [`RequestError`] if the endpoint is unsupported in M1, routing
     /// fails, the body transform fails, or the sink rejects the write.
     pub async fn handle(&self, ctx: &RequestCtx<'_>) -> Result<PipelineResponse, RequestError> {
+        // Only pay for span timing/encoding when an exporter is actually active —
+        // "Off" stays near-zero cost (`docs/05`).
+        let exporting = self.exporter.enabled();
+        let start_nanos = if exporting {
+            self.clock.unix_nanos()
+        } else {
+            0
+        };
+
         let mut trace = RequestTrace::new();
         // The same W3C context propagated to downstream calls is recorded here, so
         // `/debug/explain` and the exported OTLP span share the request's ids.
@@ -107,6 +157,21 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             Err(err) => trace.record_error(error_context(err)),
         }
         self.explain.record(ctx.request_id().clone(), &trace);
+
+        // Hand the finished trace to the exporter (background, best-effort — never
+        // blocks or fails the response).
+        if exporting {
+            let end_nanos = self.clock.unix_nanos();
+            if let Some(payload) = resource_spans(
+                &self.service_name,
+                ctx.request_id(),
+                &trace,
+                start_nanos,
+                end_nanos,
+            ) {
+                self.exporter.export(payload);
+            }
+        }
         result
     }
 

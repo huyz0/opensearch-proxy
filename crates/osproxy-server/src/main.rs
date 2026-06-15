@@ -16,10 +16,12 @@ use std::sync::Arc;
 
 use osproxy_core::{ClusterId, IndexName};
 use osproxy_engine::Pipeline;
+use osproxy_otlp::OtlpHttpExporter;
 use osproxy_server::auth::ReferenceAuthenticator;
 use osproxy_server::handler::AppHandler;
 use osproxy_server::tenancy::ReferenceTenancy;
-use osproxy_sink::OpenSearchSink;
+use osproxy_sink::{OpenSearchSink, Reader, Sink};
+use osproxy_spi::TenancySpi;
 use osproxy_tenancy::TenancyRouter;
 use osproxy_transport::{DefaultCryptoProvider, IngressHandler};
 use tokio::net::TcpListener;
@@ -50,7 +52,7 @@ async fn run() -> Result<(), String> {
     let sink = OpenSearchSink::new(endpoints);
 
     let tenancy = ReferenceTenancy::new(cluster, IndexName::from(index.as_str()));
-    let pipeline = Pipeline::new(TenancyRouter::new(tenancy), sink);
+    let pipeline = with_otlp_export(Pipeline::new(TenancyRouter::new(tenancy), sink));
 
     let tokens = parse_tokens(&env_or("OSPROXY_TOKENS", ""));
     let auth_mode = if tokens.is_empty() {
@@ -138,6 +140,24 @@ where
             Ok(())
         }
     }
+}
+
+/// Wires OTLP span export onto the pipeline when `OSPROXY_OTLP_ENDPOINT` is set
+/// (the collector base URL, e.g. `http://otel-collector:4318`); otherwise export
+/// stays off (no telemetry cost). `OSPROXY_SERVICE_NAME` sets the reported
+/// `service.name` (default `osproxy`).
+fn with_otlp_export<T: TenancySpi, S: Sink + Reader>(pipeline: Pipeline<T, S>) -> Pipeline<T, S> {
+    let Some(endpoint) = std::env::var("OSPROXY_OTLP_ENDPOINT")
+        .ok()
+        .filter(|v| !v.is_empty())
+    else {
+        return pipeline;
+    };
+    let service = env_or("OSPROXY_SERVICE_NAME", "osproxy");
+    println!("osproxy OTLP span export -> {endpoint}/v1/traces (service={service})");
+    pipeline
+        .with_exporter(Arc::new(OtlpHttpExporter::new(&endpoint)))
+        .with_service_name(service)
 }
 
 /// Builds a TLS provider from `OSPROXY_TLS_CERT`/`OSPROXY_TLS_KEY` (PEM file

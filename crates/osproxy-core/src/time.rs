@@ -38,10 +38,18 @@ impl Instant {
     }
 }
 
-/// A source of monotonic time. Inject this anywhere time is needed.
+/// A source of time. Inject this anywhere time is needed.
 pub trait Clock: Send + Sync {
-    /// The current monotonic instant.
+    /// The current monotonic instant (for elapsed-time logic).
     fn now(&self) -> Instant;
+
+    /// The current **wall-clock** time in nanoseconds since the Unix epoch.
+    ///
+    /// Distinct from [`Clock::now`] (which is monotonic and meaningless as an
+    /// absolute time): this is for stamping externally-meaningful timestamps such
+    /// as OTLP span start/end. Like `now`, it goes through the seam so it stays
+    /// deterministic under a [`ManualClock`].
+    fn unix_nanos(&self) -> u64;
 }
 
 /// The production clock, backed by the operating system's monotonic timer.
@@ -65,6 +73,16 @@ impl Clock for SystemClock {
             *EPOCH.get_or_init(std::time::Instant::now),
         );
         Instant(u64::try_from(raw.saturating_duration_since(epoch).as_nanos()).unwrap_or(u64::MAX))
+    }
+
+    fn unix_nanos(&self) -> u64 {
+        // The sanctioned site for reading the OS wall clock (see `now`).
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the one sanctioned site reading the OS wall clock (docs/12)"
+        )]
+        let since_epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+        since_epoch.map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
     }
 }
 
@@ -93,6 +111,12 @@ impl ManualClock {
 impl Clock for ManualClock {
     fn now(&self) -> Instant {
         Instant(self.nanos.lock().map_or(0, |n| *n))
+    }
+
+    fn unix_nanos(&self) -> u64 {
+        // The test clock has no separate wall clock: it reports its advanced
+        // nanos as the absolute time, so OTLP timestamps stay deterministic.
+        self.nanos.lock().map_or(0, |n| *n)
     }
 }
 

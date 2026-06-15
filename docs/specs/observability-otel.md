@@ -8,8 +8,20 @@ pins the wire conventions.
 
 ## 1. Export
 
-- Traces via OTLP (gRPC/HTTP). Logs as structured JSON correlated by trace id.
-- One trace per request; spans per docs/05 §2.
+- Traces via OTLP/HTTP (JSON binding): one `SERVER` span per request, POSTed to
+  the collector's `/v1/traces`. The span id is the proxy hop's W3C span id, so
+  upstream spans nest under it; attributes are the shape-only stage data.
+- **Off by default, near-zero cost when off.** The exporter is wired only when
+  `OSPROXY_OTLP_ENDPOINT` (collector base URL) is set; `OSPROXY_SERVICE_NAME`
+  sets `service.name`. With no exporter the pipeline skips encoding entirely
+  (`SpanExporter::enabled() == false`).
+- **Never on the request's critical path.** `osproxy-otlp`'s `OtlpHttpExporter`
+  hands off to a background task and ignores the result — a slow or down
+  collector adds no latency and cannot fail a request (ADR-005, read-only obs).
+- The encoder is `osproxy_observe::resource_spans` (pure, I/O-free); the seam is
+  `osproxy_observe::SpanExporter` (`NoopExporter` default).
+- Structured JSON logs correlated by trace id: a follow-up. (`/debug/explain`
+  already carries `trace_id`.)
 
 ## 1a. Context propagation (W3C Trace Context)
 

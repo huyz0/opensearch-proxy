@@ -9,6 +9,7 @@ members = [
     "crates/osproxy-sink",
     "crates/osproxy-control",
     "crates/osproxy-observe",
+    "crates/osproxy-otlp",
     "crates/osproxy-engine",
     "crates/osproxy-config",
     "crates/osproxy-server",
@@ -35,6 +36,7 @@ osproxy-rewrite = { path = "crates/osproxy-rewrite" }
 osproxy-sink = { path = "crates/osproxy-sink" }
 osproxy-control = { path = "crates/osproxy-control" }
 osproxy-observe = { path = "crates/osproxy-observe" }
+osproxy-otlp = { path = "crates/osproxy-otlp" }
 osproxy-engine = { path = "crates/osproxy-engine" }
 osproxy-config = { path = "crates/osproxy-config" }
 

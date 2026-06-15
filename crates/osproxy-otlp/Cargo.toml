@@ -1,0 +1,26 @@
+[package]
+name = "osproxy-otlp"
+description = "OTLP/HTTP span exporter: ships shape-only OTLP payloads to a collector, off the request path."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+osproxy-observe.workspace = true
+serde_json.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, features = ["client", "client-legacy", "http1", "tokio"] }
+http-body-util.workspace = true
+bytes.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time"] }
+hyper = { workspace = true, features = ["server", "http1"] }
+hyper-util = { workspace = true, features = ["server", "service", "tokio"] }
+
+[lints]
+workspace = true

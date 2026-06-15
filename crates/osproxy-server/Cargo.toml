@@ -24,6 +24,7 @@ osproxy-core.workspace = true
 osproxy-config.workspace = true
 osproxy-engine.workspace = true
 osproxy-transport = { workspace = true, default-features = false }
+osproxy-otlp.workspace = true
 osproxy-spi.workspace = true
 osproxy-tenancy.workspace = true
 osproxy-sink.workspace = true
