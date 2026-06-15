@@ -64,7 +64,7 @@ jobs:
       # FIPS-built — never the default `ring` provider. `--no-default-features`
       # guarantees the non-fips provider is not linked.
       - name: Release artifact is FIPS-built
-        run: cargo build -p osproxy --release --no-default-features --features fips
+        run: cargo build -p osproxy-server --bin osproxy --release --no-default-features --features fips
 
   deny:
     name: Supply chain (cargo-deny)

@@ -14,7 +14,8 @@ path = "src/main.rs"
 
 [features]
 # Crypto provider selection forwarded to osproxy-transport (ADR-009). A FIPS
-# binary is built with `cargo build -p osproxy --no-default-features --features fips`.
+# binary is built with
+# `cargo build -p osproxy-server --bin osproxy --no-default-features --features fips`.
 default = ["non-fips"]
 # The crypto feature also selects the HMAC module the X-Debug-Directive verifier
 # authenticates with, so a FIPS binary never links a non-validated primitive.
