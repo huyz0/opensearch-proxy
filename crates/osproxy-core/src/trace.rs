@@ -20,14 +20,16 @@ const TRACEPARENT_LEN: usize = 2 + 1 + 32 + 1 + 16 + 1 + 2;
 /// root when absent. Either way a fresh `span_id` identifies *this* hop, so the
 /// upstream call is recorded as a child of the proxy's span.
 ///
-/// It holds only what is needed to *forward* context downstream. The incoming
-/// parent's span id is not retained — recording the proxy's own span as a child
-/// of the caller's span belongs to the OTLP-export slice (a follow-up), which
-/// will widen this type or re-read the header then.
+/// It also retains the incoming parent's span id (when continuing a trace), so
+/// the proxy's own emitted span can be recorded as a child of the caller's span;
+/// a freshly minted root has no parent.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TraceContext {
     trace_id: [u8; 16],
     span_id: [u8; 8],
+    /// The caller's span id, if this context continues an incoming trace — the
+    /// parent the proxy's own span nests under. `None` for a minted root.
+    parent_span_id: Option<[u8; 8]>,
     sampled: bool,
 }
 
@@ -39,10 +41,12 @@ impl TraceContext {
     pub fn propagate(incoming_traceparent: Option<&str>, request: &RequestId) -> Self {
         match incoming_traceparent.and_then(Self::parse) {
             // Continue the caller's trace: keep its trace_id and sampling, but
-            // present our own span as the parent of the downstream call.
+            // present our own span as the parent of the downstream call, and
+            // remember the caller's span as our own parent.
             Some(parent) => Self {
                 trace_id: parent.trace_id,
                 span_id: derive8(request, SPAN_SEED),
+                parent_span_id: Some(parent.span_id),
                 sampled: parent.sampled,
             },
             // No usable upstream context: this request is the trace root. Sample
@@ -50,6 +54,7 @@ impl TraceContext {
             None => Self {
                 trace_id: derive16(request),
                 span_id: derive8(request, SPAN_SEED),
+                parent_span_id: None,
                 sampled: true,
             },
         }
@@ -87,6 +92,9 @@ impl TraceContext {
         Some(Self {
             trace_id,
             span_id,
+            // A parsed header represents the caller itself; the proxy-relative
+            // parent link is set only when this context is `propagate`d.
+            parent_span_id: None,
             sampled: flags & 0x01 != 0,
         })
     }
@@ -122,6 +130,18 @@ impl TraceContext {
         let mut out = String::with_capacity(16);
         push_hex(&mut out, &self.span_id);
         out
+    }
+
+    /// The 16-hex span id of the **caller's** span — the parent the proxy's own
+    /// span nests under — or `None` when this context is a freshly minted root
+    /// (no incoming `traceparent`).
+    #[must_use]
+    pub fn parent_span_id_hex(&self) -> Option<String> {
+        self.parent_span_id.map(|id| {
+            let mut out = String::with_capacity(16);
+            push_hex(&mut out, &id);
+            out
+        })
     }
 
     /// Whether the trace is sampled (the W3C sampled flag).
@@ -271,6 +291,28 @@ mod tests {
         assert!(
             !downstream.contains("00f067aa0ba902b7"),
             "proxy must present its own span id, not the caller's"
+        );
+    }
+
+    #[test]
+    fn propagation_retains_the_callers_span_as_the_parent() {
+        let ctx = TraceContext::propagate(Some(SAMPLE), &RequestId::from("req-1"));
+        // The caller's span id (from SAMPLE) becomes this hop's parent, so the
+        // proxy's own span nests under it.
+        assert_eq!(
+            ctx.parent_span_id_hex().as_deref(),
+            Some("00f067aa0ba902b7")
+        );
+        // ...and the parent is never the proxy's own span.
+        assert_ne!(ctx.parent_span_id_hex(), Some(ctx.span_id_hex()));
+    }
+
+    #[test]
+    fn a_minted_root_has_no_parent() {
+        let ctx = TraceContext::propagate(None, &RequestId::from("req-7"));
+        assert!(
+            ctx.parent_span_id_hex().is_none(),
+            "a root span has no parent to nest under"
         );
     }
 

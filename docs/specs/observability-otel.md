@@ -10,7 +10,9 @@ pins the wire conventions.
 
 - Traces via OTLP/HTTP (JSON binding): one `SERVER` span per request, POSTed to
   the collector's `/v1/traces`. The span id is the proxy hop's W3C span id, so
-  upstream spans nest under it; attributes are the shape-only stage data.
+  upstream spans nest under it; when the request continued an inbound trace the
+  span carries `parentSpanId` (the caller's span), so the proxy nests under the
+  client too — a minted root omits it. Attributes are the shape-only stage data.
 - **Off by default, near-zero cost when off.** The exporter is wired only when
   `OSPROXY_OTLP_ENDPOINT` (collector base URL) is set; `OSPROXY_SERVICE_NAME`
   sets `service.name`. With no exporter the pipeline skips encoding entirely
@@ -52,8 +54,9 @@ trace headers rather than starting an island trace:
 The primitive is `osproxy_core::TraceContext` (`TraceContext::propagate`); it is
 injected once at the sink's single send choke point. It holds **only** trace/span
 identity — never request values — so propagation cannot become a value-leak
-channel (the shape-only rule, docs/05 §7). `tracestate` pass-through and emitting
-the `trace_id` into `/debug/explain` for log↔trace correlation are follow-ups.
+channel (the shape-only rule, docs/05 §7). The context also retains the caller's
+span id so the exported span nests under it (the `parentSpanId` above).
+`tracestate` pass-through is a remaining follow-up.
 
 ## 2. Attribute naming
 

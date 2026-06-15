@@ -65,7 +65,7 @@ fn span_json(
     } else {
         json!({ "code": STATUS_OK })
     };
-    json!({
+    let mut span = json!({
         "traceId": context.trace_id_hex(),
         "spanId": context.span_id_hex(),
         "name": span_name(trace),
@@ -74,7 +74,13 @@ fn span_json(
         "endTimeUnixNano": end_unix_nano.to_string(),
         "attributes": attributes(request_id, trace),
         "status": status,
-    })
+    });
+    // Nest under the caller's span when this request continued an incoming trace,
+    // so the proxy's span is a child of the client's, not a detached root.
+    if let Some(parent) = context.parent_span_id_hex() {
+        span["parentSpanId"] = json!(parent);
+    }
+    span
 }
 
 /// The span name: the request's endpoint classification, or `request` before it
@@ -208,6 +214,28 @@ mod tests {
         assert_eq!(
             doc["resourceSpans"][0]["resource"]["attributes"][0]["value"]["stringValue"],
             "osproxy"
+        );
+    }
+
+    #[test]
+    fn a_continued_trace_nests_the_span_under_the_callers_parent() {
+        // `traced()` propagates from an incoming traceparent whose span is
+        // 00f067aa0ba902b7 — that must surface as the proxy span's parent.
+        let doc = resource_spans("svc", &RequestId::from("req-1"), &traced(), 0, 1).unwrap();
+        let span = &doc["resourceSpans"][0]["scopeSpans"][0]["spans"][0];
+        assert_eq!(span["parentSpanId"], "00f067aa0ba902b7");
+    }
+
+    #[test]
+    fn a_root_request_emits_no_parent_span_id() {
+        // No incoming traceparent: the proxy span is the root, so no parentSpanId.
+        let mut t = RequestTrace::new();
+        t.record_context(TraceContext::propagate(None, &RequestId::from("req-1")));
+        let doc = resource_spans("svc", &RequestId::from("req-1"), &t, 0, 1).unwrap();
+        let span = &doc["resourceSpans"][0]["scopeSpans"][0]["spans"][0];
+        assert!(
+            span.get("parentSpanId").is_none(),
+            "root span has no parent"
         );
     }
 
