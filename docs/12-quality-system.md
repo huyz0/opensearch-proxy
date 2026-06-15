@@ -89,3 +89,23 @@ skills the author follows — so the bar is identical and the feedback is immedi
 3. A finding that recurs and *can* be made deterministic graduates to Tier 1
    (e.g. a naming convention becomes a lint). The deterministic tier grows;
    the LLM is never asked to police what a check could.
+
+## Live integration lane (Docker)
+
+Most gates run against mocks and in-process fakes — fast and deterministic. One
+CI lane (`integration`, GitHub-hosted Ubuntu with a Docker daemon) instead runs
+the `#[ignore]`'d testcontainer harnesses against a **real OpenSearch**: the M1
+round-trip exit gate (`tests/testcontainer.rs`) and the NFR-P runners
+(`tests/perf_harness.rs` added-latency profile + scalability sweep,
+`tests/soak.rs` idle/soak footprint). It runs `--test-threads=1` so a single
+cluster is up at a time.
+
+These harnesses **assert only host-independent invariants** — correctness,
+request completeness, pool reuse, throughput scaling, bounded footprint — because
+wall-clock latency on a shared runner is noisy. The *measured* numbers (added
+p50/p99, the scalability curve, RSS) are emitted as machine-readable
+profile/verdict JSON (`osproxy-bench`) and uploaded as the `nfr-profiles` build
+artifact: the substrate an operator — or an LLM judge — reads to calibrate the
+still-`[CALIBRATE]` NFR-P thresholds. The judge thresholds live in code
+(`NfrThresholds`/`ScalabilityThresholds`/`FootprintThresholds`), so once
+calibrated they become a real gate without touching the runners.

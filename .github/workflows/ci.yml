@@ -113,3 +113,34 @@ jobs:
           tool: iai-callgrind-runner@0.16.1
       - name: Instruction-count benchmarks
         run: cargo xtask bench
+
+  integration:
+    name: Live integration (Docker)
+    # The GitHub-hosted Ubuntu runner ships a running Docker daemon, so
+    # testcontainers can start a real OpenSearch — the only lane that exercises the
+    # proxy end-to-end against a live cluster rather than a mock.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      # The `#[ignore]`'d testcontainer harnesses: the M1 round-trip exit gate plus
+      # the NFR-P runners (added-latency profile, scalability sweep, idle/soak
+      # footprint). `--test-threads=1` keeps a single OpenSearch container up at a
+      # time — within the runner's memory, and so a perf run is never measured
+      # against a noisy neighbour. The harnesses assert host-independent invariants
+      # (correctness, completeness, pool reuse, throughput scaling, bounded
+      # footprint); the absolute latency numbers are recorded, not gated.
+      - name: Live integration + NFR-P harnesses
+        run: cargo test -p osproxy-server --test testcontainer --test perf_harness --test soak -- --ignored --nocapture --test-threads=1
+      # Publish the machine-readable NFR-P profile + verdict JSON the runners emit
+      # (the substrate an operator or an LLM judges) as a downloadable artifact.
+      - name: Upload NFR-P profiles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nfr-profiles
+          path: target/**/nfr-*.json
+          if-no-files-found: ignore
