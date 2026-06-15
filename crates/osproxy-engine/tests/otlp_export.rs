@@ -14,7 +14,8 @@ use osproxy_core::{
 };
 use osproxy_engine::Pipeline;
 use osproxy_observe::{
-    DiagLevel, DiagnosticsDirective, DirectiveMatch, DirectiveSet, DirectiveVerifier, SpanExporter,
+    DiagLevel, DiagnosticsDirective, DirectiveMatch, DirectiveSet, DirectiveVerifier,
+    InMemoryDirectiveStore, SpanExporter,
 };
 use osproxy_sink::MemorySink;
 use osproxy_spi::{
@@ -170,6 +171,54 @@ async fn baseline_off_suppresses_export_until_a_directive_selects_the_request() 
         on.0.lock().unwrap().len(),
         1,
         "a directive targeting the tenant re-enables export"
+    );
+}
+
+#[tokio::test]
+async fn publishing_to_the_fleet_store_flips_export_without_rebuilding_the_pipeline() {
+    // The fleet-wide channel: the pipeline polls a shared store fresh per request,
+    // so a controller publishing a directive flips verbosity with no restart.
+    let exporter = RecordingExporter::default();
+    let clock = Arc::new(ManualClock::new());
+    let store = Arc::new(InMemoryDirectiveStore::new());
+    let p = pipeline()
+        .with_exporter(Arc::new(exporter.clone()))
+        .with_clock(clock.clone())
+        .with_baseline_level(DiagLevel::Off)
+        .with_directive_store(store.clone());
+
+    // Empty store: nothing exports.
+    ingest(&p, &RequestId::from("r")).await;
+    assert!(
+        exporter.0.lock().unwrap().is_empty(),
+        "empty fleet store exports nothing"
+    );
+
+    // The operator publishes a fleet-wide directive — the running pipeline picks
+    // it up on the next request.
+    store.publish(DirectiveSet::from_directives(vec![DiagnosticsDirective {
+        id: "fleet-on".to_owned(),
+        match_: DirectiveMatch::all(),
+        level: DiagLevel::Shape,
+        sample_per_mille: 1000,
+        expires_at: clock.now().saturating_add(Duration::from_secs(3600)),
+        ring_buffer: false,
+    }]));
+    ingest(&p, &RequestId::from("r")).await;
+    assert_eq!(
+        exporter.0.lock().unwrap().len(),
+        1,
+        "a freshly published fleet directive flips export on with no restart"
+    );
+
+    // The reverse edge: publishing an empty set flips export back off, again
+    // without rebuilding — the operator "turn it off" path.
+    store.publish(DirectiveSet::new());
+    ingest(&p, &RequestId::from("r")).await;
+    assert_eq!(
+        exporter.0.lock().unwrap().len(),
+        1,
+        "clearing the fleet store stops further export (count unchanged)"
     );
 }
 

@@ -107,6 +107,23 @@ authenticates with a non-validated primitive. The verifier fails closed: an
 unknown level, an out-of-range sampling rate, a past expiry, or any signature
 mismatch authorizes nothing.
 
+### 3b. Fleet-wide directive store
+
+The fleet counterpart to the surgical header channel: a controller publishes a
+`DirectiveSet` into a `DirectiveStore` and every proxy instance reads it, so an
+operator can raise verbosity across the fleet (a tenant, an endpoint, a sampled
+slice) without a restart. The pipeline polls the store **fresh per request**
+(`Pipeline::with_directive_store`) — a cheap `Arc`-clone of the current snapshot
+— so a published flip takes effect on the next request fleet-wide.
+
+Like the migration control plane, the proxy ships the **seam plus an in-process
+reference** (`InMemoryDirectiveStore`: `publish` writes, `load` reads), not a
+distributed store; a real etcd/Consul/OpenSearch-index backend implements the
+same `DirectiveStore` trait unchanged, keeping a watched local snapshot so
+`load` stays I/O-free on the hot path. TTL safety is intrinsic: directives carry
+an absolute expiry, so even a published set that is never replaced self-expires
+at evaluation — a forgotten fleet "on" turns itself off.
+
 ## 4. `/debug/explain`
 
 Not OTel — a synchronous JSON assembly of a single request's decision chain for

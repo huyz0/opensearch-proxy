@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use osproxy_core::{Clock, EndpointKind, RequestId, SystemClock};
 use osproxy_observe::{
-    resource_spans, ClassifyInfo, DiagLevel, DirectiveSet, DirectiveVerifier, EgressInfo,
-    ExplainStore, NoVerifier, NoopExporter, RequestAttrs, RequestTrace, SpanExporter,
+    resource_spans, ClassifyInfo, DiagLevel, DirectiveSet, DirectiveStore, DirectiveVerifier,
+    EgressInfo, ExplainStore, NoVerifier, NoopExporter, RequestAttrs, RequestTrace, SpanExporter,
 };
 use osproxy_sink::{Reader, Sink};
 use osproxy_spi::{RequestCtx, SpiError, TenancySpi};
@@ -55,7 +55,9 @@ pub struct Pipeline<T, S> {
     /// so a configured exporter exports every request; lower it to `Off` to make
     /// export purely directive-driven (targeted sampling).
     baseline: DiagLevel,
-    directives: Arc<DirectiveSet>,
+    /// The fleet-wide directive source, polled fresh per request so an operator
+    /// can flip verbosity without a restart. Defaults to an empty static set.
+    directive_store: Arc<dyn DirectiveStore>,
     verifier: Arc<dyn DirectiveVerifier>,
 }
 
@@ -83,7 +85,10 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             clock: Arc::new(SystemClock),
             service_name: "osproxy".to_owned(),
             baseline: DiagLevel::Shape,
-            directives: Arc::new(DirectiveSet::new()),
+            // An empty static set as the default store: `Arc<DirectiveSet>` is
+            // itself a `DirectiveStore`, so this is `Arc<dyn DirectiveStore>` over
+            // a constant snapshot. Swap it for a fleet store via builder.
+            directive_store: Arc::new(Arc::new(DirectiveSet::new())),
             verifier: Arc::new(NoVerifier),
         }
     }
@@ -125,11 +130,21 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         self
     }
 
-    /// Sets the active diagnostics directives (builder style). Directives can
-    /// raise the level for, or restrict export to, targeted requests.
+    /// Sets a fixed set of active diagnostics directives (builder style). For a
+    /// fleet-wide, restart-free source use [`Pipeline::with_directive_store`].
     #[must_use]
     pub fn with_directives(mut self, directives: Arc<DirectiveSet>) -> Self {
-        self.directives = directives;
+        // `Arc<DirectiveSet>` is itself a `DirectiveStore` (a constant snapshot).
+        self.directive_store = Arc::new(directives);
+        self
+    }
+
+    /// Sets the fleet-wide directive store (builder style). The pipeline polls it
+    /// fresh per request, so a controller publishing a new set flips verbosity
+    /// across the fleet without a restart (`docs/05` §3).
+    #[must_use]
+    pub fn with_directive_store(mut self, store: Arc<dyn DirectiveStore>) -> Self {
+        self.directive_store = store;
         self
     }
 
@@ -223,9 +238,11 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         };
         let now = self.clock.now();
         let request = ctx.request_id();
+        // Poll the fleet directive store fresh (a cheap Arc clone of the current
+        // snapshot) so a published flip takes effect without a restart.
         let mut level = self
             .baseline
-            .max(self.directives.evaluate(&attrs, now, request));
+            .max(self.directive_store.load().evaluate(&attrs, now, request));
         // Fold in a verified single-request directive from the signed
         // `X-Debug-Directive` header, if present and valid (`docs/05` §3).
         if let Some(from_header) = ctx
