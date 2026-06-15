@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use osproxy_core::{Clock, EndpointKind, RequestId, SystemClock};
 use osproxy_observe::{
-    resource_spans, ClassifyInfo, EgressInfo, ExplainStore, NoopExporter, RequestTrace,
-    SpanExporter,
+    resource_spans, ClassifyInfo, DiagLevel, DirectiveSet, EgressInfo, ExplainStore, NoopExporter,
+    RequestAttrs, RequestTrace, SpanExporter,
 };
 use osproxy_sink::{Reader, Sink};
 use osproxy_spi::{RequestCtx, SpiError, TenancySpi};
@@ -51,6 +51,11 @@ pub struct Pipeline<T, S> {
     exporter: Arc<dyn SpanExporter>,
     clock: Arc<dyn Clock>,
     service_name: String,
+    /// The verbosity applied when no directive raises it. Default [`DiagLevel::Shape`]
+    /// so a configured exporter exports every request; lower it to `Off` to make
+    /// export purely directive-driven (targeted sampling).
+    baseline: DiagLevel,
+    directives: Arc<DirectiveSet>,
 }
 
 impl<T, S> std::fmt::Debug for Pipeline<T, S> {
@@ -76,6 +81,8 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             exporter: Arc::new(NoopExporter),
             clock: Arc::new(SystemClock),
             service_name: "osproxy".to_owned(),
+            baseline: DiagLevel::Shape,
+            directives: Arc::new(DirectiveSet::new()),
         }
     }
 
@@ -104,6 +111,23 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
     #[must_use]
     pub fn with_service_name(mut self, service_name: impl Into<String>) -> Self {
         self.service_name = service_name.into();
+        self
+    }
+
+    /// Sets the baseline diagnostics level applied to every request before
+    /// directives (builder style). Default [`DiagLevel::Shape`]; set to
+    /// [`DiagLevel::Off`] to export only what a directive selects.
+    #[must_use]
+    pub fn with_baseline_level(mut self, baseline: DiagLevel) -> Self {
+        self.baseline = baseline;
+        self
+    }
+
+    /// Sets the active diagnostics directives (builder style). Directives can
+    /// raise the level for, or restrict export to, targeted requests.
+    #[must_use]
+    pub fn with_directives(mut self, directives: Arc<DirectiveSet>) -> Self {
+        self.directives = directives;
         self
     }
 
@@ -158,9 +182,10 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         }
         self.explain.record(ctx.request_id().clone(), &trace);
 
-        // Hand the finished trace to the exporter (background, best-effort — never
-        // blocks or fails the response).
-        if exporting {
+        // Export the span when an exporter is active AND the diagnostics level for
+        // this request reaches at least `Shape` — so directives can restrict export
+        // to a targeted, sampled subset (`docs/05` §3). Background, best-effort.
+        if exporting && self.diag_level(ctx, &trace) >= DiagLevel::Shape {
             let end_nanos = self.clock.unix_nanos();
             if let Some(payload) = resource_spans(
                 &self.service_name,
@@ -173,6 +198,22 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             }
         }
         result
+    }
+
+    /// The effective diagnostics level for a finished request: the baseline
+    /// raised by any directive that targets it (by tenant/index/principal/
+    /// endpoint), evaluated at the current time so expiry/sampling apply.
+    fn diag_level(&self, ctx: &RequestCtx<'_>, trace: &RequestTrace) -> DiagLevel {
+        let attrs = RequestAttrs {
+            tenant: trace.resolved_partition(),
+            index: ctx.logical_index(),
+            principal: ctx.principal_id(),
+            endpoint: ctx.endpoint(),
+        };
+        self.baseline.max(
+            self.directives
+                .evaluate(&attrs, self.clock.now(), ctx.request_id()),
+        )
     }
 
     /// Dispatches on endpoint class, recording the per-stage spans into `trace`.
@@ -198,179 +239,5 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-
-    use osproxy_core::{ClusterId, FieldName, IndexName, PartitionId, PrincipalId, RequestId};
-    use osproxy_sink::MemorySink;
-    use osproxy_spi::{
-        DocIdRule, HeaderView, HttpMethod, IdTemplate, InjectedField, InjectedValue, JsonPath,
-        PartitionKeySpec, Placement, PlacementAt, Principal, Protocol, SensitivitySpec,
-    };
-    use osproxy_tenancy::PlacementTable;
-
-    struct Tenancy {
-        table: Arc<PlacementTable>,
-    }
-
-    impl TenancySpi for Tenancy {
-        fn partition_key(&self) -> PartitionKeySpec {
-            // Ingest resolves from the body; by-id reads (no body) from a header.
-            PartitionKeySpec::AnyOf(vec![
-                PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
-                PartitionKeySpec::Header("x-tenant".to_owned()),
-            ])
-        }
-        fn doc_id_rule(&self) -> Option<DocIdRule> {
-            Some(DocIdRule::new(IdTemplate::new("{partition}:{body.id}")).with_routing(true))
-        }
-        fn injected_fields(&self) -> Vec<InjectedField> {
-            vec![InjectedField::new(
-                FieldName::from("_tenant"),
-                InjectedValue::PartitionId,
-            )]
-        }
-        fn sensitive_fields(&self) -> SensitivitySpec {
-            SensitivitySpec::none()
-        }
-        async fn placement_for(&self, p: &PartitionId) -> Result<PlacementAt, SpiError> {
-            self.table.get(p).ok_or_else(|| SpiError::PlacementMissing {
-                partition: p.clone(),
-            })
-        }
-    }
-
-    fn pipeline() -> Pipeline<Tenancy, MemorySink> {
-        let table = Arc::new(PlacementTable::new());
-        table.set(
-            PartitionId::from("acme"),
-            Placement::SharedIndex {
-                cluster: ClusterId::from("eu-1"),
-                index: IndexName::from("shared"),
-                inject: vec![InjectedField::new(
-                    FieldName::from("_tenant"),
-                    InjectedValue::PartitionId,
-                )],
-            },
-        );
-        Pipeline::new(
-            TenancyRouter::new(Tenancy {
-                table: Arc::clone(&table),
-            }),
-            MemorySink::new(),
-        )
-    }
-
-    fn ctx<'a>(
-        principal: &'a Principal,
-        rid: &'a RequestId,
-        headers: &'a [(String, String)],
-        endpoint: EndpointKind,
-        body: &'a [u8],
-    ) -> RequestCtx<'a> {
-        RequestCtx::new(
-            principal,
-            rid,
-            HttpMethod::Put,
-            endpoint,
-            Protocol::Http1,
-            "logical",
-            HeaderView::new(headers),
-            body,
-        )
-    }
-
-    #[tokio::test]
-    async fn ingest_doc_returns_created_response() {
-        let p = pipeline();
-        let principal = Principal::new(PrincipalId::from("svc"));
-        let rid = RequestId::from("r");
-        let headers = vec![];
-        let c = ctx(
-            &principal,
-            &rid,
-            &headers,
-            EndpointKind::IngestDoc,
-            br#"{"tenant_id":"acme","id":7}"#,
-        );
-        let resp = p.handle(&c).await.unwrap();
-        assert_eq!(resp.status, 201);
-        let body = String::from_utf8(resp.body).unwrap();
-        assert!(body.contains(r#""_id":"acme:7""#), "{body}");
-        assert!(body.contains(r#""result":"created""#));
-    }
-
-    #[tokio::test]
-    async fn unimplemented_endpoint_is_unsupported() {
-        // Cursor is tenancy-aware but not yet wired in the pipeline (M5).
-        let p = pipeline();
-        let principal = Principal::new(PrincipalId::from("svc"));
-        let rid = RequestId::from("r");
-        let headers = vec![];
-        let c = ctx(
-            &principal,
-            &rid,
-            &headers,
-            EndpointKind::Cursor,
-            br#"{"q":1}"#,
-        );
-        let err = p.handle(&c).await.unwrap_err();
-        assert!(matches!(
-            err,
-            RequestError::Spi(SpiError::UnsupportedEndpoint {
-                endpoint: EndpointKind::Cursor
-            })
-        ));
-    }
-
-    #[tokio::test]
-    async fn explain_records_success_spans() {
-        let p = pipeline();
-        let principal = Principal::new(PrincipalId::from("svc"));
-        let rid = RequestId::from("trace-ok");
-        let headers = vec![];
-        let c = ctx(
-            &principal,
-            &rid,
-            &headers,
-            EndpointKind::IngestDoc,
-            br#"{"tenant_id":"acme","id":7}"#,
-        );
-        p.handle(&c).await.unwrap();
-
-        let doc = p.explain(&rid).expect("trace recorded");
-        assert_eq!(doc["outcome"], "ok");
-        assert_eq!(doc["spans"]["spi.resolve"]["partition_id"], "acme");
-        assert_eq!(doc["spans"]["spi.resolve"]["routing"], true);
-        assert_eq!(
-            doc["spans"]["rewrite"]["transform_kind"],
-            "inject+construct_id"
-        );
-        assert_eq!(doc["spans"]["egress"]["status"], 201);
-        assert!(doc["error"].is_null());
-    }
-
-    #[tokio::test]
-    async fn explain_records_failure_with_remediation() {
-        // A placement-missing failure: the reference table here always resolves,
-        // so drive an unsupported endpoint instead — still a recorded failure.
-        let p = pipeline();
-        let principal = Principal::new(PrincipalId::from("svc"));
-        let rid = RequestId::from("trace-err");
-        let headers = vec![];
-        let c = ctx(
-            &principal,
-            &rid,
-            &headers,
-            EndpointKind::IngestBulk,
-            br#"{"q":1}"#,
-        );
-        let _ = p.handle(&c).await;
-
-        let doc = p.explain(&rid).expect("trace recorded");
-        assert_eq!(doc["outcome"], "error");
-        assert_eq!(doc["error"]["code"], "unsupported_endpoint");
-        assert!(doc["error"]["remediation"].is_string());
-    }
-}
+#[path = "pipeline_tests.rs"]
+mod tests;

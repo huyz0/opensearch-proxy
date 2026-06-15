@@ -6,12 +6,16 @@
 #![allow(clippy::unwrap_used)]
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use osproxy_core::{
-    ClusterId, EndpointKind, FieldName, IndexName, ManualClock, PartitionId, PrincipalId, RequestId,
+    Clock, ClusterId, EndpointKind, FieldName, IndexName, ManualClock, PartitionId, PrincipalId,
+    RequestId,
 };
 use osproxy_engine::Pipeline;
-use osproxy_observe::SpanExporter;
+use osproxy_observe::{
+    DiagLevel, DiagnosticsDirective, DirectiveMatch, DirectiveSet, SpanExporter,
+};
 use osproxy_sink::MemorySink;
 use osproxy_spi::{
     DocIdRule, HeaderView, HttpMethod, IdTemplate, InjectedField, InjectedValue, JsonPath,
@@ -127,5 +131,70 @@ async fn the_default_pipeline_exports_nothing() {
     assert!(
         exporter.0.lock().unwrap().is_empty(),
         "an unconfigured pipeline exports nothing"
+    );
+}
+
+#[tokio::test]
+async fn baseline_off_suppresses_export_until_a_directive_selects_the_request() {
+    // Baseline Off makes export purely directive-driven: with no directive the
+    // exporter is configured but ships nothing.
+    let off = RecordingExporter::default();
+    let off_pipeline = pipeline()
+        .with_exporter(Arc::new(off.clone()))
+        .with_clock(Arc::new(ManualClock::new()))
+        .with_baseline_level(DiagLevel::Off);
+    ingest(&off_pipeline, &RequestId::from("r")).await;
+    assert!(
+        off.0.lock().unwrap().is_empty(),
+        "baseline Off + no directive exports nothing"
+    );
+
+    // A directive targeting the request's tenant re-enables export for it.
+    let on = RecordingExporter::default();
+    let clock = Arc::new(ManualClock::new());
+    let directive = DiagnosticsDirective {
+        id: "watch-acme".to_owned(),
+        match_: DirectiveMatch::all().for_tenant(PartitionId::from("acme")),
+        level: DiagLevel::Shape,
+        sample_per_mille: 1000,
+        expires_at: clock.now().saturating_add(Duration::from_secs(3600)),
+        ring_buffer: false,
+    };
+    let on_pipeline = pipeline()
+        .with_exporter(Arc::new(on.clone()))
+        .with_clock(clock)
+        .with_baseline_level(DiagLevel::Off)
+        .with_directives(Arc::new(DirectiveSet::from_directives(vec![directive])));
+    ingest(&on_pipeline, &RequestId::from("r")).await;
+    assert_eq!(
+        on.0.lock().unwrap().len(),
+        1,
+        "a directive targeting the tenant re-enables export"
+    );
+}
+
+#[tokio::test]
+async fn an_expired_directive_does_not_re_enable_export() {
+    let exporter = RecordingExporter::default();
+    let clock = Arc::new(ManualClock::new());
+    // Expires in the past relative to the pipeline clock (which is at 0): a
+    // forgotten "on" cannot keep exporting.
+    let directive = DiagnosticsDirective {
+        id: "stale".to_owned(),
+        match_: DirectiveMatch::all(),
+        level: DiagLevel::Shape,
+        sample_per_mille: 1000,
+        expires_at: clock.now(), // == now, so `now < expires_at` is false
+        ring_buffer: false,
+    };
+    let p = pipeline()
+        .with_exporter(Arc::new(exporter.clone()))
+        .with_clock(clock)
+        .with_baseline_level(DiagLevel::Off)
+        .with_directives(Arc::new(DirectiveSet::from_directives(vec![directive])));
+    ingest(&p, &RequestId::from("r")).await;
+    assert!(
+        exporter.0.lock().unwrap().is_empty(),
+        "an expired directive does not export"
     );
 }

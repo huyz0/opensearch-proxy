@@ -121,6 +121,13 @@ impl RequestTrace {
         self.context.as_ref()
     }
 
+    /// The partition the request resolved to, once routing has run — so a
+    /// tenant-targeted diagnostics directive can be evaluated against it.
+    #[must_use]
+    pub fn resolved_partition(&self) -> Option<&PartitionId> {
+        self.resolve.as_ref().map(|r| &r.partition)
+    }
+
     /// Records the `ingress` span.
     pub fn record_ingress(&mut self, info: IngressInfo) {
         self.ingress = Some(info);

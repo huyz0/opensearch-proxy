@@ -15,6 +15,11 @@ pins the wire conventions.
   `OSPROXY_OTLP_ENDPOINT` (collector base URL) is set; `OSPROXY_SERVICE_NAME`
   sets `service.name`. With no exporter the pipeline skips encoding entirely
   (`SpanExporter::enabled() == false`).
+- **Directive-gated.** Export happens only when the request's effective
+  `DiagLevel` (pipeline baseline raised by any matching directive, docs/05 §3)
+  reaches `Shape`. The baseline defaults to `Shape`, so a configured exporter
+  exports every request; lowering the baseline to `Off` makes export purely
+  directive-driven — targeted, sampled, TTL-bounded.
 - **Never on the request's critical path.** `osproxy-otlp`'s `OtlpHttpExporter`
   hands off to a background task and ignores the result — a slow or down
   collector adds no latency and cannot fail a request (ADR-005, read-only obs).
