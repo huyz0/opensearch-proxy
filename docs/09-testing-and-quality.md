@@ -70,6 +70,15 @@ The headline traceability requirement gets its own automated test:
 - If a human/LLM cannot diagnose from telemetry alone, the trace schema is
   deficient and the test fails. This operationalizes "no human takeover."
 
+Implemented as `crates/osproxy-engine/tests/blind_diagnosis.rs`: each
+representative failure (partition unresolved, placement missing, placement
+backend down, upstream rejection, stale epoch) is driven deterministically
+through the pipeline with injected tenancy/sink; the test captures *only* the
+`/debug/explain` document and a programmatic `diagnose()` rubric asserts the
+trace alone yields the failed stage (inferred from span presence), the stable
+code, the decision chain, retryability, and a non-empty remediation. The
+LLM-judged variant layers on top of the same captured evidence.
+
 ## 4. Test quality standards
 
 - **Deterministic**: no sleeps, no wall-clock, no network flakiness. Inject
