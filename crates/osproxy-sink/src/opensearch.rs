@@ -6,6 +6,12 @@
 //! handshake (NFR-P). M1 speaks cleartext HTTP to a configured per-cluster
 //! endpoint; the TLS [`CryptoProvider`](osproxy_spi) connector attaches here in
 //! the transport slice without changing this mapping.
+//
+// JUSTIFY(file-length): one cohesive unit — the live `OpenSearchSink` and its
+// per-cluster `ClusterPool`s (construction, sharded pools, dispatch, per-request
+// timeout, circuit breaker, and the pool-reuse stats accessors). These all touch
+// the private `clusters` map, so splitting them would force that internal state
+// public for no real separation of concerns.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -176,6 +182,17 @@ impl OpenSearchSink {
     #[must_use]
     pub fn pool_stats(&self, cluster: &ClusterId) -> Option<PoolStats> {
         self.clusters.get(cluster).map(ClusterPool::stats)
+    }
+
+    /// Pool-reuse counters for **every** configured cluster, paired with its id —
+    /// the fleet-/agent-facing readout behind the `/metrics` snapshot. Order is
+    /// unspecified (a `HashMap` walk); callers that need stability sort by id.
+    #[must_use]
+    pub fn pool_stats_all(&self) -> Vec<(ClusterId, PoolStats)> {
+        self.clusters
+            .iter()
+            .map(|(id, pool)| (id.clone(), pool.stats()))
+            .collect()
     }
 
     /// Resolves a cluster's pool, or a transport error if it is unconfigured.

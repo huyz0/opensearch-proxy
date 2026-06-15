@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use osproxy_core::{Clock, ErrorCode, RequestId};
 use osproxy_engine::{Pipeline, RequestError};
-use osproxy_observe::InMemoryDirectiveStore;
+use osproxy_observe::{InMemoryDirectiveStore, Metrics, PoolSnapshot};
 use osproxy_sink::OpenSearchSink;
 use osproxy_spi::{
     AuthError, Authenticator, ClientCredentials, HeaderView, HttpMethod, Protocol, RequestCtx,
@@ -36,6 +36,7 @@ pub struct AppHandler<A> {
     request_seq: AtomicU64,
     request_log: Box<dyn RequestLog>,
     directive_admin: Option<DirectiveAdmin>,
+    metrics: Metrics,
 }
 
 impl<A> std::fmt::Debug for AppHandler<A> {
@@ -57,6 +58,7 @@ impl<A: Authenticator> AppHandler<A> {
             request_seq: AtomicU64::new(0),
             request_log: Box::new(NoLog),
             directive_admin: None,
+            metrics: Metrics::new(),
         }
     }
 
@@ -65,6 +67,25 @@ impl<A: Authenticator> AppHandler<A> {
     #[must_use]
     pub fn pipeline(&self) -> &AppPipeline {
         &self.pipeline
+    }
+
+    /// Builds the shape-only `/metrics` snapshot JSON: request tallies plus every
+    /// configured cluster's upstream pool-reuse counters. No tenant data, so it is
+    /// always safe to expose.
+    fn metrics_snapshot(&self) -> String {
+        let pools = self
+            .pipeline
+            .sink()
+            .pool_stats_all()
+            .into_iter()
+            .map(|(id, s)| PoolSnapshot {
+                cluster: id.as_str().to_owned(),
+                opened: s.opened,
+                dispatched: s.dispatched,
+                reused: s.reused(),
+            })
+            .collect();
+        self.metrics.snapshot(pools).to_json()
     }
 
     /// Sets the structured per-request logger (builder style). Default: no logs.
@@ -148,6 +169,14 @@ impl<A: Authenticator> IngressHandler for AppHandler<A> {
             return IngressResponse::json(200, tape.to_string().into_bytes());
         }
 
+        // Always-on operational snapshot — the one introspection surface meant to
+        // stay enabled in production, where `/debug/*` is off. Shape-only (counts,
+        // rates, cluster ids), so it needs no auth and leaks nothing. Per instance:
+        // an external aggregator rolls the fleet up.
+        if req.path == "/metrics" {
+            return IngressResponse::json(200, self.metrics_snapshot().into_bytes());
+        }
+
         // Privileged: publish a fleet directive set. Token-gated and fail-closed —
         // a forged token or a malformed body changes nothing (`docs/05` §3).
         if req.path == "/admin/directives" {
@@ -182,10 +211,18 @@ impl<A: Authenticator> IngressHandler for AppHandler<A> {
 
         // Echo the request id so a client (or LLM) can fetch its
         // /debug/explain/{id} afterward.
-        let response = match self.pipeline.handle(&ctx).await {
-            Ok(resp) => IngressResponse::json(resp.status, resp.body),
-            Err(err) => IngressResponse::json(status_for(&err), error_body(&err)),
+        let (response, ok) = match self.pipeline.handle(&ctx).await {
+            Ok(resp) => {
+                let ok = (200..300).contains(&resp.status);
+                (IngressResponse::json(resp.status, resp.body), ok)
+            }
+            Err(err) => (
+                IngressResponse::json(status_for(&err), error_body(&err)),
+                false,
+            ),
         };
+        // Tally the data-plane outcome for the /metrics snapshot (shape-only).
+        self.metrics.record(ok);
 
         // Structured request log (opt-in): emit the shape-only explain document,
         // which carries the request's trace_id, so logs join the trace/spans.

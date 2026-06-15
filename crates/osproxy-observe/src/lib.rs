@@ -20,6 +20,7 @@ mod directive;
 mod explain;
 mod export;
 mod otlp;
+mod stats;
 mod store;
 mod trace;
 
@@ -31,6 +32,7 @@ pub use directive::{
 pub use explain::{explain_json, ExplainStore};
 pub use export::{NoopExporter, SpanExporter};
 pub use otlp::resource_spans;
+pub use stats::{Metrics, PoolSnapshot, StatsSnapshot};
 pub use store::{DirectiveStore, InMemoryDirectiveStore};
 pub use trace::{
     ClassifyInfo, DispatchInfo, EgressInfo, IngressInfo, RequestTrace, ResolveInfo, RewriteInfo,

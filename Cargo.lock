@@ -1566,6 +1566,7 @@ name = "osproxy-observe"
 version = "0.0.0"
 dependencies = [
  "osproxy-core",
+ "serde",
  "serde_json",
 ]
 

@@ -139,6 +139,37 @@ async fn put_doc_is_tenanted_and_forwarded_upstream() {
     assert!(text.contains(r#""outcome":"ok""#), "{text}");
     // No tenant values, only ids/shapes.
     assert!(!text.contains("\"hi\""), "value leaked: {text}");
+
+    assert_metrics_snapshot(&client, proxy_addr).await;
+}
+
+/// Scrapes `/metrics` and asserts the shape-only snapshot reflects one served,
+/// successful data-plane request and the upstream pool — the prod-safe source an
+/// external aggregator reads, with no auth and no tenant values.
+async fn assert_metrics_snapshot(
+    client: &Client<hyper_util::client::legacy::connect::HttpConnector, Full<Bytes>>,
+    proxy_addr: std::net::SocketAddr,
+) {
+    let metrics = client
+        .request(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("http://{proxy_addr}/metrics"))
+                .body(Full::new(Bytes::new()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(metrics.status(), 200);
+    let mbody = metrics.into_body().collect().await.unwrap().to_bytes();
+    let mtext = String::from_utf8(mbody.to_vec()).unwrap();
+    let snap: serde_json::Value = serde_json::from_str(&mtext).unwrap();
+    assert_eq!(snap["requests_total"], 1, "one data-plane request: {mtext}");
+    assert_eq!(snap["requests_ok"], 1);
+    assert_eq!(snap["requests_error"], 0);
+    assert_eq!(snap["pools"][0]["cluster"], "default");
+    assert_eq!(snap["pools"][0]["dispatched"], 1);
+    assert!(!mtext.contains("acme"), "metrics leaked tenant: {mtext}");
 }
 
 #[tokio::test]
