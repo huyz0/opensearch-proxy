@@ -103,7 +103,7 @@ impl<A: Authenticator> AppHandler<A> {
         if req.method != HttpMethod::Post {
             return IngressResponse::json(405, br#"{"error":"method_not_allowed"}"#.to_vec());
         }
-        if !bearer_token_matches(req, &admin.token) {
+        if !crate::bearer::matches(&req.headers, &admin.token) {
             return IngressResponse::json(401, br#"{"error":"unauthorized"}"#.to_vec());
         }
         match decode_directive_set(&req.body, admin.clock.as_ref()) {
@@ -117,34 +117,6 @@ impl<A: Authenticator> AppHandler<A> {
             }
         }
     }
-}
-
-/// Whether the request's bearer token equals `expected`. The `Bearer` scheme is
-/// matched case-insensitively (RFC 6750); the token bytes are compared in
-/// constant time so a wrong admin token cannot be narrowed by timing.
-fn bearer_token_matches(req: &IngressRequest, expected: &str) -> bool {
-    let presented = req
-        .headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
-        .and_then(|(_, v)| v.split_once(' '))
-        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
-        .map_or("", |(_, token)| token);
-    constant_time_eq(presented.as_bytes(), expected.as_bytes())
-}
-
-/// Constant-time comparison **for equal-length inputs** (no early return on the
-/// first differing byte). The length itself is not concealed — acceptable for a
-/// fixed shared admin token, where the length is not the secret.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
 }
 
 impl<A: Authenticator> IngressHandler for AppHandler<A> {
@@ -223,14 +195,8 @@ impl<A: Authenticator> IngressHandler for AppHandler<A> {
 /// Extracts client credentials from a request: a bearer token from
 /// `Authorization` and the verified mTLS client-certificate identity, if any.
 fn credentials_from(req: &IngressRequest) -> ClientCredentials {
-    let bearer_token = req
-        .headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
-        .and_then(|(_, v)| v.strip_prefix("Bearer "))
-        .map(str::to_owned);
     ClientCredentials {
-        bearer_token,
+        bearer_token: crate::bearer::parse(&req.headers).map(str::to_owned),
         client_cert_subject: req.client_cert_subject.clone(),
     }
 }
@@ -264,44 +230,4 @@ fn error_body(err: &RequestError) -> Vec<u8> {
         err.retryable(),
     )
     .into_bytes()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn with_auth(value: &str) -> IngressRequest {
-        IngressRequest {
-            method: HttpMethod::Post,
-            path: "/admin/directives".to_owned(),
-            endpoint: osproxy_core::EndpointKind::Unknown,
-            logical_index: String::new(),
-            doc_id: None,
-            headers: vec![("Authorization".to_owned(), value.to_owned())],
-            body: vec![],
-            client_cert_subject: None,
-        }
-    }
-
-    #[test]
-    fn bearer_match_is_exact_but_scheme_is_case_insensitive() {
-        assert!(bearer_token_matches(&with_auth("Bearer s3cret"), "s3cret"));
-        // Scheme case does not matter (RFC 6750); the token must match exactly.
-        assert!(bearer_token_matches(&with_auth("bearer s3cret"), "s3cret"));
-        assert!(!bearer_token_matches(&with_auth("Bearer s3cre"), "s3cret"));
-        assert!(!bearer_token_matches(
-            &with_auth("Bearer s3cret!"),
-            "s3cret"
-        ));
-        // Missing scheme, wrong scheme, or no header: rejected.
-        assert!(!bearer_token_matches(&with_auth("s3cret"), "s3cret"));
-        assert!(!bearer_token_matches(&with_auth("Basic s3cret"), "s3cret"));
-    }
-
-    #[test]
-    fn constant_time_eq_matches_byte_compare_semantics() {
-        assert!(constant_time_eq(b"abc", b"abc"));
-        assert!(!constant_time_eq(b"abc", b"abd"));
-        assert!(!constant_time_eq(b"abc", b"ab"), "differing lengths differ");
-    }
 }

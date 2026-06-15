@@ -7,6 +7,7 @@
 #![deny(missing_docs)]
 
 pub mod auth;
+mod bearer;
 pub mod directive;
 pub mod directives_api;
 pub mod handler;
