@@ -8,4 +8,5 @@
 
 pub mod auth;
 pub mod handler;
+pub mod log;
 pub mod tenancy;

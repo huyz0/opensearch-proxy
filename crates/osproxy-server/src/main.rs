@@ -19,6 +19,7 @@ use osproxy_engine::Pipeline;
 use osproxy_otlp::OtlpHttpExporter;
 use osproxy_server::auth::ReferenceAuthenticator;
 use osproxy_server::handler::AppHandler;
+use osproxy_server::log::{NoLog, RequestLog, StdoutJsonLog};
 use osproxy_server::tenancy::ReferenceTenancy;
 use osproxy_sink::{OpenSearchSink, Reader, Sink};
 use osproxy_spi::TenancySpi;
@@ -60,10 +61,10 @@ async fn run() -> Result<(), String> {
     } else {
         "token"
     };
-    let handler = Arc::new(AppHandler::new(
-        pipeline,
-        ReferenceAuthenticator::new(tokens),
-    ));
+    let handler = Arc::new(
+        AppHandler::new(pipeline, ReferenceAuthenticator::new(tokens))
+            .with_request_log(request_log()),
+    );
 
     let listener = TcpListener::bind(&bind)
         .await
@@ -139,6 +140,21 @@ where
             println!("osproxy: shutdown signal received");
             Ok(())
         }
+    }
+}
+
+/// The structured per-request logger: stdout JSON lines (each the shape-only
+/// explain document, carrying `trace_id`) when `OSPROXY_LOG_REQUESTS` is set,
+/// off otherwise. Correlates with the OTLP traces/spans by `trace_id`.
+fn request_log() -> Box<dyn RequestLog> {
+    if std::env::var("OSPROXY_LOG_REQUESTS")
+        .ok()
+        .is_some_and(|v| !v.is_empty())
+    {
+        println!("osproxy structured request logging: on (stdout JSON)");
+        Box::new(StdoutJsonLog)
+    } else {
+        Box::new(NoLog)
     }
 }
 

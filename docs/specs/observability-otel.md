@@ -20,8 +20,14 @@ pins the wire conventions.
   collector adds no latency and cannot fail a request (ADR-005, read-only obs).
 - The encoder is `osproxy_observe::resource_spans` (pure, I/O-free); the seam is
   `osproxy_observe::SpanExporter` (`NoopExporter` default).
-- Structured JSON logs correlated by trace id: a follow-up. (`/debug/explain`
-  already carries `trace_id`.)
+
+### Structured logs (correlated by trace id)
+
+One structured JSON log line per request — the shape-only `/debug/explain`
+document, which carries the request's `trace_id` — so logs join the traces/spans
+in any aggregator. Off by default (`OSPROXY_LOG_REQUESTS` enables stdout JSON);
+the seam is `osproxy_server::log::RequestLog` (`NoLog` default, `StdoutJsonLog`
+impl). Shape-only by construction, so a log line can never carry a tenant value.
 
 ## 1a. Context propagation (W3C Trace Context)
 

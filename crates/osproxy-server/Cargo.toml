@@ -28,6 +28,7 @@ osproxy-otlp.workspace = true
 osproxy-spi.workspace = true
 osproxy-tenancy.workspace = true
 osproxy-sink.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal"] }
 
 [dev-dependencies]

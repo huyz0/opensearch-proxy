@@ -9,6 +9,7 @@ use osproxy_sink::OpenSearchSink;
 use osproxy_spi::{AuthError, Authenticator, ClientCredentials, HeaderView, Protocol, RequestCtx};
 use osproxy_transport::{IngressHandler, IngressRequest, IngressResponse};
 
+use crate::log::{NoLog, RequestLog};
 use crate::tenancy::ReferenceTenancy;
 
 /// The concrete pipeline this binary serves.
@@ -16,22 +17,39 @@ pub type AppPipeline = Pipeline<ReferenceTenancy, OpenSearchSink>;
 
 /// Adapts the engine pipeline to the transport's [`IngressHandler`] contract,
 /// authenticating each request with the configured [`Authenticator`].
-#[derive(Debug)]
 pub struct AppHandler<A> {
     pipeline: AppPipeline,
     authenticator: A,
     request_seq: AtomicU64,
+    request_log: Box<dyn RequestLog>,
+}
+
+impl<A> std::fmt::Debug for AppHandler<A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The injected logger is not `Debug`; show whether it is enabled.
+        f.debug_struct("AppHandler")
+            .field("logging", &self.request_log.enabled())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<A: Authenticator> AppHandler<A> {
-    /// Wraps a pipeline and an authenticator.
+    /// Wraps a pipeline and an authenticator (no request logging by default).
     #[must_use]
     pub fn new(pipeline: AppPipeline, authenticator: A) -> Self {
         Self {
             pipeline,
             authenticator,
             request_seq: AtomicU64::new(0),
+            request_log: Box::new(NoLog),
         }
+    }
+
+    /// Sets the structured per-request logger (builder style). Default: no logs.
+    #[must_use]
+    pub fn with_request_log(mut self, request_log: Box<dyn RequestLog>) -> Self {
+        self.request_log = request_log;
+        self
     }
 
     /// A per-request correlation id. A monotonic counter is enough for the
@@ -88,6 +106,15 @@ impl<A: Authenticator> IngressHandler for AppHandler<A> {
             Ok(resp) => IngressResponse::json(resp.status, resp.body),
             Err(err) => IngressResponse::json(status_for(&err), error_body(&err)),
         };
+
+        // Structured request log (opt-in): emit the shape-only explain document,
+        // which carries the request's trace_id, so logs join the trace/spans.
+        if self.request_log.enabled() {
+            if let Some(record) = self.pipeline.explain(&request_id) {
+                self.request_log.emit(&record);
+            }
+        }
+
         response.with_header("x-request-id", request_id.as_str())
     }
 }

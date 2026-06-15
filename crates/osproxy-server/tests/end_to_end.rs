@@ -226,3 +226,63 @@ async fn token_auth_rejects_missing_and_accepts_valid() {
         .unwrap();
     assert_eq!(ok.status(), 201);
 }
+
+/// A request log that records the structured records it is handed.
+#[derive(Clone, Default)]
+struct RecordingLog(Arc<Mutex<Vec<serde_json::Value>>>);
+
+impl osproxy_server::log::RequestLog for RecordingLog {
+    fn emit(&self, record: &serde_json::Value) {
+        self.0.lock().unwrap().push(record.clone());
+    }
+}
+
+#[tokio::test]
+async fn a_handled_request_emits_a_structured_log_carrying_the_trace_id() {
+    let (upstream, _captured) = start_upstream().await;
+    let cluster = ClusterId::from("default");
+    let mut endpoints = HashMap::new();
+    endpoints.insert(cluster.clone(), upstream);
+    let sink = OpenSearchSink::new(endpoints);
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
+
+    let log = RecordingLog::default();
+    let handler = Arc::new(
+        AppHandler::new(
+            Pipeline::new(TenancyRouter::new(tenancy), sink),
+            ReferenceAuthenticator::dev(),
+        )
+        .with_request_log(Box::new(log.clone())),
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = osproxy_transport::serve(listener, handler).await;
+    });
+
+    let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("http://{proxy_addr}/orders/_doc"))
+        .header("content-type", "application/json")
+        .body(Full::new(Bytes::from_static(
+            br#"{"tenant_id":"acme","id":7}"#,
+        )))
+        .unwrap();
+    let resp = client.request(req).await.unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // The handler emitted exactly one structured record, and it carries the same
+    // request_id and trace_id that correlate it with /debug/explain and the OTLP
+    // trace.
+    let records = log.0.lock().unwrap();
+    assert_eq!(records.len(), 1, "one structured log line per request");
+    let rec = &records[0];
+    assert_eq!(rec["outcome"], "ok");
+    assert!(rec["request_id"].is_string(), "record: {rec}");
+    assert!(
+        rec["trace_id"].as_str().is_some_and(|t| t.len() == 32),
+        "structured log carries the 32-hex trace id: {rec}"
+    );
+}
