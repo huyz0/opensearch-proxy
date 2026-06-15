@@ -110,6 +110,89 @@ fn invalid_pem_is_rejected() {
 }
 
 #[test]
+fn server_offers_only_the_fips_approved_suites() {
+    use osproxy_transport::{CryptoProvider, FIPS_APPROVED_SUITES};
+    let tc = test_cert();
+    let provider = RingProvider::from_pem(tc.cert_pem.as_bytes(), tc.key_pem.as_bytes()).unwrap();
+    let config = provider.server_config();
+
+    // Every suite the server will negotiate is on the FIPS-approved list, and the
+    // list is exactly the approved set — no non-approved suite (e.g. CHACHA20) is
+    // offered (ADR-004 caveat #3, NFR-S5).
+    let offered: Vec<_> = config
+        .crypto_provider()
+        .cipher_suites
+        .iter()
+        .map(tokio_rustls::rustls::SupportedCipherSuite::suite)
+        .collect();
+    assert_eq!(
+        offered.len(),
+        FIPS_APPROVED_SUITES.len(),
+        "server must offer exactly the approved set, no more no less"
+    );
+    for suite in &offered {
+        assert!(
+            FIPS_APPROVED_SUITES.contains(suite),
+            "non-approved suite offered: {suite:?}"
+        );
+    }
+    assert!(
+        !offered.contains(&tokio_rustls::rustls::CipherSuite::TLS13_CHACHA20_POLY1305_SHA256),
+        "CHACHA20 is not FIPS-approved and must not be offered"
+    );
+}
+
+#[tokio::test]
+async fn a_chacha20_only_client_is_refused_at_negotiation() {
+    use tokio_rustls::rustls::CipherSuite::{
+        TLS13_CHACHA20_POLY1305_SHA256, TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+        TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+    };
+    let tc = test_cert();
+    let provider = RingProvider::from_pem(tc.cert_pem.as_bytes(), tc.key_pem.as_bytes()).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = serve_tls(listener, Arc::new(provider), Arc::new(EchoHandler)).await;
+    });
+
+    // A client that offers ONLY CHACHA20 suites shares no suite with the server,
+    // so the handshake must fail rather than fall back to a non-approved suite.
+    let base = tokio_rustls::rustls::crypto::ring::default_provider();
+    let chacha = [
+        TLS13_CHACHA20_POLY1305_SHA256,
+        TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+        TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+    ];
+    let cipher_suites = base
+        .cipher_suites
+        .iter()
+        .copied()
+        .filter(|cs| chacha.contains(&cs.suite()))
+        .collect();
+    let chacha_provider = Arc::new(tokio_rustls::rustls::crypto::CryptoProvider {
+        cipher_suites,
+        ..base
+    });
+    let mut roots = RootCertStore::empty();
+    roots.add(tc.cert_der).unwrap();
+    let config = ClientConfig::builder_with_provider(chacha_provider)
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(config));
+
+    let tcp = TcpStream::connect(addr).await.unwrap();
+    let server_name = ServerName::try_from("localhost").unwrap();
+    let result = connector.connect(server_name, tcp).await;
+    assert!(
+        result.is_err(),
+        "handshake must fail when the client offers only non-approved suites"
+    );
+}
+
+#[test]
 fn alpn_advertises_h2_then_http11() {
     use osproxy_transport::CryptoProvider;
     let tc = test_cert();

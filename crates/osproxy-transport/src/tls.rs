@@ -5,13 +5,42 @@
 //! rustls's pure-Rust `ring` provider — no native toolchain needed. The
 //! FIPS-validated aws-lc-rs provider implements the same trait at M6 behind this
 //! seam (ADR-009); request-path and server code never name a concrete provider.
+//!
+//! Independently of which module backs it, every provider pins the wire policy
+//! to the FIPS-approved set ([`FIPS_APPROVED_SUITES`], TLS 1.2/1.3 — ADR-004
+//! caveat #3, NFR-S5): the module's validation is what differs between `ring` and
+//! aws-lc-rs FIPS, not the suites offered, so the suite/version restriction lives
+//! here in the config layer and is testable without the FIPS toolchain.
 
 use std::sync::Arc;
 
 use thiserror::Error;
+use tokio_rustls::rustls::crypto::CryptoProvider as RustlsCryptoProvider;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use tokio_rustls::rustls::ServerConfig;
+use tokio_rustls::rustls::version::{TLS12, TLS13};
+use tokio_rustls::rustls::{CipherSuite, ServerConfig, SupportedProtocolVersion};
+
+/// The FIPS-approved TLS cipher suites the proxy offers (`docs/07` §2 caveat 3,
+/// NFR-S5):
+/// TLS 1.3 and TLS 1.2 AES-GCM only. CHACHA20-POLY1305 is deliberately excluded —
+/// it is not a FIPS-approved suite. This wire policy is applied to *every*
+/// provider, FIPS-validated or not, so the suites negotiated are identical
+/// regardless of the underlying module; the FIPS module changes validation, not
+/// the suites on the wire. The set is keyed on the provider-independent
+/// [`CipherSuite`] identifier so the aws-lc-rs provider pins the exact same list.
+pub const FIPS_APPROVED_SUITES: &[CipherSuite] = &[
+    CipherSuite::TLS13_AES_128_GCM_SHA256,
+    CipherSuite::TLS13_AES_256_GCM_SHA384,
+    CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+    CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+    CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+    CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+];
+
+/// The FIPS-approved TLS protocol versions: 1.2 and 1.3 only (NFR-S5). Older
+/// versions are refused at negotiation.
+const FIPS_VERSIONS: &[&SupportedProtocolVersion] = &[&TLS13, &TLS12];
 
 /// The pluggable TLS backend.
 ///
@@ -59,9 +88,8 @@ impl RingProvider {
     /// Returns [`TlsError`] if the PEM cannot be parsed or rustls rejects the
     /// certificate/key pair.
     pub fn from_pem(cert_pem: &[u8], key_pem: &[u8]) -> Result<Self, TlsError> {
-        let provider = Arc::new(tokio_rustls::rustls::crypto::ring::default_provider());
-        let builder = ServerConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
+        let builder = ServerConfig::builder_with_provider(ring_fips_pinned_provider())
+            .with_protocol_versions(FIPS_VERSIONS)
             .map_err(|e| TlsError::Config(e.to_string()))?
             .with_no_client_auth();
         Self::finish(builder, cert_pem, key_pem)
@@ -80,7 +108,7 @@ impl RingProvider {
         key_pem: &[u8],
         client_ca_pem: &[u8],
     ) -> Result<Self, TlsError> {
-        let provider = Arc::new(tokio_rustls::rustls::crypto::ring::default_provider());
+        let provider = ring_fips_pinned_provider();
 
         let mut roots = tokio_rustls::rustls::RootCertStore::empty();
         for ca in parse_certs(client_ca_pem)? {
@@ -94,7 +122,7 @@ impl RingProvider {
         .map_err(|e| TlsError::Config(e.to_string()))?;
 
         let builder = ServerConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
+            .with_protocol_versions(FIPS_VERSIONS)
             .map_err(|e| TlsError::Config(e.to_string()))?
             .with_client_cert_verifier(verifier);
         Self::finish(builder, cert_pem, key_pem)
@@ -122,6 +150,24 @@ impl RingProvider {
             server_config: Arc::new(config),
         })
     }
+}
+
+/// The `ring` crypto provider with its cipher-suite list filtered to the
+/// FIPS-approved set ([`FIPS_APPROVED_SUITES`]). Filtering on the
+/// provider-independent [`CipherSuite`] id means the aws-lc-rs FIPS provider pins
+/// the identical list — only the validated module differs, not the wire policy.
+fn ring_fips_pinned_provider() -> Arc<RustlsCryptoProvider> {
+    let base = tokio_rustls::rustls::crypto::ring::default_provider();
+    let cipher_suites = base
+        .cipher_suites
+        .iter()
+        .copied()
+        .filter(|cs| FIPS_APPROVED_SUITES.contains(&cs.suite()))
+        .collect();
+    Arc::new(RustlsCryptoProvider {
+        cipher_suites,
+        ..base
+    })
 }
 
 /// The verified mTLS client identity from a completed handshake, if the peer

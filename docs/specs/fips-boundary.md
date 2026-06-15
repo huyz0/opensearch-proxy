@@ -30,15 +30,29 @@ If a target is not listed, the FIPS validation claim does not hold for it.
 
 ## 3. TLS versions & cipher suites offered in FIPS mode
 
-The `CryptoProvider` (FIPS) configures rustls to offer ONLY approved suites:
+Suite/version pinning is a **config-layer** control (ADR-004 caveat #3), applied
+to *every* provider regardless of the backing module, so it is implemented and
+tested without the FIPS toolchain. It lives in `osproxy-transport::tls`
+(`FIPS_APPROVED_SUITES`, `FIPS_VERSIONS`); the FIPS provider pins the identical
+list (suites are keyed on the provider-independent `rustls::CipherSuite` id).
 
 | TLS version | Approved suites offered |
 |-------------|-------------------------|
-| TLS 1.3 | `[FILL: approved suites]` |
-| TLS 1.2 | `[FILL: approved suites]` |
+| TLS 1.3 | `TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384` |
+| TLS 1.2 | `TLS_ECDHE_{ECDSA,RSA}_WITH_AES_128_GCM_SHA256`, `TLS_ECDHE_{ECDSA,RSA}_WITH_AES_256_GCM_SHA384` |
 
-Everything else is refused at negotiation (NFR-S5). Verified by a TLS-negotiation
-test asserting non-approved suites are rejected.
+`CHACHA20-POLY1305` (all versions) is excluded — not FIPS-approved. Versions are
+pinned to TLS 1.2/1.3 via `FIPS_VERSIONS` (`with_protocol_versions`); the rustls
+build in the tree ships only 1.2/1.3, so the pin is an explicit, future-proof
+constraint by construction rather than a handshake-tested refusal of older
+versions.
+
+The **suite** restriction is verified at negotiation in
+`crates/osproxy-transport/tests/tls.rs`:
+`server_offers_only_the_fips_approved_suites` (the offered set equals the
+approved set, CHACHA20 absent) and
+`a_chacha20_only_client_is_refused_at_negotiation` (a live handshake offering
+only CHACHA20 is rejected, with no fallback to a non-approved suite).
 
 ## 4. Build provenance
 
@@ -55,5 +69,5 @@ encryption/decryption — and what stays outside]`
 
 - [ ] CMVP cert verified live.
 - [ ] Platform match verified.
-- [ ] Suite pinning test green.
+- [x] Suite pinning test green (`osproxy-transport` tls tests, see §3).
 - [ ] Boundary diagram reviewed.

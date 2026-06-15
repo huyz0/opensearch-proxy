@@ -25,4 +25,4 @@ pub use grpc::{serve_grpc, serve_grpc_tls};
 pub use handler::IngressHandler;
 pub use request::{IngressRequest, IngressResponse};
 pub use server::{serve, serve_tls, serve_tls_with_limits, serve_with_limits};
-pub use tls::{CryptoProvider, RingProvider, TlsError};
+pub use tls::{CryptoProvider, RingProvider, TlsError, FIPS_APPROVED_SUITES};
