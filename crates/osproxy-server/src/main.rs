@@ -14,10 +14,11 @@ use std::future::Future;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use osproxy_core::{ClusterId, IndexName};
+use osproxy_core::{ClusterId, IndexName, SystemClock};
 use osproxy_engine::Pipeline;
 use osproxy_otlp::OtlpHttpExporter;
 use osproxy_server::auth::ReferenceAuthenticator;
+use osproxy_server::directive::HmacDirectiveVerifier;
 use osproxy_server::handler::AppHandler;
 use osproxy_server::log::{NoLog, RequestLog, StdoutJsonLog};
 use osproxy_server::tenancy::ReferenceTenancy;
@@ -53,7 +54,10 @@ async fn run() -> Result<(), String> {
     let sink = OpenSearchSink::new(endpoints);
 
     let tenancy = ReferenceTenancy::new(cluster, IndexName::from(index.as_str()));
-    let pipeline = with_otlp_export(Pipeline::new(TenancyRouter::new(tenancy), sink));
+    let pipeline = with_debug_directive(with_otlp_export(Pipeline::new(
+        TenancyRouter::new(tenancy),
+        sink,
+    )));
 
     let tokens = parse_tokens(&env_or("OSPROXY_TOKENS", ""));
     let auth_mode = if tokens.is_empty() {
@@ -174,6 +178,26 @@ fn with_otlp_export<T: TenancySpi, S: Sink + Reader>(pipeline: Pipeline<T, S>) -
     pipeline
         .with_exporter(Arc::new(OtlpHttpExporter::new(&endpoint)))
         .with_service_name(service)
+}
+
+/// Wires the signed `X-Debug-Directive` header channel when
+/// `OSPROXY_DEBUG_DIRECTIVE_KEY` holds the shared HMAC secret; otherwise the
+/// pipeline keeps rejecting every such header (the default `NoVerifier`). The MAC
+/// runs on the build's validated crypto module. Pair with a baseline of `Off` for
+/// a deployment where verbose diagnostics are off until an operator-signed token
+/// turns them on for a single request.
+fn with_debug_directive<T: TenancySpi, S: Sink + Reader>(
+    pipeline: Pipeline<T, S>,
+) -> Pipeline<T, S> {
+    let Some(key) = std::env::var("OSPROXY_DEBUG_DIRECTIVE_KEY")
+        .ok()
+        .filter(|v| !v.is_empty())
+    else {
+        return pipeline;
+    };
+    println!("osproxy X-Debug-Directive header channel: on (HMAC-verified)");
+    let verifier = HmacDirectiveVerifier::new(key.as_bytes(), Arc::new(SystemClock));
+    pipeline.with_directive_verifier(Arc::new(verifier))
 }
 
 /// Builds a TLS provider from `OSPROXY_TLS_CERT`/`OSPROXY_TLS_KEY` (PEM file

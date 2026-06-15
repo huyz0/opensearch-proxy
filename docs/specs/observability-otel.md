@@ -84,6 +84,27 @@ Directive-driven recording (docs/05 §3) maps to OTel sampling decisions at the
 export layer; "Off" produces no exported spans (near-zero cost) while spans are
 still created cheaply in-process.
 
+### 3a. Signed `X-Debug-Directive` header channel
+
+The surgical, single-request channel: an operator mints a token off-band with a
+shared HMAC key and attaches it to one request; `HmacDirectiveVerifier`
+(osproxy-server) authenticates it and raises that request's effective level. A
+client cannot forge a token, so it cannot self-enable verbose diagnostics
+(NFR-S3); enable it with `OSPROXY_DEBUG_DIRECTIVE_KEY` and pair it with a
+baseline of `Off` so diagnostics stay dark until a signed token lights one
+request.
+
+Wire form `{payload_hex}.{sig_hex}`, `sig = HMAC-SHA256(key, payload_bytes)`,
+verified by constant-time `hmac::verify`. Payload JSON: `level` (a `DiagLevel`
+name) and `exp` (absolute unix-seconds expiry) are required; `tenant`/`index`/
+`principal` narrow the target, `sample_per_mille` (default 1000) and
+`ring_buffer` (default false) are optional. The HMAC runs on the build's
+**validated** crypto module (ring under `non-fips`, aws-lc-rs under `fips`,
+cfg-selected exactly like the TLS cert fingerprint), so a FIPS artifact never
+authenticates with a non-validated primitive. The verifier fails closed: an
+unknown level, an out-of-range sampling rate, a past expiry, or any signature
+mismatch authorizes nothing.
+
 ## 4. `/debug/explain`
 
 Not OTel — a synchronous JSON assembly of a single request's decision chain for

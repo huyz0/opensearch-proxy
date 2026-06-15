@@ -89,6 +89,7 @@ fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'static str]> {
             "osproxy-core",
             "osproxy-config",
             "osproxy-engine",
+            "osproxy-observe",
             "osproxy-transport",
             "osproxy-spi",
             "osproxy-tenancy",

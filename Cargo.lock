@@ -1590,6 +1590,7 @@ dependencies = [
 name = "osproxy-server"
 version = "0.0.0"
 dependencies = [
+ "aws-lc-rs",
  "bytes",
  "http-body-util",
  "hyper",
@@ -1597,11 +1598,13 @@ dependencies = [
  "osproxy-config",
  "osproxy-core",
  "osproxy-engine",
+ "osproxy-observe",
  "osproxy-otlp",
  "osproxy-sink",
  "osproxy-spi",
  "osproxy-tenancy",
  "osproxy-transport",
+ "ring",
  "serde_json",
  "testcontainers",
  "tokio",

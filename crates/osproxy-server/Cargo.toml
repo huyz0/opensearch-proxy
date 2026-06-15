@@ -16,19 +16,24 @@ path = "src/main.rs"
 # Crypto provider selection forwarded to osproxy-transport (ADR-009). A FIPS
 # binary is built with `cargo build -p osproxy --no-default-features --features fips`.
 default = ["non-fips"]
-non-fips = ["osproxy-transport/non-fips"]
-fips = ["osproxy-transport/fips"]
+# The crypto feature also selects the HMAC module the X-Debug-Directive verifier
+# authenticates with, so a FIPS binary never links a non-validated primitive.
+non-fips = ["osproxy-transport/non-fips", "dep:ring"]
+fips = ["osproxy-transport/fips", "dep:aws-lc-rs"]
 
 [dependencies]
 osproxy-core.workspace = true
 osproxy-config.workspace = true
 osproxy-engine.workspace = true
+osproxy-observe.workspace = true
 osproxy-transport = { workspace = true, default-features = false }
 osproxy-otlp.workspace = true
 osproxy-spi.workspace = true
 osproxy-tenancy.workspace = true
 osproxy-sink.workspace = true
 serde_json.workspace = true
+ring = { workspace = true, optional = true }
+aws-lc-rs = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal"] }
 
 [dev-dependencies]
