@@ -1368,6 +1368,9 @@ name = "osproxy-control"
 version = "0.0.0"
 dependencies = [
  "osproxy-core",
+ "osproxy-spi",
+ "osproxy-tenancy",
+ "thiserror",
 ]
 
 [[package]]

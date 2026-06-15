@@ -67,7 +67,7 @@ fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'static str]> {
         "osproxy-transport" => &["osproxy-core", "osproxy-spi"],
         "osproxy-rewrite" => &["osproxy-core"],
         "osproxy-sink" => &["osproxy-core", "osproxy-spi"],
-        "osproxy-control" => &["osproxy-core"],
+        "osproxy-control" => &["osproxy-core", "osproxy-spi", "osproxy-tenancy"],
         "osproxy-observe" => &["osproxy-core"],
         "osproxy-config" => &["osproxy-core"],
         "osproxy-engine" => &[

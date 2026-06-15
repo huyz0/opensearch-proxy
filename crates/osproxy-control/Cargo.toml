@@ -10,6 +10,9 @@ repository.workspace = true
 
 [dependencies]
 osproxy-core.workspace = true
+osproxy-spi.workspace = true
+osproxy-tenancy.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

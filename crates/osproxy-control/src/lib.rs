@@ -1,6 +1,22 @@
 //! Control plane.
 //!
-//! Distributes the epoch-versioned placement table and diagnostics directives
-//! to every proxy instance via a pluggable watched store (`docs/03` §3,
-//! `docs/05` §3). Owns migration state transitions (`docs/06`). It does not
-//! handle request traffic. In-memory table lands in M1; watched backends in M7.
+//! The operator/automation-driven side of the proxy (`docs/06` §5): it owns the
+//! **migration state transitions** and the fleet-safe protocol that flips a
+//! partition's placement without a window where any instance writes to the wrong
+//! cluster. It does not handle request traffic.
+//!
+//! Proxy instances poll the shared placement backend *fresh on every request*
+//! (no cached migration decision), so the backend is the single synchronized
+//! source of truth. The [`ControlPlane`] drives migrations through that backend
+//! (the [`MigrationStore`] seam) and holds a **drain barrier** between cutover
+//! and completion so in-flight writes cannot land after the flip.
+//!
+//! The in-memory backend is the M1
+//! [`PlacementTable`](osproxy_tenancy::PlacementTable); distributed watched
+//! stores (etcd/Consul/Redis/OS index) implement the same [`MigrationStore`]
+//! contract in M7 without changing the control protocol.
+#![deny(missing_docs)]
+
+mod migration;
+
+pub use migration::{ControlError, ControlPlane, MigrationStore, DEFAULT_DRAIN_BARRIER};

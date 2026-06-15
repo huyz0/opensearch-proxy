@@ -45,6 +45,25 @@ Active(B)                                        // writes/reads now resolve to 
   choice, documented).
 - Reads follow current placement: A during Draining, B after the flip.
 
+## 3a. Fleet safety: no client-side cache + a drain barrier
+
+The proxy runs as **many instances**. Each resolves placement and the write gate
+by polling the shared backend **fresh on every request** — no migration decision
+is cached in an instance — so the backend (in-memory `PlacementTable` in M1; a
+watched store in M7) is the single synchronized source of truth. An instance that
+cannot reach the backend **fails closed** (rejects the write, retryable) rather
+than serving stale state.
+
+That leaves one residual window: a write whose gate passed an instant *before*
+`Cutover` was published may still be committing upstream. So the controller does
+not flip the pointer immediately. After publishing `Cutover` it holds a **drain
+barrier** — at least the upstream write timeout (NFR-R7) — before
+`complete_migration` is allowed. By then every pre-cutover write has committed or
+hit its deadline, so none can land in the old placement after the flip. The
+barrier is enforced by `osproxy-control`'s `ControlPlane` against an injected
+clock (deterministic in tests); one controller drives a given partition's
+migration.
+
 ## 4. Why no in-path dual-write
 
 Dual-write during migration would replicate the very thing we deliberately
