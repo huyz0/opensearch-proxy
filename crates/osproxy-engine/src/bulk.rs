@@ -50,6 +50,7 @@ pub(crate) async fn ingest_bulk<T: TenancySpi, S: Sink>(
     router: &TenancyRouter<T>,
     sink: &S,
     ctx: &RequestCtx<'_>,
+    retry: crate::RetryPolicy,
 ) -> Result<PipelineResponse, RequestError> {
     let items = parse_bulk(ctx.body())?;
     let n = items.len();
@@ -62,7 +63,7 @@ pub(crate) async fn ingest_bulk<T: TenancySpi, S: Sink>(
     let mut cache: HashMap<(PartitionId, String), Resolved> = HashMap::new();
 
     for (ordinal, item) in items.into_iter().enumerate() {
-        match prepare(router, ctx, &mut cache, item).await {
+        match prepare(router, ctx, &mut cache, item, retry).await {
             Ok(p) => {
                 let target = p.op.target.clone();
                 let buf = buffers.entry(target.clone()).or_default();

@@ -58,6 +58,7 @@ pub(crate) async fn prepare<T: TenancySpi>(
     ctx: &RequestCtx<'_>,
     cache: &mut HashMap<(PartitionId, String), Resolved>,
     item: BulkItem,
+    retry: crate::RetryPolicy,
 ) -> Result<Prepared, ItemFailure> {
     let action = item.action.keyword();
     let logical_index = item
@@ -81,18 +82,19 @@ pub(crate) async fn prepare<T: TenancySpi>(
     let resolved = if let Some(r) = cache.get(&key) {
         r.clone()
     } else {
-        let r = router
-            .resolve_placement(ctx, partition.clone(), &logical_index)
-            .await
-            .map_err(|_| {
-                fail(
-                    action,
-                    &logical_index,
-                    item.id.clone(),
-                    404,
-                    "placement_missing",
-                )
-            })?;
+        let r = crate::retry::with_retry(retry, || {
+            router.resolve_placement(ctx, partition.clone(), &logical_index)
+        })
+        .await
+        .map_err(|_| {
+            fail(
+                action,
+                &logical_index,
+                item.id.clone(),
+                404,
+                "placement_missing",
+            )
+        })?;
         cache.insert(key, r.clone());
         r
     };

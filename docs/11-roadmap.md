@@ -78,11 +78,17 @@ rewrite.
 
 ## M7 — Fleet observability & control plane
 
-- Watched-store backend(s) for placement table + directives (etcd/Consul/Redis/OS
-  index), fleet-wide directive propagation, TTL expiry.
+- **The proxy is store-agnostic.** It does not ship a specific control store
+  (etcd/Consul/Redis/OS index); those are the operator's backend, bound through
+  the existing seams — `TenancySpi`/placement lookup for reads, `MigrationStore`
+  (`osproxy-control`) for migration transitions. The proxy provides the seams,
+  the fleet-safe protocol (poll-fresh + drain barrier, `docs/06` §3a), and an
+  in-memory reference impl; concrete bindings are consumer-provided. So M7 is
+  *not* "implement etcd" — it is fleet-wide directive propagation, TTL expiry,
+  and the observability below, on top of seams that already exist.
 - OTLP export; aggregation integration; ring-buffer break-glass.
-- **Exit**: directive flips fleet-wide without restart; blind-diagnosis across
-  the full failure catalogue.
+- **Exit**: directive flips fleet-wide without restart (against a reference
+  store binding); blind-diagnosis across the full failure catalogue.
 
 ## Deferred (post-v1, behind existing seams)
 

@@ -1,0 +1,130 @@
+//! The placement backend is polled fresh per request; a *momentary*
+//! unavailability is retried with backoff in-proxy rather than failing the write
+//! outright (`docs/06` §3a). Proven through the full ingest pipeline with a
+//! tenancy whose `placement_for` fails a bounded number of times before
+//! recovering, and one that never recovers.
+
+#![allow(clippy::unwrap_used)]
+
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use osproxy_core::{
+    ClusterId, EndpointKind, ErrorCode, FieldName, IndexName, PartitionId, PrincipalId, RequestId,
+};
+use osproxy_engine::{Pipeline, PipelineResponse, RequestError, RetryPolicy};
+use osproxy_sink::MemorySink;
+use osproxy_spi::{
+    HeaderView, HttpMethod, InjectedField, InjectedValue, JsonPath, PartitionKeySpec, Placement,
+    PlacementAt, Principal, Protocol, RequestCtx, SensitivitySpec, SpiError, TenancySpi,
+};
+use osproxy_tenancy::{PlacementTable, TenancyRouter};
+use serde_json::json;
+
+/// A tenancy that reports the backend unavailable for its first `fail_first`
+/// placement lookups, then resolves normally from the table.
+struct FlakyTenancy {
+    table: Arc<PlacementTable>,
+    fail_first: u32,
+    calls: AtomicU32,
+}
+
+impl TenancySpi for FlakyTenancy {
+    fn partition_key(&self) -> PartitionKeySpec {
+        PartitionKeySpec::BodyField(JsonPath::new("tenant_id"))
+    }
+    fn doc_id_rule(&self) -> Option<osproxy_spi::DocIdRule> {
+        None
+    }
+    fn injected_fields(&self) -> Vec<InjectedField> {
+        vec![InjectedField::new(
+            FieldName::from("_tenant"),
+            InjectedValue::PartitionId,
+        )]
+    }
+    fn sensitive_fields(&self) -> SensitivitySpec {
+        SensitivitySpec::none()
+    }
+    async fn placement_for(&self, partition: &PartitionId) -> Result<PlacementAt, SpiError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) < self.fail_first {
+            return Err(SpiError::PlacementBackend { retryable: true });
+        }
+        self.table
+            .get(partition)
+            .ok_or_else(|| SpiError::PlacementMissing {
+                partition: partition.clone(),
+            })
+    }
+}
+
+fn pipeline(fail_first: u32) -> Pipeline<FlakyTenancy, MemorySink> {
+    let table = Arc::new(PlacementTable::new());
+    table.set(
+        PartitionId::from("acme"),
+        Placement::SharedIndex {
+            cluster: ClusterId::from("eu-1"),
+            index: IndexName::from("orders-shared"),
+            inject: vec![InjectedField::new(
+                FieldName::from("_tenant"),
+                InjectedValue::PartitionId,
+            )],
+        },
+    );
+    Pipeline::new(
+        TenancyRouter::new(FlakyTenancy {
+            table,
+            fail_first,
+            calls: AtomicU32::new(0),
+        }),
+        MemorySink::new(),
+    )
+    // Zero backoff keeps the test fast and deterministic; attempts is what matters.
+    .with_retry_policy(RetryPolicy {
+        max_attempts: 3,
+        base_backoff: Duration::ZERO,
+        max_backoff: Duration::ZERO,
+    })
+}
+
+async fn ingest(p: &Pipeline<FlakyTenancy, MemorySink>) -> Result<PipelineResponse, RequestError> {
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r");
+    let headers: Vec<(String, String)> = vec![];
+    let body = serde_json::to_vec(&json!({ "tenant_id": "acme", "msg": "hi" })).unwrap();
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::IngestDoc,
+        Protocol::Http1,
+        "orders-logical",
+        HeaderView::new(&headers),
+        &body,
+    );
+    p.handle(&ctx).await
+}
+
+#[tokio::test]
+async fn a_transient_backend_blip_is_retried_and_the_write_succeeds() {
+    // Two failures then success — within the 3-attempt budget.
+    let p = pipeline(2);
+    let resp = ingest(&p).await.unwrap();
+    assert!(resp.status >= 200 && resp.status < 300);
+    assert_eq!(
+        p.sink().recorded().len(),
+        1,
+        "the write committed after retry"
+    );
+}
+
+#[tokio::test]
+async fn a_persistently_unavailable_backend_surfaces_a_retryable_error() {
+    // More failures than the attempt budget: the request fails, but retryably,
+    // so the client (not the proxy) decides whether to try again later.
+    let p = pipeline(u32::MAX);
+    let err = ingest(&p).await.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::PlacementBackendUnavailable);
+    assert!(err.retryable());
+    assert!(p.sink().recorded().is_empty(), "nothing committed");
+}

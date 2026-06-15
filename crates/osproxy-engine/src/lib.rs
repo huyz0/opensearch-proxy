@@ -24,7 +24,9 @@ mod observe;
 mod pipeline;
 mod plan;
 mod read;
+mod retry;
 
 pub use error::RequestError;
 pub use pipeline::{Pipeline, PipelineResponse};
 pub use plan::build_write_batch;
+pub use retry::RetryPolicy;

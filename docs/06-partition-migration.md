@@ -47,12 +47,18 @@ Active(B)                                        // writes/reads now resolve to 
 
 ## 3a. Fleet safety: no client-side cache + a drain barrier
 
-The proxy runs as **many instances**. Each resolves placement and the write gate
-by polling the shared backend **fresh on every request** — no migration decision
-is cached in an instance — so the backend (in-memory `PlacementTable` in M1; a
-watched store in M7) is the single synchronized source of truth. An instance that
-cannot reach the backend **fails closed** (rejects the write, retryable) rather
-than serving stale state.
+The proxy runs as **many instances**. Each resolves placement (and re-checks the
+write gate) by polling the shared backend **fresh on every request** — no
+migration decision is cached in an instance — so the backend is the single
+synchronized source of truth. The backend is **operator-provided behind the SPI**
+(the in-memory `PlacementTable` is the reference impl; a watched store such as
+etcd/Consul is bound through the same seam — the proxy does not ship one).
+
+When a placement read **fails because the backend is momentarily unavailable**,
+the proxy **retries with bounded exponential backoff** rather than failing the
+request outright; only after the attempts are exhausted does it surface a
+retryable error. A definitive answer of *reject* (cutover/stale epoch) is never
+retried in-proxy — it is correct, and the client re-resolves.
 
 That leaves one residual window: a write whose gate passed an instant *before*
 `Cutover` was published may still be committing upstream. So the controller does

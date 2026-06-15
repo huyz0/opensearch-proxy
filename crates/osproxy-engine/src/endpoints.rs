@@ -18,6 +18,7 @@ use crate::read::{
     build_delete_op, build_read_op, build_search_op, not_found_body, shape_delete, shape_found,
     shape_hits,
 };
+use crate::retry::with_retry;
 use osproxy_observe::RequestTrace;
 
 impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
@@ -27,7 +28,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         ctx: &RequestCtx<'_>,
         trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
-        let resolved = self.router.resolve(ctx).await?;
+        let resolved = self.resolve_with_retry(ctx).await?;
         trace.record_resolve(resolve_info(&resolved));
 
         let batch = build_write_batch(&resolved, ctx.body())?;
@@ -37,6 +38,14 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         let ack = self.sink.write(batch).await?;
         trace.record_dispatch(dispatch_info(&resolved, &ack));
         Ok(response_for(&ack))
+    }
+
+    /// Resolves `ctx`'s routing, retrying a momentarily-unavailable placement
+    /// backend with bounded backoff (`docs/06` §3a) before surfacing the error.
+    async fn resolve_with_retry(&self, ctx: &RequestCtx<'_>) -> Result<Resolved, RequestError> {
+        with_retry(self.retry, || self.router.resolve(ctx))
+            .await
+            .map_err(Into::into)
     }
 
     /// The migration write gate (`docs/06` §2), applied at dispatch after the
@@ -63,7 +72,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         ctx: &RequestCtx<'_>,
         _trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
-        crate::bulk::ingest_bulk(&self.router, &self.sink, ctx).await
+        crate::bulk::ingest_bulk(&self.router, &self.sink, ctx, self.retry).await
     }
 
     /// The get-by-id read path (`docs/04` §5): resolve the partition, map the
@@ -74,7 +83,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         ctx: &RequestCtx<'_>,
         trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
-        let resolved = self.router.resolve(ctx).await?;
+        let resolved = self.resolve_with_retry(ctx).await?;
         trace.record_resolve(resolve_info(&resolved));
 
         let logical_id = ctx.doc_id().ok_or(RequestError::Internal {
@@ -128,7 +137,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         ctx: &RequestCtx<'_>,
         trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
-        let resolved = self.router.resolve(ctx).await?;
+        let resolved = self.resolve_with_retry(ctx).await?;
         trace.record_resolve(resolve_info(&resolved));
 
         let logical_id = ctx.doc_id().ok_or(RequestError::Internal {
@@ -156,7 +165,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         ctx: &RequestCtx<'_>,
         trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
-        let resolved = self.router.resolve(ctx).await?;
+        let resolved = self.resolve_with_retry(ctx).await?;
         trace.record_resolve(resolve_info(&resolved));
 
         let (search_op, shape) = build_search_op(&resolved, ctx.body())?;
@@ -201,7 +210,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         ctx: &RequestCtx<'_>,
         trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
-        let resolved = self.router.resolve(ctx).await?;
+        let resolved = self.resolve_with_retry(ctx).await?;
         trace.record_resolve(resolve_info(&resolved));
 
         let (search_op, _shape) = build_search_op(&resolved, ctx.body())?;

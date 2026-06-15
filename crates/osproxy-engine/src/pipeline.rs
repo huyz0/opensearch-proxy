@@ -44,17 +44,26 @@ pub struct PipelineResponse {
 pub struct Pipeline<T, S> {
     pub(crate) router: TenancyRouter<T>,
     pub(crate) sink: S,
+    pub(crate) retry: crate::RetryPolicy,
     explain: Arc<ExplainStore>,
 }
 
 impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
-    /// Builds a pipeline from a router and a sink.
+    /// Builds a pipeline from a router and a sink (default backend-retry policy).
     pub fn new(router: TenancyRouter<T>, sink: S) -> Self {
         Self {
             router,
             sink,
+            retry: crate::RetryPolicy::default(),
             explain: Arc::new(ExplainStore::new(EXPLAIN_CAPACITY)),
         }
+    }
+
+    /// Sets the placement-backend retry policy (builder style).
+    #[must_use]
+    pub fn with_retry_policy(mut self, retry: crate::RetryPolicy) -> Self {
+        self.retry = retry;
+        self
     }
 
     /// The assembled `/debug/explain` document for a past request, if retained.
