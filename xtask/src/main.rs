@@ -49,6 +49,7 @@ fn run_ci() -> Result<(), String> {
     clippy()?;
     arch()?;
     test()?;
+    check_fips()?;
     doc()?;
     budgets()?;
     skills()?;
@@ -187,11 +188,13 @@ fn bench_local() -> Result<(), String> {
     )
 }
 
-/// Type-checks the FIPS build (`--features fips`), which the default `ci` lane
-/// never compiles. It links aws-lc-rs FIPS, whose native AWS-LC-FIPS build needs
-/// `cmake` + a C compiler + `go`; where that toolchain is absent (most dev boxes)
-/// this skips with a warning rather than failing, so it is safe to run anywhere
-/// and is a real gate only on a CI runner that has the toolchain (docs/07).
+/// Builds and tests the FIPS build (`--features fips`), which the default gates
+/// never exercise (they run the `non-fips`/`ring` provider). It links aws-lc-rs
+/// FIPS, whose native AWS-LC-FIPS build needs `cmake` + a C compiler + `go`; where
+/// that toolchain is absent this skips with a warning rather than failing, so the
+/// `ci` lane stays green on a dev box without the toolchain and is a real gate
+/// wherever it is installed (docs/07). The fips tests assert the linked module
+/// reports FIPS mode and offers exactly the approved suites (`tests/fips.rs`).
 fn check_fips() -> Result<(), String> {
     let missing: Vec<&str> = ["cmake", "cc", "go"]
         .into_iter()
@@ -207,7 +210,9 @@ fn check_fips() -> Result<(), String> {
     }
     cargo(
         &[
-            "check",
+            "test",
+            "-p",
+            "osproxy-transport",
             "-p",
             "osproxy-server",
             "--no-default-features",

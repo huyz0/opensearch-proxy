@@ -312,7 +312,7 @@ mod tests {
             .signed_by(&cli_key, &ca, &ca_key)
             .expect("cli cert");
 
-        let provider = crate::RingProvider::from_pem_mtls(
+        let provider = crate::DefaultCryptoProvider::from_pem_mtls(
             srv.pem().as_bytes(),
             srv_key.serialize_pem().as_bytes(),
             ca.pem().as_bytes(),

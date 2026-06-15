@@ -47,12 +47,18 @@ build in the tree ships only 1.2/1.3, so the pin is an explicit, future-proof
 constraint by construction rather than a handshake-tested refusal of older
 versions.
 
-The **suite** restriction is verified at negotiation in
+The **suite** restriction is verified at negotiation on the `ring` build in
 `crates/osproxy-transport/tests/tls.rs`:
 `server_offers_only_the_fips_approved_suites` (the offered set equals the
 approved set, CHACHA20 absent) and
 `a_chacha20_only_client_is_refused_at_negotiation` (a live handshake offering
 only CHACHA20 is rejected, with no fallback to a non-approved suite).
+
+On the **FIPS build** itself, `crates/osproxy-transport/tests/fips.rs` (run by
+`cargo xtask check-fips`, folded into `xtask ci` where the toolchain is present)
+asserts the linked aws-lc-rs module reports FIPS mode (`fips_mode()`) and offers
+exactly the approved suites — the count match catches a silent shrink if the FIPS
+module lacked one of the six approved suites.
 
 ## 4. Build provenance
 
