@@ -9,12 +9,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use osproxy_core::{
-    Clock, ClusterId, EndpointKind, FieldName, IndexName, ManualClock, PartitionId, PrincipalId,
-    RequestId,
+    Clock, ClusterId, EndpointKind, FieldName, IndexName, Instant, ManualClock, PartitionId,
+    PrincipalId, RequestId,
 };
 use osproxy_engine::Pipeline;
 use osproxy_observe::{
-    DiagLevel, DiagnosticsDirective, DirectiveMatch, DirectiveSet, SpanExporter,
+    DiagLevel, DiagnosticsDirective, DirectiveMatch, DirectiveSet, DirectiveVerifier, SpanExporter,
 };
 use osproxy_sink::MemorySink;
 use osproxy_spi::{
@@ -196,5 +196,82 @@ async fn an_expired_directive_does_not_re_enable_export() {
     assert!(
         exporter.0.lock().unwrap().is_empty(),
         "an expired directive does not export"
+    );
+}
+
+/// A stand-in for the real HMAC verifier: authorizes a Shape directive only for
+/// the exact token `go` (a real one would verify a signature).
+struct FakeVerifier {
+    expires_at: Instant,
+}
+
+impl DirectiveVerifier for FakeVerifier {
+    fn verify(&self, header_value: &str) -> Option<DiagnosticsDirective> {
+        (header_value == "go").then(|| DiagnosticsDirective {
+            id: "header".to_owned(),
+            match_: DirectiveMatch::all(),
+            level: DiagLevel::Shape,
+            sample_per_mille: 1000,
+            expires_at: self.expires_at,
+            ring_buffer: false,
+        })
+    }
+}
+
+async fn ingest_with_directive(p: &Pipeline<SharedTenancy, MemorySink>, header: Option<&str>) {
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let headers: Vec<(String, String)> = header
+        .into_iter()
+        .map(|h| ("x-debug-directive".to_owned(), h.to_owned()))
+        .collect();
+    let rid = RequestId::from("r");
+    let body = br#"{"tenant_id":"acme","id":7}"#;
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Put,
+        EndpointKind::IngestDoc,
+        Protocol::Http1,
+        "logical",
+        HeaderView::new(&headers),
+        body,
+    );
+    p.handle(&ctx).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_validly_signed_header_enables_export_for_its_request_only() {
+    let clock = Arc::new(ManualClock::new());
+    let verifier = FakeVerifier {
+        expires_at: clock.now().saturating_add(Duration::from_secs(600)),
+    };
+
+    let exporter = RecordingExporter::default();
+    let p = pipeline()
+        .with_exporter(Arc::new(exporter.clone()))
+        .with_clock(clock)
+        .with_baseline_level(DiagLevel::Off) // export only what a directive selects
+        .with_directive_verifier(Arc::new(verifier));
+
+    // No header: baseline Off, nothing exported.
+    ingest_with_directive(&p, None).await;
+    assert!(
+        exporter.0.lock().unwrap().is_empty(),
+        "no header → no export"
+    );
+
+    // A wrongly-signed header is rejected by the verifier: still nothing.
+    ingest_with_directive(&p, Some("forged")).await;
+    assert!(
+        exporter.0.lock().unwrap().is_empty(),
+        "bad token → no export"
+    );
+
+    // The valid header authorizes export for this request.
+    ingest_with_directive(&p, Some("go")).await;
+    assert_eq!(
+        exporter.0.lock().unwrap().len(),
+        1,
+        "a validly signed X-Debug-Directive enables export"
     );
 }

@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use osproxy_core::{Clock, EndpointKind, RequestId, SystemClock};
 use osproxy_observe::{
-    resource_spans, ClassifyInfo, DiagLevel, DirectiveSet, EgressInfo, ExplainStore, NoopExporter,
-    RequestAttrs, RequestTrace, SpanExporter,
+    resource_spans, ClassifyInfo, DiagLevel, DirectiveSet, DirectiveVerifier, EgressInfo,
+    ExplainStore, NoVerifier, NoopExporter, RequestAttrs, RequestTrace, SpanExporter,
 };
 use osproxy_sink::{Reader, Sink};
 use osproxy_spi::{RequestCtx, SpiError, TenancySpi};
@@ -56,6 +56,7 @@ pub struct Pipeline<T, S> {
     /// export purely directive-driven (targeted sampling).
     baseline: DiagLevel,
     directives: Arc<DirectiveSet>,
+    verifier: Arc<dyn DirectiveVerifier>,
 }
 
 impl<T, S> std::fmt::Debug for Pipeline<T, S> {
@@ -83,6 +84,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             service_name: "osproxy".to_owned(),
             baseline: DiagLevel::Shape,
             directives: Arc::new(DirectiveSet::new()),
+            verifier: Arc::new(NoVerifier),
         }
     }
 
@@ -128,6 +130,15 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
     #[must_use]
     pub fn with_directives(mut self, directives: Arc<DirectiveSet>) -> Self {
         self.directives = directives;
+        self
+    }
+
+    /// Sets the verifier for the signed `X-Debug-Directive` header (builder
+    /// style). Default rejects all headers; a real verifier enables the surgical,
+    /// single-request directive channel.
+    #[must_use]
+    pub fn with_directive_verifier(mut self, verifier: Arc<dyn DirectiveVerifier>) -> Self {
+        self.verifier = verifier;
         self
     }
 
@@ -210,10 +221,22 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             principal: ctx.principal_id(),
             endpoint: ctx.endpoint(),
         };
-        self.baseline.max(
-            self.directives
-                .evaluate(&attrs, self.clock.now(), ctx.request_id()),
-        )
+        let now = self.clock.now();
+        let request = ctx.request_id();
+        let mut level = self
+            .baseline
+            .max(self.directives.evaluate(&attrs, now, request));
+        // Fold in a verified single-request directive from the signed
+        // `X-Debug-Directive` header, if present and valid (`docs/05` §3).
+        if let Some(from_header) = ctx
+            .headers()
+            .get("x-debug-directive")
+            .and_then(|h| self.verifier.verify(h))
+            .and_then(|d| d.level_if_applies(&attrs, now, request))
+        {
+            level = level.max(from_header);
+        }
+        level
     }
 
     /// Dispatches on endpoint class, recording the per-stage spans into `trace`.

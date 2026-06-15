@@ -21,7 +21,10 @@ mod export;
 mod otlp;
 mod trace;
 
-pub use directive::{DiagLevel, DiagnosticsDirective, DirectiveMatch, DirectiveSet, RequestAttrs};
+pub use directive::{
+    DiagLevel, DiagnosticsDirective, DirectiveMatch, DirectiveSet, DirectiveVerifier, NoVerifier,
+    RequestAttrs,
+};
 pub use explain::{explain_json, ExplainStore};
 pub use export::{NoopExporter, SpanExporter};
 pub use otlp::resource_spans;

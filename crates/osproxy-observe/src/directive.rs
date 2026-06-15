@@ -126,6 +126,19 @@ pub struct DiagnosticsDirective {
 }
 
 impl DiagnosticsDirective {
+    /// This directive's [`DiagLevel`] if it applies to `attrs` at `now` for
+    /// `request` (target matches, not expired, in sample), else `None`. Used to
+    /// fold a single-request (signed-header) directive into the evaluation.
+    #[must_use]
+    pub fn level_if_applies(
+        &self,
+        attrs: &RequestAttrs<'_>,
+        now: Instant,
+        request: &RequestId,
+    ) -> Option<DiagLevel> {
+        self.applies(attrs, now, request).then_some(self.level)
+    }
+
     /// Whether this directive applies to `attrs` at `now` for `request`: not
     /// expired, target matches, and the request falls within the sample.
     #[must_use]
@@ -202,6 +215,28 @@ impl DirectiveSet {
     }
 }
 
+/// Verifies a signed `X-Debug-Directive` request header into the directive it
+/// authorizes — the **surgical, single-request** delivery channel (`docs/05`
+/// §3). The signature means a client cannot self-enable verbose diagnostics
+/// without the operator's key (NFR-S3); the directive follows the request to
+/// whatever instance handles it. The concrete implementation (HMAC + the token
+/// format) lives in a crypto-capable crate behind this seam.
+pub trait DirectiveVerifier: Send + Sync {
+    /// The directive a valid header authorizes, or `None` if the header is
+    /// absent, malformed, incorrectly signed, or already expired.
+    fn verify(&self, header_value: &str) -> Option<DiagnosticsDirective>;
+}
+
+/// The default: no header channel is configured, so every header is rejected.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoVerifier;
+
+impl DirectiveVerifier for NoVerifier {
+    fn verify(&self, _header_value: &str) -> Option<DiagnosticsDirective> {
+        None
+    }
+}
+
 /// FNV-1a 64-bit hash, for deterministic sampling (no RNG, no dependency).
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325;
@@ -213,166 +248,5 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use osproxy_core::{Clock, ManualClock};
-    use std::time::Duration;
-
-    fn at(secs: u64) -> Instant {
-        let clock = ManualClock::new();
-        clock.advance(Duration::from_secs(secs));
-        clock.now()
-    }
-
-    fn directive(
-        level: DiagLevel,
-        match_: DirectiveMatch,
-        sample_per_mille: u16,
-    ) -> DiagnosticsDirective {
-        DiagnosticsDirective {
-            id: "d1".to_owned(),
-            match_,
-            level,
-            sample_per_mille,
-            expires_at: at(100),
-            ring_buffer: false,
-        }
-    }
-
-    fn attrs<'a>(
-        tenant: Option<&'a PartitionId>,
-        index: &'a str,
-        principal: &'a PrincipalId,
-        endpoint: EndpointKind,
-    ) -> RequestAttrs<'a> {
-        RequestAttrs {
-            tenant,
-            index,
-            principal,
-            endpoint,
-        }
-    }
-
-    #[test]
-    fn an_empty_set_is_off() {
-        let set = DirectiveSet::new();
-        let p = PrincipalId::from("svc");
-        let a = attrs(None, "orders", &p, EndpointKind::Search);
-        assert_eq!(
-            set.evaluate(&a, at(1), &RequestId::from("r")),
-            DiagLevel::Off
-        );
-    }
-
-    #[test]
-    fn the_highest_matching_level_wins() {
-        let set = DirectiveSet::from_directives(vec![
-            directive(DiagLevel::Shape, DirectiveMatch::all(), 1000),
-            directive(
-                DiagLevel::ShapeRewriteDiff,
-                DirectiveMatch::all().for_index(IndexName::from("orders")),
-                1000,
-            ),
-        ]);
-        let p = PrincipalId::from("svc");
-        let a = attrs(None, "orders", &p, EndpointKind::Search);
-        assert_eq!(
-            set.evaluate(&a, at(1), &RequestId::from("r")),
-            DiagLevel::ShapeRewriteDiff
-        );
-    }
-
-    #[test]
-    fn each_target_field_narrows_the_match() {
-        let acme = PartitionId::from("acme");
-        let p = PrincipalId::from("svc");
-        let m = DirectiveMatch::all()
-            .for_tenant(acme.clone())
-            .for_endpoint(EndpointKind::Search);
-        let set = DirectiveSet::from_directives(vec![directive(DiagLevel::Shape, m, 1000)]);
-
-        // Matches: right tenant + endpoint.
-        let hit = attrs(Some(&acme), "orders", &p, EndpointKind::Search);
-        assert_eq!(
-            set.evaluate(&hit, at(1), &RequestId::from("r")),
-            DiagLevel::Shape
-        );
-        // Misses: wrong endpoint.
-        let miss = attrs(Some(&acme), "orders", &p, EndpointKind::Count);
-        assert_eq!(
-            set.evaluate(&miss, at(1), &RequestId::from("r")),
-            DiagLevel::Off
-        );
-        // Misses: tenant not yet resolved.
-        let unresolved = attrs(None, "orders", &p, EndpointKind::Search);
-        assert_eq!(
-            set.evaluate(&unresolved, at(1), &RequestId::from("r")),
-            DiagLevel::Off
-        );
-    }
-
-    #[test]
-    fn an_expired_directive_does_not_apply() {
-        let set = DirectiveSet::from_directives(vec![directive(
-            DiagLevel::Shape,
-            DirectiveMatch::all(),
-            1000,
-        )]);
-        let p = PrincipalId::from("svc");
-        let a = attrs(None, "orders", &p, EndpointKind::Search);
-        // expires_at is at(100); a request at(150) is past it.
-        assert_eq!(
-            set.evaluate(&a, at(150), &RequestId::from("r")),
-            DiagLevel::Off
-        );
-    }
-
-    #[test]
-    fn sampling_is_deterministic_and_bounded() {
-        // rate 0 never records; rate 1000 always; partial is stable per request.
-        let p = PrincipalId::from("svc");
-        let a = attrs(None, "orders", &p, EndpointKind::Search);
-        let never = DirectiveSet::from_directives(vec![directive(
-            DiagLevel::Shape,
-            DirectiveMatch::all(),
-            0,
-        )]);
-        let always = DirectiveSet::from_directives(vec![directive(
-            DiagLevel::Shape,
-            DirectiveMatch::all(),
-            1000,
-        )]);
-        assert_eq!(
-            never.evaluate(&a, at(1), &RequestId::from("r")),
-            DiagLevel::Off
-        );
-        assert_eq!(
-            always.evaluate(&a, at(1), &RequestId::from("r")),
-            DiagLevel::Shape
-        );
-
-        let half = DirectiveSet::from_directives(vec![directive(
-            DiagLevel::Shape,
-            DirectiveMatch::all(),
-            500,
-        )]);
-        let r = RequestId::from("req-123");
-        let first = half.evaluate(&a, at(1), &r);
-        assert_eq!(
-            first,
-            half.evaluate(&a, at(1), &r),
-            "same request decides the same way"
-        );
-        // Across many requests, partial sampling admits some and not others.
-        let admitted = (0..1000)
-            .filter(|n| {
-                half.evaluate(&a, at(1), &RequestId::from(format!("r{n}").as_str()))
-                    == DiagLevel::Shape
-            })
-            .count();
-        assert!(
-            (300..700).contains(&admitted),
-            "≈half admitted, got {admitted}"
-        );
-    }
-}
+#[path = "directive_tests.rs"]
+mod tests;
