@@ -15,11 +15,13 @@
 //! payload for export (the wire emission is the I/O layer's job, M7).
 #![deny(missing_docs)]
 
+mod directive;
 mod explain;
 mod export;
 mod otlp;
 mod trace;
 
+pub use directive::{DiagLevel, DiagnosticsDirective, DirectiveMatch, DirectiveSet, RequestAttrs};
 pub use explain::{explain_json, ExplainStore};
 pub use export::{NoopExporter, SpanExporter};
 pub use otlp::resource_spans;
