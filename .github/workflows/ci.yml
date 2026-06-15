@@ -21,6 +21,10 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # The gRPC ingress build (osproxy-transport build.rs via tonic-prost-build)
+      # compiles proto/osproxy.proto, which needs `protoc` on the build host.
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       # Single source of truth: the same gate developers run locally
       # (fmt, clippy -D warnings, arch, test, doc, budgets, skills). The FIPS
       # build/test is skipped here and owned by the dedicated `fips` job below, so
@@ -44,8 +48,9 @@ jobs:
       # AWS-LC-FIPS compiles from C: cmake + a C compiler + Go. These are present
       # on the pinned image; install cmake explicitly so it is reproducible and
       # the job fails loudly if the image ever drops it.
+      # protobuf-compiler: the gRPC ingress build needs `protoc` (see the gate job).
       - name: Install FIPS build toolchain
-        run: sudo apt-get update && sudo apt-get install -y cmake
+        run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
       - name: Record toolchain provenance
         run: |
           cmake --version
@@ -79,13 +84,17 @@ jobs:
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: taiki-e/install-action@cargo-llvm-cov
       # `--lib --tests` excludes benches (iai-callgrind needs valgrind, absent
-      # here) and matches what `cargo xtask test` measures. We exclude only the
-      # binary entrypoint (osproxy-server/src/main.rs is process wiring run by no
-      # test) and xtask — the server's *library* code (auth, handler, tenancy)
-      # is tested and must be counted.
-      - run: cargo llvm-cov --workspace --lib --tests --fail-under-lines 90 --ignore-filename-regex 'xtask|osproxy-server/src/main\.rs'
+      # here) and matches what `cargo xtask test` measures. We exclude the binary
+      # entrypoint (osproxy-server/src/main.rs is process wiring run by no test),
+      # xtask, and the Docker-gated `#[ignore]` integration harnesses
+      # (testcontainer/perf_harness/soak — they only run with `--ignored` against a
+      # live container, so under coverage their scaffolding reads as uncovered).
+      # The server's *library* code (auth, handler, tenancy) is tested and counted.
+      - run: cargo llvm-cov --workspace --lib --tests --fail-under-lines 90 --ignore-filename-regex 'xtask|osproxy-server/src/main\.rs|tests/(testcontainer|perf_harness|soak)\.rs'
 
   perf:
     name: Deterministic perf (iai-callgrind)
@@ -94,8 +103,9 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.94.1
       - uses: Swatinem/rust-cache@v2
-      - name: Install valgrind
-        run: sudo apt-get update && sudo apt-get install -y valgrind
+      # valgrind for iai-callgrind; protobuf-compiler for the gRPC build (`protoc`).
+      - name: Install valgrind and protoc
+        run: sudo apt-get update && sudo apt-get install -y valgrind protobuf-compiler
       - name: Install iai-callgrind-runner
         # Must match the iai-callgrind dev-dependency version in osproxy-core.
         uses: taiki-e/install-action@v2
