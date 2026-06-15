@@ -90,9 +90,11 @@ The surgical, single-request channel: an operator mints a token off-band with a
 shared HMAC key and attaches it to one request; `HmacDirectiveVerifier`
 (osproxy-server) authenticates it and raises that request's effective level. A
 client cannot forge a token, so it cannot self-enable verbose diagnostics
-(NFR-S3); enable it with `OSPROXY_DEBUG_DIRECTIVE_KEY` and pair it with a
-baseline of `Off` so diagnostics stay dark until a signed token lights one
-request.
+(NFR-S3); enable it with `OSPROXY_DEBUG_DIRECTIVE_KEY` and pair it with
+`OSPROXY_DIAG_BASELINE=off` so diagnostics stay dark until a signed token (or a
+fleet directive) lights one request. `OSPROXY_DIAG_BASELINE` accepts
+`off`/`shape`/`shape-timing`/`shape-rewrite-diff` (default `shape`: a configured
+exporter ships every request).
 
 Wire form `{payload_hex}.{sig_hex}`, `sig = HMAC-SHA256(key, payload_bytes)`,
 verified by constant-time `hmac::verify`. Payload JSON: `level` (a `DiagLevel`

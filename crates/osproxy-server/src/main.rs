@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use osproxy_core::{ClusterId, IndexName, SystemClock};
 use osproxy_engine::Pipeline;
+use osproxy_observe::DiagLevel;
 use osproxy_otlp::OtlpHttpExporter;
 use osproxy_server::auth::ReferenceAuthenticator;
 use osproxy_server::directive::HmacDirectiveVerifier;
@@ -54,10 +55,10 @@ async fn run() -> Result<(), String> {
     let sink = OpenSearchSink::new(endpoints);
 
     let tenancy = ReferenceTenancy::new(cluster, IndexName::from(index.as_str()));
-    let pipeline = with_debug_directive(with_otlp_export(Pipeline::new(
+    let pipeline = with_debug_directive(with_diag_baseline(with_otlp_export(Pipeline::new(
         TenancyRouter::new(tenancy),
         sink,
-    )));
+    )))?);
 
     let tokens = parse_tokens(&env_or("OSPROXY_TOKENS", ""));
     let auth_mode = if tokens.is_empty() {
@@ -178,6 +179,37 @@ fn with_otlp_export<T: TenancySpi, S: Sink + Reader>(pipeline: Pipeline<T, S>) -
     pipeline
         .with_exporter(Arc::new(OtlpHttpExporter::new(&endpoint)))
         .with_service_name(service)
+}
+
+/// Sets the pipeline's baseline diagnostics level from `OSPROXY_DIAG_BASELINE`
+/// (case-insensitive `off`/`shape`/`shape-timing`/`shape-rewrite-diff`); the
+/// pipeline default (`shape`) is kept when the var is unset. Set it to `off` so
+/// nothing is exported until a directive — fleet store or signed
+/// `X-Debug-Directive` header — selects a request. Returns an error on an
+/// unrecognized value rather than silently picking a level.
+fn with_diag_baseline<T: TenancySpi, S: Sink + Reader>(
+    pipeline: Pipeline<T, S>,
+) -> Result<Pipeline<T, S>, String> {
+    let Some(raw) = std::env::var("OSPROXY_DIAG_BASELINE")
+        .ok()
+        .filter(|v| !v.is_empty())
+    else {
+        return Ok(pipeline);
+    };
+    let level = match raw.to_ascii_lowercase().as_str() {
+        "off" => DiagLevel::Off,
+        "shape" => DiagLevel::Shape,
+        "shape-timing" => DiagLevel::ShapeTiming,
+        "shape-rewrite-diff" => DiagLevel::ShapeRewriteDiff,
+        other => {
+            return Err(format!(
+                "OSPROXY_DIAG_BASELINE: unknown level {other:?} \
+                 (off|shape|shape-timing|shape-rewrite-diff)"
+            ))
+        }
+    };
+    println!("osproxy diagnostics baseline: {raw}");
+    Ok(pipeline.with_baseline_level(level))
 }
 
 /// Wires the signed `X-Debug-Directive` header channel when
