@@ -55,6 +55,9 @@ pub fn explain_json(request_id: &RequestId, trace: &RequestTrace) -> Value {
 
     json!({
         "request_id": request_id.as_str(),
+        // The distributed-trace id (W3C), so this explanation joins the OTLP
+        // trace for the same request. An id, never a value.
+        "trace_id": trace.context.as_ref().map(osproxy_core::TraceContext::trace_id_hex),
         "outcome": if trace.failed() { "error" } else { "ok" },
         "spans": Value::Object(spans),
         "error": trace.error.as_ref().map(error_json),

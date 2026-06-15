@@ -90,6 +90,9 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
     /// fails, the body transform fails, or the sink rejects the write.
     pub async fn handle(&self, ctx: &RequestCtx<'_>) -> Result<PipelineResponse, RequestError> {
         let mut trace = RequestTrace::new();
+        // The same W3C context propagated to downstream calls is recorded here, so
+        // `/debug/explain` and the exported OTLP span share the request's ids.
+        trace.record_context(crate::endpoints::wire_trace(ctx));
         trace.record_classify(ClassifyInfo {
             endpoint: ctx.endpoint(),
             logical_index: logical_index(ctx.logical_index()),

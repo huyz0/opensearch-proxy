@@ -8,7 +8,7 @@
 //! (`docs/05` §7); the guarantee is structural, not redaction after the fact.
 
 use osproxy_core::{
-    ClusterId, EndpointKind, Epoch, ErrorContext, FieldName, IndexName, PartitionId,
+    ClusterId, EndpointKind, Epoch, ErrorContext, FieldName, IndexName, PartitionId, TraceContext,
 };
 
 /// The `ingress` span: how the connection was framed (`docs/05` §2).
@@ -90,6 +90,10 @@ pub struct EgressInfo {
 /// [`crate::explain_json`].
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct RequestTrace {
+    /// The distributed-trace identity (W3C) this request continues or minted —
+    /// the trace/span ids that correlate `/debug/explain` and the emitted OTLP
+    /// span with the wider trace.
+    pub(crate) context: Option<TraceContext>,
     pub(crate) ingress: Option<IngressInfo>,
     pub(crate) classify: Option<ClassifyInfo>,
     pub(crate) resolve: Option<ResolveInfo>,
@@ -104,6 +108,17 @@ impl RequestTrace {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Records the request's W3C trace context (trace/span ids).
+    pub fn record_context(&mut self, context: TraceContext) {
+        self.context = Some(context);
+    }
+
+    /// The request's trace context, once recorded.
+    #[must_use]
+    pub fn context(&self) -> Option<&TraceContext> {
+        self.context.as_ref()
     }
 
     /// Records the `ingress` span.

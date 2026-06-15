@@ -11,13 +11,16 @@
 //! [`ExplainStore`] retains the most recent explanations for the debug endpoint.
 //!
 //! Directive evaluation (runtime verbosity control) lives in `osproxy-control`;
-//! OTLP export attaches in M7.
+//! [`resource_spans`] encodes that same shape-only trace as an OTLP/HTTP JSON
+//! payload for export (the wire emission is the I/O layer's job, M7).
 #![deny(missing_docs)]
 
 mod explain;
+mod otlp;
 mod trace;
 
 pub use explain::{explain_json, ExplainStore};
+pub use otlp::resource_spans;
 pub use trace::{
     ClassifyInfo, DispatchInfo, EgressInfo, IngressInfo, RequestTrace, ResolveInfo, RewriteInfo,
 };

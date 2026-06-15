@@ -114,6 +114,16 @@ impl TraceContext {
         out
     }
 
+    /// The 16-hex span id of the proxy's hop — the id presented as the parent to
+    /// downstream calls, and therefore the id of the span the proxy must emit so
+    /// the upstream's spans nest under it.
+    #[must_use]
+    pub fn span_id_hex(&self) -> String {
+        let mut out = String::with_capacity(16);
+        push_hex(&mut out, &self.span_id);
+        out
+    }
+
     /// Whether the trace is sampled (the W3C sampled flag).
     #[must_use]
     pub fn sampled(&self) -> bool {
