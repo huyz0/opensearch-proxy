@@ -135,12 +135,25 @@ jobs:
       # footprint); the absolute latency numbers are recorded, not gated.
       - name: Live integration + NFR-P harnesses
         run: cargo test -p osproxy-server --test testcontainer --test perf_harness --test soak -- --ignored --nocapture --test-threads=1
-      # Publish the machine-readable NFR-P profile + verdict JSON the runners emit
-      # (the substrate an operator or an LLM judges) as a downloadable artifact.
-      - name: Upload NFR-P profiles
+      # Render the Markdown briefs the runners emit into the job summary, so the
+      # latency / scalability / footprint tables and verdicts show up on the run
+      # page itself — the consolidated view an operator (or an LLM) reads.
+      - name: NFR-P brief to job summary
+        if: always()
+        run: |
+          {
+            echo "## NFR-P brief (live OpenSearch)"
+            echo
+            cat target/**/nfr-*.md 2>/dev/null || echo "_no NFR-P briefs emitted_"
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Publish the machine-readable profile/verdict JSON and the briefs the runners
+      # emit (the substrate an operator or an LLM judges) as a downloadable artifact.
+      - name: Upload NFR-P artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nfr-profiles
-          path: target/**/nfr-*.json
+          path: |
+            target/**/nfr-*.json
+            target/**/nfr-*.md
           if-no-files-found: ignore

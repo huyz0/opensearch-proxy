@@ -23,6 +23,9 @@
 //! - [`FootprintProfile`] + [`judge_footprint`] — the proxy's resident set when
 //!   idle and after a soak, judged against NFR-P6 (bounded idle footprint; no
 //!   unbounded buffers/queues — the growth ratio is the leak guard).
+//! - [`profile_brief`] / [`scalability_brief`] / [`footprint_brief`] — render the
+//!   same numbers as a Markdown brief: the consolidated view an operator reads in
+//!   a CI summary, or an LLM judges in prose (the JSON is for a programmatic gate).
 //!
 //! **Shape-only, like the rest of osproxy's observability:** a profile carries
 //! timings and counts, never request bodies, tenant values, or cluster
@@ -37,11 +40,13 @@
 mod footprint;
 mod judge;
 mod profile;
+mod report;
 mod scale;
 mod summary;
 
 pub use footprint::{judge_footprint, FootprintProfile, FootprintThresholds};
 pub use judge::{judge, Finding, NfrThresholds, Verdict};
 pub use profile::NfrProfile;
+pub use report::{brief_header, footprint_brief, profile_brief, scalability_brief};
 pub use scale::{judge_scalability, ScalabilityCurve, ScalabilityPoint, ScalabilityThresholds};
 pub use summary::LatencySummary;

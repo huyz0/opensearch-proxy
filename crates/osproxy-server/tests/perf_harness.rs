@@ -32,8 +32,8 @@ use hyper::{Method, Request, Response};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use osproxy_bench::{
-    judge, judge_scalability, LatencySummary, NfrProfile, NfrThresholds, ScalabilityCurve,
-    ScalabilityPoint, ScalabilityThresholds,
+    judge, judge_scalability, profile_brief, scalability_brief, LatencySummary, NfrProfile,
+    NfrThresholds, ScalabilityCurve, ScalabilityPoint, ScalabilityThresholds,
 };
 use osproxy_core::time::{Clock, SystemClock};
 use osproxy_core::{ClusterId, IndexName};
@@ -333,6 +333,11 @@ fn report_profile(profile: &NfrProfile, verdict: &osproxy_bench::Verdict) {
     let dir = env!("CARGO_TARGET_TMPDIR");
     std::fs::write(format!("{dir}/nfr-profile.json"), profile.to_json()).unwrap();
     std::fs::write(format!("{dir}/nfr-verdict.json"), verdict.to_json()).unwrap();
+    std::fs::write(
+        format!("{dir}/nfr-profile.md"),
+        profile_brief(profile, verdict),
+    )
+    .unwrap();
     println!("NFR-P profile:\n{}", profile.to_json());
     println!(
         "added p50 = {:.3} ms, added p99 = {:.3} ms, reuse = {:.4}, throughput = {:.0} rps",
@@ -375,6 +380,11 @@ fn report_curve(curve: &ScalabilityCurve, verdict: &osproxy_bench::Verdict) {
     std::fs::write(
         format!("{dir}/nfr-scalability-verdict.json"),
         verdict.to_json(),
+    )
+    .unwrap();
+    std::fs::write(
+        format!("{dir}/nfr-scalability.md"),
+        scalability_brief(curve, verdict),
     )
     .unwrap();
     println!("scalability curve:\n{curve_json}");

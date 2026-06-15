@@ -28,7 +28,7 @@ use http_body_util::{BodyExt, Full};
 use hyper::{Method, Request};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use osproxy_bench::{judge_footprint, FootprintProfile, FootprintThresholds};
+use osproxy_bench::{footprint_brief, judge_footprint, FootprintProfile, FootprintThresholds};
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{GenericImage, ImageExt};
@@ -194,6 +194,11 @@ async fn nfr_p6_footprint_under_soak() {
     std::fs::write(
         format!("{dir}/nfr-footprint-verdict.json"),
         verdict.to_json(),
+    )
+    .unwrap();
+    std::fs::write(
+        format!("{dir}/nfr-footprint.md"),
+        footprint_brief(&profile, &verdict),
     )
     .unwrap();
     println!("NFR-P6 footprint:\n{}", profile.to_json());
