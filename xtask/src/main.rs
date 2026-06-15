@@ -29,6 +29,7 @@ fn main() -> ExitCode {
         "arch" => arch(),
         "bench" => bench(),
         "bench-local" => bench_local(),
+        "check-fips" => check_fips(),
         other => Err(format!("unknown command: {other}\n{USAGE}")),
     };
     match result {
@@ -41,7 +42,7 @@ fn main() -> ExitCode {
 }
 
 const USAGE: &str =
-    "usage: cargo xtask <ci|fmt|clippy|test|doc|budgets|skills|arch|bench|bench-local>";
+    "usage: cargo xtask <ci|fmt|clippy|test|doc|budgets|skills|arch|bench|bench-local|check-fips>";
 
 fn run_ci() -> Result<(), String> {
     fmt()?;
@@ -184,6 +185,48 @@ fn bench_local() -> Result<(), String> {
         &["bench", "-p", "osproxy-rewrite", "--bench", "hot_paths"],
         &[],
     )
+}
+
+/// Type-checks the FIPS build (`--features fips`), which the default `ci` lane
+/// never compiles. It links aws-lc-rs FIPS, whose native AWS-LC-FIPS build needs
+/// `cmake` + a C compiler + `go`; where that toolchain is absent (most dev boxes)
+/// this skips with a warning rather than failing, so it is safe to run anywhere
+/// and is a real gate only on a CI runner that has the toolchain (docs/07).
+fn check_fips() -> Result<(), String> {
+    let missing: Vec<&str> = ["cmake", "cc", "go"]
+        .into_iter()
+        .filter(|tool| !tool_on_path(tool))
+        .collect();
+    if !missing.is_empty() {
+        println!(
+            "xtask: check-fips SKIPPED — missing FIPS build toolchain: {}. \
+             Install it (see README) or run this on a CI runner that has it.",
+            missing.join(", ")
+        );
+        return Ok(());
+    }
+    cargo(
+        &[
+            "check",
+            "-p",
+            "osproxy-server",
+            "--no-default-features",
+            "--features",
+            "fips",
+        ],
+        &[],
+    )
+}
+
+/// Whether `tool` is resolvable on `PATH` (via `command -v`).
+fn tool_on_path(tool: &str) -> bool {
+    Command::new("sh")
+        .args(["-c", &format!("command -v {tool}")])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 fn fmt() -> Result<(), String> {

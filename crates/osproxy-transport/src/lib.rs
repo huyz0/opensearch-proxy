@@ -11,6 +11,19 @@
 //! — implemented by the binary — is where the request meets the engine pipeline.
 #![deny(missing_docs)]
 
+// Exactly one crypto provider is compiled in, chosen at build time (ADR-009).
+// `non-fips` is the default; a FIPS release builds `--no-default-features
+// --features fips`. Catch a mis-invocation at compile time rather than silently
+// linking both (or neither) crypto module.
+#[cfg(all(feature = "fips", feature = "non-fips"))]
+compile_error!(
+    "features `fips` and `non-fips` are mutually exclusive — a FIPS artifact must \
+     not link a non-validated crypto module; build with `--no-default-features \
+     --features fips`"
+);
+#[cfg(not(any(feature = "fips", feature = "non-fips")))]
+compile_error!("enable exactly one crypto provider feature: `fips` or `non-fips`");
+
 mod admission;
 mod classify;
 mod grpc;
@@ -25,4 +38,18 @@ pub use grpc::{serve_grpc, serve_grpc_tls};
 pub use handler::IngressHandler;
 pub use request::{IngressRequest, IngressResponse};
 pub use server::{serve, serve_tls, serve_tls_with_limits, serve_with_limits};
-pub use tls::{CryptoProvider, RingProvider, TlsError, FIPS_APPROVED_SUITES};
+pub use tls::{CryptoProvider, TlsError, FIPS_APPROVED_SUITES};
+
+#[cfg(feature = "fips")]
+pub use tls::AwsLcFipsProvider;
+#[cfg(feature = "non-fips")]
+pub use tls::RingProvider;
+
+/// The crypto provider the active build selected: `RingProvider` under
+/// `non-fips`, `AwsLcFipsProvider` under `fips`. Server/wiring code names this
+/// alias so it never hard-codes a concrete provider or branches on the feature.
+#[cfg(feature = "non-fips")]
+pub type DefaultCryptoProvider = tls::RingProvider;
+/// The crypto provider the active build selected (see the `non-fips` variant).
+#[cfg(feature = "fips")]
+pub type DefaultCryptoProvider = tls::AwsLcFipsProvider;

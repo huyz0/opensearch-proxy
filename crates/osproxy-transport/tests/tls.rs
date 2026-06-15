@@ -6,6 +6,9 @@
 // Test scaffolding (helpers + spawned server, not `#[test]` fns) needs the
 // unwrap allowance the test-only config does not reach.
 #![allow(clippy::unwrap_used)]
+// These tests build the `ring` provider directly; the FIPS build links aws-lc-rs
+// instead, so they are part of the non-fips test surface.
+#![cfg(feature = "non-fips")]
 
 use std::sync::Arc;
 

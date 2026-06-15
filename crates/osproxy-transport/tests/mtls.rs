@@ -6,6 +6,8 @@
 // Test scaffolding (helpers + spawned server, not `#[test]` fns) needs the
 // unwrap allowance the test-only config does not reach.
 #![allow(clippy::unwrap_used)]
+// Builds the `ring` provider directly — part of the non-fips test surface.
+#![cfg(feature = "non-fips")]
 
 use std::sync::Arc;
 

@@ -8,6 +8,15 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# Exactly one crypto provider is compiled in (build-time selection, ADR-009).
+default = ["non-fips"]
+# Pure-Rust `ring` module: no native toolchain, fast dev/local builds. NOT FIPS.
+non-fips = ["dep:ring", "tokio-rustls/ring"]
+# CMVP-validated aws-lc-rs in FIPS mode. Builds AWS-LC-FIPS via cmake + C
+# toolchain + Go. Build a FIPS artifact with `--no-default-features --features fips`.
+fips = ["dep:aws-lc-rs", "tokio-rustls/fips"]
+
 [dependencies]
 osproxy-core.workspace = true
 osproxy-spi.workspace = true
@@ -18,7 +27,8 @@ http-body-util.workspace = true
 bytes.workspace = true
 tokio = { workspace = true, features = ["rt", "net"] }
 tokio-rustls.workspace = true
-ring.workspace = true
+ring = { workspace = true, optional = true }
+aws-lc-rs = { workspace = true, optional = true }
 tonic.workspace = true
 tonic-prost.workspace = true
 prost.workspace = true

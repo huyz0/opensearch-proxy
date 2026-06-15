@@ -21,7 +21,7 @@ use osproxy_server::handler::AppHandler;
 use osproxy_server::tenancy::ReferenceTenancy;
 use osproxy_sink::OpenSearchSink;
 use osproxy_tenancy::TenancyRouter;
-use osproxy_transport::{IngressHandler, RingProvider};
+use osproxy_transport::{DefaultCryptoProvider, IngressHandler};
 use tokio::net::TcpListener;
 
 /// Entry point. Returns a process exit code rather than panicking, consistent
@@ -105,7 +105,7 @@ async fn run() -> Result<(), String> {
 /// configured (matching the HTTP listener) and cleartext otherwise.
 fn spawn_grpc<H: IngressHandler>(
     listener: TcpListener,
-    provider: Option<Arc<RingProvider>>,
+    provider: Option<Arc<DefaultCryptoProvider>>,
     handler: Arc<H>,
     grpc_bind: &str,
 ) {
@@ -145,7 +145,7 @@ where
 /// set without the other or the files cannot be read/parsed. If
 /// `OSPROXY_TLS_CLIENT_CA` is also set, mutual TLS is required and clients must
 /// present a certificate chaining to that CA.
-fn load_tls_provider() -> Result<Option<RingProvider>, String> {
+fn load_tls_provider() -> Result<Option<DefaultCryptoProvider>, String> {
     let cert_path = std::env::var("OSPROXY_TLS_CERT")
         .ok()
         .filter(|v| !v.is_empty());
@@ -167,9 +167,9 @@ fn load_tls_provider() -> Result<Option<RingProvider>, String> {
     {
         Some(ca) => {
             let ca_pem = std::fs::read(&ca).map_err(|e| format!("reading {ca}: {e}"))?;
-            RingProvider::from_pem_mtls(&cert_pem, &key_pem, &ca_pem)
+            DefaultCryptoProvider::from_pem_mtls(&cert_pem, &key_pem, &ca_pem)
         }
-        None => RingProvider::from_pem(&cert_pem, &key_pem),
+        None => DefaultCryptoProvider::from_pem(&cert_pem, &key_pem),
     }
     .map_err(|e| format!("building TLS config: {e}"))?;
     Ok(Some(provider))

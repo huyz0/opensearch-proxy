@@ -28,7 +28,9 @@ repository = "https://github.com/huyz0/opensearch-proxy"
 osproxy-core = { path = "crates/osproxy-core" }
 osproxy-spi = { path = "crates/osproxy-spi" }
 osproxy-tenancy = { path = "crates/osproxy-tenancy" }
-osproxy-transport = { path = "crates/osproxy-transport" }
+# default-features off so a consumer can pick the crypto provider feature
+# (`non-fips`/`fips`) without the default `non-fips` being force-unioned in.
+osproxy-transport = { path = "crates/osproxy-transport", default-features = false }
 osproxy-rewrite = { path = "crates/osproxy-rewrite" }
 osproxy-sink = { path = "crates/osproxy-sink" }
 osproxy-control = { path = "crates/osproxy-control" }
@@ -53,13 +55,19 @@ bytes = "1"
 # Stream combinators for bounded-concurrency demux dispatch (buffer_unordered).
 # Already in the tree via hyper-util; no runtime/spawn needed — just polling.
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
-# TLS via rustls behind the CryptoProvider seam. M1 uses the `ring` provider
-# (no cmake/C toolchain needed); the FIPS-validated aws-lc-rs provider drops in
-# at M6 behind the same seam (ADR-009, docs/07).
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
-# Already in the tree via rustls's ring provider; used directly to fingerprint a
-# verified client certificate into a stable mTLS identity.
+# TLS via rustls behind the CryptoProvider seam. The crypto *provider* is NOT
+# pinned here — osproxy-transport selects it per build feature so a FIPS artifact
+# links only aws-lc-rs and a dev build links only `ring` (ADR-009, docs/07):
+# transport adds `tokio-rustls/ring` (non-fips) or `tokio-rustls/fips` (fips).
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12", "logging"] }
+# Crypto modules used directly for the mTLS cert fingerprint (SHA-256). Optional +
+# feature-selected in osproxy-transport; ring for non-fips, aws-lc-rs for fips
+# (its `digest` API mirrors ring's). aws-lc-rs `fips` builds AWS-LC-FIPS (cmake).
 ring = "0.17"
+# `fips` is intentional: this dep exists ONLY to back the FIPS crypto provider, so
+# it must stay a single-consumer dep (osproxy-transport, behind `dep:aws-lc-rs`).
+# A future non-FIPS use of aws-lc-rs must not inherit the AWS-LC-FIPS C build.
+aws-lc-rs = { version = "1", features = ["fips"] }
 rcgen = "0.13"
 # Local-first wall-clock micro-benchmarks (`cargo xtask bench`). divan owns its
 # own timing loop, so bench code needs no banned `Instant::now`. Wall-clock is

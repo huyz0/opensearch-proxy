@@ -32,6 +32,73 @@ dylibs).
   *future* mode built on a queue (Kafka) + pull-based ingesters, not the
   synchronous path.
 
+## Building & development setup
+
+### Required tools
+
+| Tool | Why | Needed for |
+|------|-----|------------|
+| Rust (stable, see `rust-toolchain`) | builds the workspace | always |
+| `protoc` (Protocol Buffers compiler) | gRPC ingress codegen (`tonic-prost-build`) | always |
+| `cmake` + a C compiler (`cc`/`gcc`/`clang`) + `go` | builds AWS-LC-FIPS (the validated crypto module) | **FIPS builds only** |
+| Docker | the `--ignored` testcontainer suite (real OpenSearch) | optional |
+
+The **default (non-FIPS) build needs no native toolchain** beyond `protoc` — the
+crypto provider is pure-Rust `ring`. `cmake`/C/Go are required *only* for a FIPS
+build, because the FIPS crypto module compiles AWS-LC from C.
+
+### Install (Debian / Ubuntu)
+
+```sh
+# Rust (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Always-required: protobuf compiler
+sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+# FIPS builds only: cmake + C toolchain + Go
+sudo apt-get install -y cmake build-essential golang-go
+```
+
+### Install (macOS, Homebrew)
+
+```sh
+# Rust (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Always-required: protobuf compiler
+brew install protobuf
+
+# FIPS builds only: cmake + Go (Xcode CLT provides the C compiler)
+xcode-select --install   # if you don't already have the C toolchain
+brew install cmake go
+```
+
+### Build modes (crypto provider selected at build time)
+
+The crypto provider is chosen by a **mutually-exclusive build feature**, so a
+FIPS artifact never links a non-validated crypto crate — it is a *separate
+compiled binary*, not a runtime switch (ADR-009, [docs/07](docs/07-fips-and-crypto.md)):
+
+```sh
+# Dev / non-FIPS (default): pure-Rust ring provider, no native toolchain.
+cargo build -p osproxy
+cargo xtask ci            # fmt, clippy, arch graph, tests, docs, budgets
+
+# FIPS release artifact: aws-lc-rs FIPS module (requires cmake + C + Go above).
+cargo build -p osproxy --release --no-default-features --features fips
+
+# Type-check the FIPS build (skips with a warning if the toolchain is absent).
+cargo xtask check-fips
+```
+
+Enabling both (or neither) provider feature is a compile error by design. The
+`--ignored` integration tests need Docker:
+
+```sh
+cargo test --workspace -- --ignored
+```
+
 ## Documentation
 
 Read the docs in order; they are the source of truth for the design.
