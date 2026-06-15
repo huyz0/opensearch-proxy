@@ -8,6 +8,7 @@
 //!   doc       Build docs (warnings denied) and run doc tests.
 //!   budgets   Check size budgets and that overflows carry a `// JUSTIFY`.
 //!   skills    Validate .agents/skills/*/SKILL.md (size + frontmatter).
+//!   spawn     Background-task discipline: no bare `tokio::spawn` in libraries.
 //!   arch      Static crate dependency-direction / acyclicity check.
 //!   bench     Deterministic instruction-count microbenchmarks (needs valgrind).
 //!   check-fips Build + test the FIPS feature (needs cmake/C/Go; else skips).
@@ -27,6 +28,7 @@ fn main() -> ExitCode {
         "doc" => doc(),
         "budgets" => budgets(),
         "skills" => skills(),
+        "spawn" => spawn_discipline(),
         "arch" => arch(),
         "bench" => bench(),
         "bench-local" => bench_local(),
@@ -42,8 +44,8 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str =
-    "usage: cargo xtask <ci|fmt|clippy|test|doc|budgets|skills|arch|bench|bench-local|check-fips>";
+const USAGE: &str = "usage: cargo xtask \
+     <ci|fmt|clippy|test|doc|budgets|skills|spawn|arch|bench|bench-local|check-fips>";
 
 fn run_ci() -> Result<(), String> {
     fmt()?;
@@ -54,6 +56,7 @@ fn run_ci() -> Result<(), String> {
     doc()?;
     budgets()?;
     skills()?;
+    spawn_discipline()?;
     println!("\nxtask: all gates passed ✓");
     Ok(())
 }
@@ -362,6 +365,56 @@ fn skills() -> Result<(), String> {
     } else {
         Err(format!(
             "skill validation failed:\n{}",
+            violations.join("\n")
+        ))
+    }
+}
+
+/// Background-task discipline (`docs/08`): a library crate must not call bare
+/// `tokio::spawn` — it would panic (or silently no-op) when invoked outside a
+/// running runtime, which a library cannot assume. Background work in a library
+/// captures a `tokio::runtime::Handle` and spawns on it (as `osproxy-otlp` does),
+/// so the absence of a runtime is handled, not assumed.
+///
+/// Exempt: the binary (`osproxy-server`) owns the runtime, and `osproxy-transport`
+/// spawns only from inside its `async` accept loops where a runtime is guaranteed
+/// by the awaiting caller. A deliberate exception elsewhere carries a
+/// `// JUSTIFY(spawn):` marker on the same line.
+fn spawn_discipline() -> Result<(), String> {
+    const EXEMPT_CRATES: &[&str] = &["osproxy-server", "osproxy-transport"];
+    let crates_dir = workspace_root().join("crates");
+    let mut files = Vec::new();
+    collect_rs_files(&crates_dir, &mut files);
+
+    let mut violations = Vec::new();
+    for file in files {
+        let path = file.to_string_lossy();
+        // Only library source is in scope: integration tests run inside a
+        // `#[tokio::test]` runtime, so spawning there is always sound.
+        if !path.contains("/src/")
+            || EXEMPT_CRATES
+                .iter()
+                .any(|c| path.contains(&format!("crates/{c}/")))
+        {
+            continue;
+        }
+        let content =
+            std::fs::read_to_string(&file).map_err(|e| format!("read {}: {e}", file.display()))?;
+        let shown = file.strip_prefix(workspace_root()).unwrap_or(&file);
+        for (n, line) in content.lines().enumerate() {
+            if line.contains("tokio::spawn(") && !line.contains("// JUSTIFY(spawn)") {
+                violations.push(format!("  {}:{}", shown.display(), n + 1));
+            }
+        }
+    }
+
+    if violations.is_empty() {
+        println!("xtask: spawn discipline ok");
+        Ok(())
+    } else {
+        Err(format!(
+            "bare `tokio::spawn` in a library crate (capture a runtime Handle \
+             instead, or mark `// JUSTIFY(spawn):`):\n{}",
             violations.join("\n")
         ))
     }

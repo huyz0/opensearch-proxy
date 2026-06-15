@@ -61,6 +61,17 @@ Rationale: budgets are a forcing function for decomposition. They catch the
   exception requires a `// SAFETY:` proof and reviewer sign-off, and is confined
   to a single audited module.
 
+### 5a. Background-task discipline
+
+A library crate must not call bare `tokio::spawn`: it panics when invoked outside
+a running runtime, which a library cannot assume. Background work in a library
+captures a `tokio::runtime::Handle` and spawns on it (so a missing runtime is
+handled, not assumed) — e.g. `osproxy-otlp`'s fire-and-forget span export. The
+binary (`osproxy-server`) owns the runtime, and `osproxy-transport` spawns only
+from inside its `async` accept loops where a runtime is guaranteed; both are
+exempt. Enforced by `cargo xtask spawn`; a deliberate exception carries an inline
+`// JUSTIFY(spawn): reason`.
+
 ## 6. Dependency hygiene
 
 - Minimal, audited dependency set; new deps require justification in the PR
@@ -86,5 +97,5 @@ Rationale: budgets are a forcing function for decomposition. They catch the
 
 A PR merges only if **all** pass: build (fips + non-fips), `rustfmt`, `clippy
 -D warnings`, `cargo-deny`, doc build + doc tests, unit + integration + property
-tests, coverage thresholds (docs/09), size/complexity budgets, and the
-"no value leaks" telemetry test (docs/05 §7).
+tests, coverage thresholds (docs/09), size/complexity budgets, background-task
+discipline (§5a), and the "no value leaks" telemetry test (docs/05 §7).
