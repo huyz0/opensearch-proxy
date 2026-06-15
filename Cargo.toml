@@ -67,7 +67,15 @@ ring = "0.17"
 # `fips` is intentional: this dep exists ONLY to back the FIPS crypto provider, so
 # it must stay a single-consumer dep (osproxy-transport, behind `dep:aws-lc-rs`).
 # A future non-FIPS use of aws-lc-rs must not inherit the AWS-LC-FIPS C build.
-aws-lc-rs = { version = "1", features = ["fips"] }
+#
+# PINNED EXACTLY (docs/07 §2.1, docs/specs/fips-boundary.md): the crate version
+# determines the linked AWS-LC-FIPS *module* version, which is a tracked
+# compliance fact — never a routine `cargo update`. 1.17.0 binds AWS-LC-FIPS 3.0
+# (CMVP review pending / MIP list). NOTE: the module line is COUPLED to rustls —
+# rustls 0.23.40 requires aws-lc-rs >=1.14 (3.0); the validated 2.0 module
+# (cert #4816) needs aws-lc-rs <1.12 and therefore an older rustls. Changing this
+# pin is a compliance event: update the boundary doc in the same change.
+aws-lc-rs = { version = "=1.17.0", features = ["fips"] }
 rcgen = "0.13"
 # Local-first wall-clock micro-benchmarks (`cargo xtask bench`). divan owns its
 # own timing loop, so bench code needs no banned `Instant::now`. Wall-clock is

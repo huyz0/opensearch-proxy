@@ -1,30 +1,65 @@
 # FIPS Compliance Boundary
 
-> Status: **skeleton / release blocker** — must be completed and verified before
-> any FIPS claim (docs/07 §5, docs/11 M6).
+> Status: **release blocker** — the module the build links (AWS-LC-FIPS 3.0) is
+> on the CMVP *Modules In Process* list; its certificate is not yet awarded, so a
+> hard "FIPS 140-3 validated" claim is not defensible until either 3.0's review
+> completes or the build is moved to a validated line (§1a). The proxy
+> engineering is complete; this is the compliance gate (docs/07 §5, docs/11 M6).
 
 This is the authoritative compliance artifact. Audits are passed or failed on
 this document, not on the crate.
 
-## 1. Validated module
+**We do not validate anything with NIST.** AWS already had AWS-LC-FIPS validated
+by an accredited CMVP lab; as a *consumer* of that module our obligation is only
+to (a) pin to a module version with an awarded certificate, (b) confirm our
+deploy OS/arch is on that certificate's tested-configuration list, and (c) record
+it here. No NIST engagement, no lab, no fees.
+
+## 1. Module the build links (pinned)
 
 | Field | Value |
 |-------|-------|
-| Module name | AWS-LC-FIPS `[VERIFY]` |
-| CMVP certificate # | `[VERIFY against NIST CMVP list]` |
-| FIPS standard | 140-3 `[VERIFY]` |
-| Pinned AWS-LC-FIPS source version | `[PIN]` |
-| `aws-lc-rs` crate version (`fips` feature) | `[PIN]` |
+| Module name | AWS-LC-FIPS |
+| Module version | **3.0** (`fips-2024-09-27`) |
+| CMVP certificate # | **none yet** — on the CMVP *Modules In Process* (MIP) list, "Review Pending" |
+| FIPS standard | 140-3, Level 1 (target) |
+| Pinned `aws-lc-rs` crate (`fips` feature) | **=1.17.0** (binds AWS-LC-FIPS 3.0.x) |
+| Pinned `aws-lc-fips-sys` | 0.13.14 (transitive, via the lockfile) |
+
+The crate version is **pinned exactly** in the workspace `Cargo.toml`; bumping it
+changes the linked module and is a tracked compliance event, not a routine
+`cargo update`.
+
+### 1a. Validated fallback line (if an awarded cert is required now)
+
+The module line is **coupled to rustls**: `rustls 0.23.40` requires
+`aws-lc-rs >= 1.14`, which is the 3.0 line. The most recent **validated** module
+is AWS-LC-FIPS **2.0**:
+
+| Module | CMVP cert | Reached by |
+|--------|-----------|------------|
+| AWS-LC-FIPS 2.0 static (Linux) | **#4816** | `aws-lc-rs < 1.12` |
+| AWS-LC-FIPS 2.0 dynamic | **#4759** | `aws-lc-rs < 1.12` |
+| AWS-LC-FIPS 1.0 | #4631 | older still |
+
+Moving to 2.0 therefore also pins `rustls`/`tokio-rustls` back to a release that
+accepts `aws-lc-rs < 1.12` — a TLS-stack currency vs awarded-cert tradeoff. Until
+that is needed, the build tracks 3.0 and inherits its certificate automatically
+once the review completes.
 
 ## 2. Tested configurations (platform match)
 
-The certificate lists specific tested OS/arch configurations. Our deployment
-targets must appear there.
+Static AWS-LC-FIPS builds (what this artifact uses) are **Linux-only**. The
+certificate's Security Policy lists the specific tested OS/arch operational
+environments; our deploy targets must appear there (verify against the awarded
+certificate once 3.0 is on the active list, or against #4816 if the 2.0 line is
+chosen).
 
 | Deploy target | On cert's tested-config list? |
 |---------------|-------------------------------|
-| Linux x86_64 | `[VERIFY]` |
-| Linux aarch64 | `[VERIFY]` |
+| Linux x86_64 | `[VERIFY against the awarded cert's Security Policy]` |
+| Linux aarch64 | `[VERIFY against the awarded cert's Security Policy]` |
+| Windows / macOS | Not supported for static FIPS builds |
 
 If a target is not listed, the FIPS validation claim does not hold for it.
 
