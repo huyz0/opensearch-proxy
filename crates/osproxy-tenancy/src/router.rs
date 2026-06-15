@@ -8,8 +8,8 @@
 
 use osproxy_core::{Epoch, IndexName, PartitionId, Target};
 use osproxy_spi::{
-    BodyTransform, InjectedField, InjectedValue, Placement, RequestCtx, RouteDecision, RoutingSpi,
-    SpiError, TenancySpi,
+    BodyTransform, InjectedField, InjectedValue, MigrationPhase, Placement, RequestCtx,
+    RouteDecision, RoutingSpi, SpiError, TenancySpi,
 };
 use serde_json::Value;
 
@@ -26,6 +26,9 @@ pub struct Resolved {
     pub partition: PartitionId,
     /// The routing decision derived from the partition's placement.
     pub decision: RouteDecision,
+    /// The partition's migration phase at resolve time (shape-only, for
+    /// observability — `docs/06` §5).
+    pub migration: MigrationPhase,
 }
 
 /// Turns a [`TenancySpi`] implementation into a [`RoutingSpi`].
@@ -118,6 +121,7 @@ impl<T: TenancySpi> TenancyRouter<T> {
         Ok(Resolved {
             partition,
             decision,
+            migration: at.phase,
         })
     }
 

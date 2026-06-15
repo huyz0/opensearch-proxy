@@ -59,24 +59,63 @@ impl Placement {
     }
 }
 
-/// A [`Placement`] together with the placement-table epoch it was read at.
+/// The partition's migration phase at read time — a shape-only label (never
+/// tenant data) so observability can show where a migration is (`docs/06` §5).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum MigrationPhase {
+    /// Not migrating; the placement is settled.
+    #[default]
+    Settled,
+    /// Migrating, copy phase — writes still go to the origin.
+    Draining,
+    /// Migrating, cutover window — writes are held (stale-epoch retry).
+    Cutover,
+}
+
+impl MigrationPhase {
+    /// A stable lowercase label for telemetry.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Settled => "settled",
+            Self::Draining => "draining",
+            Self::Cutover => "cutover",
+        }
+    }
+}
+
+/// A [`Placement`] together with the placement-table epoch it was read at and the
+/// partition's migration phase.
 ///
 /// The epoch flows into the routing decision and onto the write so migration
 /// cutover can detect a write resolved against a superseded placement
-/// (`docs/06` §2).
+/// (`docs/06` §2); the phase is shape-only context for observability.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PlacementAt {
     /// The resolved placement.
     pub placement: Placement,
     /// The epoch the placement table was at when this was read.
     pub epoch: Epoch,
+    /// The partition's migration phase at read time.
+    pub phase: MigrationPhase,
 }
 
 impl PlacementAt {
-    /// Pairs a placement with the epoch it was read at.
+    /// Pairs a placement with the epoch it was read at (settled, not migrating).
     #[must_use]
     pub fn new(placement: Placement, epoch: Epoch) -> Self {
-        Self { placement, epoch }
+        Self {
+            placement,
+            epoch,
+            phase: MigrationPhase::Settled,
+        }
+    }
+
+    /// Sets the migration phase (builder style).
+    #[must_use]
+    pub fn with_phase(mut self, phase: MigrationPhase) -> Self {
+        self.phase = phase;
+        self
     }
 }
 

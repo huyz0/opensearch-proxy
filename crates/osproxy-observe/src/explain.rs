@@ -76,6 +76,7 @@ fn resolve_json(r: &crate::trace::ResolveInfo) -> Value {
         "epoch": r.epoch.get(),
         "inject_field_names": fields,
         "routing": r.routing,
+        "migration": r.migration,
     })
 }
 
@@ -164,6 +165,7 @@ mod tests {
             epoch: Epoch::new(3),
             inject_fields: vec![FieldName::from("_tenant")],
             routing: true,
+            migration: "settled",
         });
         t.record_dispatch(DispatchInfo {
             cluster: ClusterId::from("eu-1"),

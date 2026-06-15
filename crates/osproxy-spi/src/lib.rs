@@ -32,7 +32,7 @@ mod tenancy;
 pub use auth::{Action, AuthError, Authenticator, Authorizer, ClientCredentials};
 pub use decision::{BodyTransform, HeaderOp, RouteDecision};
 pub use error::SpiError;
-pub use placement::{Placement, PlacementAt};
+pub use placement::{MigrationPhase, Placement, PlacementAt};
 pub use principal::{Principal, PrincipalAttr};
 pub use request::{HeaderView, HttpMethod, Protocol, RequestCtx};
 pub use routing::RoutingSpi;

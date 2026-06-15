@@ -28,6 +28,7 @@ fn trace_for(partition: &str, body_bytes: usize) -> RequestTrace {
         epoch: Epoch::new(1),
         inject_fields: vec![FieldName::from("_tenant")],
         routing: true,
+        migration: "draining",
     });
     t.record_rewrite(RewriteInfo {
         transform_kind: "inject+construct_id",

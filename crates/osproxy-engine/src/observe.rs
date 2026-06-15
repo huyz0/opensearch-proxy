@@ -29,6 +29,7 @@ pub(crate) fn resolve_info(resolved: &Resolved) -> ResolveInfo {
         epoch: decision.epoch,
         inject_fields: inject_field_names(transform),
         routing: routing_enabled(transform),
+        migration: resolved.migration.as_str(),
     }
 }
 

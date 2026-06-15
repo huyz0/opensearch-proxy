@@ -15,9 +15,25 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 
 use osproxy_core::{Epoch, PartitionId};
-use osproxy_spi::{Placement, PlacementAt};
+use osproxy_spi::{MigrationPhase, Placement, PlacementAt};
 
 use crate::migration::{MigrationError, PartitionState, Phase, WriteAdmission};
+
+/// Maps a partition's internal state to the shape-only [`MigrationPhase`] label
+/// surfaced through [`PlacementAt`] for observability (`docs/06` §5).
+fn migration_phase(state: &PartitionState) -> MigrationPhase {
+    match state {
+        PartitionState::Active(_) => MigrationPhase::Settled,
+        PartitionState::Migrating {
+            phase: Phase::Draining,
+            ..
+        } => MigrationPhase::Draining,
+        PartitionState::Migrating {
+            phase: Phase::Cutover,
+            ..
+        } => MigrationPhase::Cutover,
+    }
+}
 
 /// One partition's migration state plus the epoch it was last stamped at. Every
 /// `set`/transition advances the epoch, so a stamped decision can be recognized
@@ -154,9 +170,10 @@ impl PlacementTable {
     /// sees a split view (INV-M4). The routing entry point.
     #[must_use]
     pub fn get(&self, partition: &PartitionId) -> Option<PlacementAt> {
-        self.read_lock()
-            .get(partition)
-            .map(|e| PlacementAt::new(e.state.read_placement().clone(), e.epoch))
+        self.read_lock().get(partition).map(|e| {
+            PlacementAt::new(e.state.read_placement().clone(), e.epoch)
+                .with_phase(migration_phase(&e.state))
+        })
     }
 
     /// The migration write gate (`docs/06` §2): may a write resolved at `epoch`

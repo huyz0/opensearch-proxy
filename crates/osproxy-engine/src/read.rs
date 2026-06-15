@@ -290,6 +290,7 @@ mod tests {
                 body_transform: transform,
                 epoch: Epoch::new(4),
             },
+            migration: osproxy_spi::MigrationPhase::Settled,
         }
     }
 

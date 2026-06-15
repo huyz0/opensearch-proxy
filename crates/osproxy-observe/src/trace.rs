@@ -48,6 +48,10 @@ pub struct ResolveInfo {
     pub inject_fields: Vec<FieldName>,
     /// Whether `_routing` was set.
     pub routing: bool,
+    /// The partition's migration phase at resolve time, e.g. `"settled"` /
+    /// `"draining"` / `"cutover"` — so an operator sees where a migration is
+    /// without reading values (`docs/06` §5).
+    pub migration: &'static str,
 }
 
 /// The `rewrite` span: what the body transform did (in shapes).

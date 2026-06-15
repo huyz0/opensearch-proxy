@@ -69,9 +69,10 @@ fn shared_on(cluster: &str) -> Placement {
 
 async fn ingest(
     pipeline: &Pipeline<MigratingTenancy, MemorySink>,
+    rid: &str,
 ) -> Result<PipelineResponse, RequestError> {
     let principal = Principal::new(PrincipalId::from("svc"));
-    let rid = RequestId::from("req-1");
+    let rid = RequestId::from(rid);
     let headers: Vec<(String, String)> = vec![];
     let body = serde_json::to_vec(&json!({ "tenant_id": "acme", "id": 1, "msg": "hi" })).unwrap();
     let ctx = RequestCtx::new(
@@ -100,18 +101,23 @@ async fn ingest_is_gated_through_the_migration_lifecycle() {
     );
 
     // Active: the write commits to the origin cluster.
-    assert!(ingest(&pipeline).await.unwrap().status >= 200);
+    assert!(ingest(&pipeline, "active").await.unwrap().status >= 200);
     assert_eq!(pipeline.sink().recorded().len(), 1);
 
     // Draining: writes still flow to the origin (only cutover rejects).
     table.begin_migration(&p, shared_on("us-1")).unwrap();
-    assert!(ingest(&pipeline).await.is_ok());
+    assert!(ingest(&pipeline, "draining").await.is_ok());
     assert_eq!(pipeline.sink().recorded().len(), 2);
+
+    // The resolve span surfaces the partition's migration phase, so an operator
+    // sees the migration in flight even on a successful write (`docs/06` §5).
+    let doc = pipeline.explain(&RequestId::from("draining")).unwrap();
+    assert_eq!(doc["spans"]["spi.resolve"]["migration"], "draining");
 
     // Cutover: the write is held with a retryable stale-epoch error and never
     // reaches the sink (INV-M1).
     table.enter_cutover(&p).unwrap();
-    let err = ingest(&pipeline).await.unwrap_err();
+    let err = ingest(&pipeline, "cutover").await.unwrap_err();
     assert_eq!(err.code(), ErrorCode::StaleEpoch);
     assert!(err.retryable(), "stale-epoch must be retryable");
     assert_eq!(
@@ -124,7 +130,7 @@ async fn ingest_is_gated_through_the_migration_lifecycle() {
     // proving the gate re-resolved rather than landing on the old placement
     // (INV-M2).
     table.complete_migration(&p).unwrap();
-    assert!(ingest(&pipeline).await.is_ok());
+    assert!(ingest(&pipeline, "flipped").await.is_ok());
     let recorded = pipeline.sink().recorded();
     assert_eq!(recorded.len(), 3);
     assert_eq!(
