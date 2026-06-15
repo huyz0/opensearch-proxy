@@ -20,6 +20,9 @@
 //!   concurrency: a sweep of [`LatencySummary`] whose tail-amplification and
 //!   throughput-scaling are judged against NFR-P2 ("no tail amplification from
 //!   pooling"). Where [`NfrProfile`] is one operating point, this is the trend.
+//! - [`FootprintProfile`] + [`judge_footprint`] — the proxy's resident set when
+//!   idle and after a soak, judged against NFR-P6 (bounded idle footprint; no
+//!   unbounded buffers/queues — the growth ratio is the leak guard).
 //!
 //! **Shape-only, like the rest of osproxy's observability:** a profile carries
 //! timings and counts, never request bodies, tenant values, or cluster
@@ -31,11 +34,13 @@
 //! these pure types gate in CI with no Docker.
 #![deny(missing_docs)]
 
+mod footprint;
 mod judge;
 mod profile;
 mod scale;
 mod summary;
 
+pub use footprint::{judge_footprint, FootprintProfile, FootprintThresholds};
 pub use judge::{judge, Finding, NfrThresholds, Verdict};
 pub use profile::NfrProfile;
 pub use scale::{judge_scalability, ScalabilityCurve, ScalabilityPoint, ScalabilityThresholds};
