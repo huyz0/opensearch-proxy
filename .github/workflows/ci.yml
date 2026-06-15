@@ -22,8 +22,44 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       # Single source of truth: the same gate developers run locally
-      # (fmt, clippy -D warnings, arch, test, doc, budgets, skills).
+      # (fmt, clippy -D warnings, arch, test, doc, budgets, skills). The FIPS
+      # build/test is skipped here and owned by the dedicated `fips` job below, so
+      # the native AWS-LC-FIPS build is not paid for twice.
       - run: cargo xtask ci
+        env:
+          OSPROXY_SKIP_FIPS: "1"
+
+  fips:
+    name: FIPS build & release artifact
+    # PINNED image, not `ubuntu-latest`: the FIPS build toolchain must be
+    # deterministic (docs/07 §4, fips-boundary.md §4). AWS-LC-FIPS's delocate
+    # (the FIPS integrity transform) only parses assembly from supported compiler
+    # versions — a bleeding-edge gcc (e.g. 15) fails it at -O3. 24.04 ships a
+    # gcc that AWS-LC-FIPS supports; bumping this image is a compliance event.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: Swatinem/rust-cache@v2
+      # AWS-LC-FIPS compiles from C: cmake + a C compiler + Go. These are present
+      # on the pinned image; install cmake explicitly so it is reproducible and
+      # the job fails loudly if the image ever drops it.
+      - name: Install FIPS build toolchain
+        run: sudo apt-get update && sudo apt-get install -y cmake
+      - name: Record toolchain provenance
+        run: |
+          cmake --version
+          cc --version
+          go version
+      # Builds and TESTS the fips feature: tests/fips.rs asserts the linked
+      # aws-lc-rs module reports FIPS mode and offers exactly the approved suites.
+      - name: FIPS build & tests
+        run: cargo xtask check-fips
+      # M6 exit criterion (docs/11): the shipped release artifact must be
+      # FIPS-built — never the default `ring` provider. `--no-default-features`
+      # guarantees the non-fips provider is not linked.
+      - name: Release artifact is FIPS-built
+        run: cargo build -p osproxy --release --no-default-features --features fips
 
   deny:
     name: Supply chain (cargo-deny)

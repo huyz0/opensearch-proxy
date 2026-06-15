@@ -10,6 +10,7 @@
 //!   skills    Validate .agents/skills/*/SKILL.md (size + frontmatter).
 //!   arch      Static crate dependency-direction / acyclicity check.
 //!   bench     Deterministic instruction-count microbenchmarks (needs valgrind).
+//!   check-fips Build + test the FIPS feature (needs cmake/C/Go; else skips).
 //!
 //! See docs/08-engineering-standards.md, docs/10-review-process.md, docs/12.
 
@@ -196,6 +197,15 @@ fn bench_local() -> Result<(), String> {
 /// wherever it is installed (docs/07). The fips tests assert the linked module
 /// reports FIPS mode and offers exactly the approved suites (`tests/fips.rs`).
 fn check_fips() -> Result<(), String> {
+    // CI runs this in a dedicated `fips` job, so the main `gate` job sets this to
+    // avoid building the (heavy) native AWS-LC-FIPS twice. Local `xtask ci` leaves
+    // it unset and runs the fips gate when the toolchain is present.
+    if std::env::var_os("OSPROXY_SKIP_FIPS").is_some() {
+        println!(
+            "xtask: check-fips SKIPPED — OSPROXY_SKIP_FIPS set (run in the dedicated CI job)."
+        );
+        return Ok(());
+    }
     let missing: Vec<&str> = ["cmake", "cc", "go"]
         .into_iter()
         .filter(|tool| !tool_on_path(tool))

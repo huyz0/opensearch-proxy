@@ -86,11 +86,17 @@ cargo build -p osproxy
 cargo xtask ci            # fmt, clippy, arch graph, tests, docs, budgets
 
 # FIPS release artifact: aws-lc-rs FIPS module (requires cmake + C + Go above).
-cargo build -p osproxy --release --no-default-features --features fips
+cargo build -p osproxy-server --release --no-default-features --features fips
 
-# Type-check the FIPS build (skips with a warning if the toolchain is absent).
+# Build + test the FIPS feature (skips with a warning if the toolchain is absent).
 cargo xtask check-fips
 ```
+
+> **FIPS toolchain note:** AWS-LC-FIPS's integrity transform (`delocate`) only
+> supports specific compiler versions; a bleeding-edge `gcc` (e.g. 15) can fail
+> the FIPS build at `-O3`. CI pins the image for this reason — see
+> [docs/specs/fips-boundary.md](docs/specs/fips-boundary.md) §4. Do not inject
+> `CFLAGS` to work around it; that would alter the validated build.
 
 Enabling both (or neither) provider feature is a compile error by design. The
 `--ignored` integration tests need Docker:

@@ -97,9 +97,19 @@ module lacked one of the six approved suites.
 
 ## 4. Build provenance
 
-- FIPS build toolchain (C compiler, CMake versions) pinned in CI.
-- Build is reproducible; artifact crypto provenance auditable.
-- Release CI gates that shipped artifacts are `--features fips`.
+- **FIPS build toolchain is pinned in CI**, not floating. The `fips` job in
+  `.github/workflows/ci.yml` runs on a pinned image (`ubuntu-24.04`), not
+  `ubuntu-latest`. This is load-bearing for FIPS: AWS-LC-FIPS's *delocate* step
+  (the FIPS integrity transform that produces `bcm-delocated.S`) only parses the
+  assembly emitted by **supported compiler versions**. A bleeding-edge compiler
+  fails the FIPS build — observed: gcc 15.2 fails delocate at `-O3` (release),
+  though it builds in debug. Do **not** work around this by injecting `CFLAGS`;
+  that would alter the validated build. Pin the image instead. Bumping the runner
+  image is a compliance event (re-verify the build).
+- The release artifact is built `--no-default-features --features fips`, so the
+  non-validated `ring` provider is not linked (verified by the `fips` CI job).
+- `cargo xtask check-fips` builds and runs `tests/fips.rs` (FIPS-mode + approved
+  suites) on the same pinned toolchain.
 
 ## 5. Cryptographic boundary diagram
 
