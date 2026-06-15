@@ -132,9 +132,11 @@ impl WriteBatch {
     /// Tags every operation in the batch with the same downstream trace context
     /// (builder style), so all upstream requests for this batch propagate it.
     #[must_use]
-    pub fn with_trace(mut self, trace: Option<TraceContext>) -> Self {
+    pub fn with_trace(mut self, trace: Option<&TraceContext>) -> Self {
         for op in &mut self.ops {
-            op.trace = trace;
+            // Clone per op: one context fans across the whole batch (it carries an
+            // owned tracestate, so it is no longer `Copy`). Borrowed, not consumed.
+            op.trace = trace.cloned();
         }
         self
     }

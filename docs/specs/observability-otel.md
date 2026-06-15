@@ -56,7 +56,12 @@ injected once at the sink's single send choke point. It holds **only** trace/spa
 identity — never request values — so propagation cannot become a value-leak
 channel (the shape-only rule, docs/05 §7). The context also retains the caller's
 span id so the exported span nests under it (the `parentSpanId` above).
-`tracestate` pass-through is a remaining follow-up.
+
+The incoming `tracestate` (the W3C vendor list) is **forwarded verbatim** to every
+upstream call alongside `traceparent` — the proxy is not a tracing vendor, so it
+adds no entry of its own. It is carried only when continuing a trace and only
+within the W3C 512-byte cap (an oversized, empty, or parentless `tracestate` is
+dropped, so the header can't be used to amplify downstream).
 
 ## 2. Attribute naming
 

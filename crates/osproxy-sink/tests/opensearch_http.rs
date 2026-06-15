@@ -34,6 +34,7 @@ struct Captured {
     body: String,
     version: String,
     traceparent: Option<String>,
+    tracestate: Option<String>,
 }
 
 /// Starts a one-shot mock server returning `response` (status 201) and capturing
@@ -53,11 +54,14 @@ async fn start_mock(response: &'static str) -> (String, Arc<Mutex<Captured>>) {
                 let method = req.method().to_string();
                 let uri = req.uri().to_string();
                 let version = format!("{:?}", req.version());
-                let traceparent = req
-                    .headers()
-                    .get("traceparent")
-                    .and_then(|v| v.to_str().ok())
-                    .map(str::to_owned);
+                let header = |name: &str| {
+                    req.headers()
+                        .get(name)
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_owned)
+                };
+                let traceparent = header("traceparent");
+                let tracestate = header("tracestate");
                 let body = req.into_body().collect().await.unwrap().to_bytes();
                 *captured.lock().unwrap() = Captured {
                     method,
@@ -65,6 +69,7 @@ async fn start_mock(response: &'static str) -> (String, Arc<Mutex<Captured>>) {
                     body: String::from_utf8_lossy(&body).into_owned(),
                     version,
                     traceparent,
+                    tracestate,
                 };
                 Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from(response))))
             }
@@ -122,9 +127,13 @@ async fn the_trace_context_is_propagated_to_the_upstream() {
     let (base, captured) = start_mock(r#"{"_id":"acme:1","result":"created"}"#).await;
     let sink = sink_for("eu-1", base);
 
-    // A client request arrives carrying an upstream traceparent.
+    // A client request arrives carrying an upstream traceparent and tracestate.
     let incoming = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
-    let ctx = TraceContext::propagate(Some(incoming), &RequestId::from("req-42"));
+    let ctx = TraceContext::propagate(
+        Some(incoming),
+        Some("vendor1=abc,congo=t61rcWkgMzE"),
+        &RequestId::from("req-42"),
+    );
     let op = WriteOp::new(
         Target::new(ClusterId::from("eu-1"), IndexName::from("orders-shared")),
         DocOp::Index {
@@ -150,6 +159,12 @@ async fn the_trace_context_is_propagated_to_the_upstream() {
     assert!(
         !traceparent.contains("00f067aa0ba902b7"),
         "proxy must present its own span id downstream: {traceparent}"
+    );
+    // tracestate is forwarded verbatim — the proxy adds no entry of its own.
+    assert_eq!(
+        got.tracestate.as_deref(),
+        Some("vendor1=abc,congo=t61rcWkgMzE"),
+        "the caller's tracestate must pass through unchanged"
     );
 }
 

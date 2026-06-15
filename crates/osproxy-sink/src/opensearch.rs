@@ -15,7 +15,6 @@ use std::time::Duration;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::header::{HeaderName, HeaderValue};
 use hyper::{Method, Request, Response};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
@@ -206,10 +205,7 @@ impl OpenSearchSink {
         fail_kind: &'static str,
     ) -> Result<(Response<Incoming>, bool), SinkError> {
         // Propagate the W3C trace context to every upstream call (one choke point).
-        if let Some(value) = trace.and_then(|t| HeaderValue::from_str(&t.to_traceparent()).ok()) {
-            req.headers_mut()
-                .insert(HeaderName::from_static("traceparent"), value);
-        }
+        crate::trace_headers::inject_trace(&mut req, trace);
         if !pool.breaker.allows(self.clock.now(), self.cooldown) {
             return Err(SinkError::Transport {
                 kind: "cluster shed (circuit open)",

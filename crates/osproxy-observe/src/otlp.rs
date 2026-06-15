@@ -174,6 +174,7 @@ mod tests {
         let mut t = RequestTrace::new();
         t.record_context(TraceContext::propagate(
             Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            None,
             &RequestId::from("req-1"),
         ));
         t.record_classify(ClassifyInfo {
@@ -230,7 +231,11 @@ mod tests {
     fn a_root_request_emits_no_parent_span_id() {
         // No incoming traceparent: the proxy span is the root, so no parentSpanId.
         let mut t = RequestTrace::new();
-        t.record_context(TraceContext::propagate(None, &RequestId::from("req-1")));
+        t.record_context(TraceContext::propagate(
+            None,
+            None,
+            &RequestId::from("req-1"),
+        ));
         let doc = resource_spans("svc", &RequestId::from("req-1"), &t, 0, 1).unwrap();
         let span = &doc["resourceSpans"][0]["scopeSpans"][0]["spans"][0];
         assert!(

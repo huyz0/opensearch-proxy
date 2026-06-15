@@ -23,6 +23,7 @@ mod memory;
 mod opensearch;
 mod read;
 mod sink;
+mod trace_headers;
 mod wire;
 
 pub use ack::{OpResult, WriteAck};

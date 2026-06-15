@@ -23,22 +23,42 @@ const TRACEPARENT_LEN: usize = 2 + 1 + 32 + 1 + 16 + 1 + 2;
 /// It also retains the incoming parent's span id (when continuing a trace), so
 /// the proxy's own emitted span can be recorded as a child of the caller's span;
 /// a freshly minted root has no parent.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+///
+/// Not `Copy`: it carries an optional owned `tracestate` (the vendor list the
+/// proxy forwards verbatim), so it is cloned where a batch fans one context
+/// across many ops.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct TraceContext {
     trace_id: [u8; 16],
     span_id: [u8; 8],
     /// The caller's span id, if this context continues an incoming trace — the
     /// parent the proxy's own span nests under. `None` for a minted root.
     parent_span_id: Option<[u8; 8]>,
+    /// The incoming W3C `tracestate` (vendor key-value list), forwarded verbatim
+    /// to downstream calls. The proxy adds no entry of its own; only present when
+    /// continuing a trace and the value is within spec bounds.
+    tracestate: Option<String>,
     sampled: bool,
 }
+
+/// W3C caps `tracestate` at 512 bytes; a longer value is dropped rather than
+/// forwarded, so the header cannot be used to amplify traffic downstream.
+const MAX_TRACESTATE_LEN: usize = 512;
 
 impl TraceContext {
     /// Continues `incoming_traceparent` if it is present and well-formed, else
     /// mints a new root trace. A fresh `span_id` for this hop is always derived
     /// from `request`, so the downstream call chains under the proxy's span.
+    ///
+    /// `incoming_tracestate` (the W3C vendor list) is forwarded verbatim, but only
+    /// when continuing a trace and only when within spec bounds — a `tracestate`
+    /// without a valid `traceparent` is meaningless and is dropped.
     #[must_use]
-    pub fn propagate(incoming_traceparent: Option<&str>, request: &RequestId) -> Self {
+    pub fn propagate(
+        incoming_traceparent: Option<&str>,
+        incoming_tracestate: Option<&str>,
+        request: &RequestId,
+    ) -> Self {
         match incoming_traceparent.and_then(Self::parse) {
             // Continue the caller's trace: keep its trace_id and sampling, but
             // present our own span as the parent of the downstream call, and
@@ -47,6 +67,7 @@ impl TraceContext {
                 trace_id: parent.trace_id,
                 span_id: derive8(request, SPAN_SEED),
                 parent_span_id: Some(parent.span_id),
+                tracestate: sanitize_tracestate(incoming_tracestate),
                 sampled: parent.sampled,
             },
             // No usable upstream context: this request is the trace root. Sample
@@ -55,6 +76,7 @@ impl TraceContext {
                 trace_id: derive16(request),
                 span_id: derive8(request, SPAN_SEED),
                 parent_span_id: None,
+                tracestate: None,
                 sampled: true,
             },
         }
@@ -93,8 +115,9 @@ impl TraceContext {
             trace_id,
             span_id,
             // A parsed header represents the caller itself; the proxy-relative
-            // parent link is set only when this context is `propagate`d.
+            // parent link and forwarded tracestate are set only on `propagate`.
             parent_span_id: None,
+            tracestate: None,
             sampled: flags & 0x01 != 0,
         })
     }
@@ -144,11 +167,29 @@ impl TraceContext {
         })
     }
 
+    /// The W3C `tracestate` value to forward to the upstream, if the request
+    /// carried a valid one — passed through verbatim (the proxy adds no entry).
+    #[must_use]
+    pub fn to_tracestate(&self) -> Option<&str> {
+        self.tracestate.as_deref()
+    }
+
     /// Whether the trace is sampled (the W3C sampled flag).
     #[must_use]
     pub fn sampled(&self) -> bool {
         self.sampled
     }
+}
+
+/// Accepts an incoming `tracestate` for verbatim forwarding only if it is
+/// non-empty and within the W3C size cap; otherwise drops it (returns `None`).
+/// The proxy is not a tracing vendor, so it never edits the value — it either
+/// forwards exactly what it received or nothing.
+fn sanitize_tracestate(incoming: Option<&str>) -> Option<String> {
+    incoming
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.len() <= MAX_TRACESTATE_LEN)
+        .map(str::to_owned)
 }
 
 /// Distinct FNV seed for span ids, so a request's span id never coincides with
@@ -250,115 +291,5 @@ fn push_hex(out: &mut String, bytes: &[u8]) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const SAMPLE: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
-
-    #[test]
-    fn parses_a_valid_traceparent_and_round_trips() {
-        let ctx = TraceContext::parse(SAMPLE).expect("valid");
-        assert!(ctx.sampled());
-        assert_eq!(ctx.trace_id_hex(), "4bf92f3577b34da6a3ce929d0e0e4736");
-        // Re-emitting the parsed context reproduces it verbatim.
-        assert_eq!(ctx.to_traceparent(), SAMPLE);
-    }
-
-    #[test]
-    fn rejects_malformed_traceparents() {
-        for bad in [
-            "",
-            "trash",
-            "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", // version
-            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-0",  // short flags
-            "00-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-00f067aa0ba902b7-01", // non-hex
-            "00-00000000000000000000000000000000-00f067aa0ba902b7-01", // zero trace
-            "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01", // zero span
-        ] {
-            assert!(TraceContext::parse(bad).is_none(), "should reject: {bad:?}");
-        }
-    }
-
-    #[test]
-    fn propagation_preserves_the_incoming_trace_id_but_starts_a_new_span() {
-        let rid = RequestId::from("req-1");
-        let ctx = TraceContext::propagate(Some(SAMPLE), &rid);
-        // Same trace: downstream stays connected to the caller's trace.
-        assert_eq!(ctx.trace_id_hex(), "4bf92f3577b34da6a3ce929d0e0e4736");
-        // New span: the downstream call is a child of the proxy, not the caller.
-        let downstream = ctx.to_traceparent();
-        assert!(downstream.starts_with("00-4bf92f3577b34da6a3ce929d0e0e4736-"));
-        assert!(
-            !downstream.contains("00f067aa0ba902b7"),
-            "proxy must present its own span id, not the caller's"
-        );
-    }
-
-    #[test]
-    fn propagation_retains_the_callers_span_as_the_parent() {
-        let ctx = TraceContext::propagate(Some(SAMPLE), &RequestId::from("req-1"));
-        // The caller's span id (from SAMPLE) becomes this hop's parent, so the
-        // proxy's own span nests under it.
-        assert_eq!(
-            ctx.parent_span_id_hex().as_deref(),
-            Some("00f067aa0ba902b7")
-        );
-        // ...and the parent is never the proxy's own span.
-        assert_ne!(ctx.parent_span_id_hex(), Some(ctx.span_id_hex()));
-    }
-
-    #[test]
-    fn a_minted_root_has_no_parent() {
-        let ctx = TraceContext::propagate(None, &RequestId::from("req-7"));
-        assert!(
-            ctx.parent_span_id_hex().is_none(),
-            "a root span has no parent to nest under"
-        );
-    }
-
-    #[test]
-    fn an_unsampled_parent_keeps_its_flag() {
-        let unsampled = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00";
-        let ctx = TraceContext::propagate(Some(unsampled), &RequestId::from("r"));
-        assert!(
-            !ctx.sampled(),
-            "sampling decision is inherited from the parent"
-        );
-    }
-
-    #[test]
-    fn a_missing_or_malformed_parent_mints_a_sampled_root() {
-        for incoming in [None, Some("garbage")] {
-            let ctx = TraceContext::propagate(incoming, &RequestId::from("req-7"));
-            assert!(ctx.sampled(), "a freshly minted root is sampled");
-            assert_eq!(ctx.to_traceparent().len(), TRACEPARENT_LEN);
-        }
-    }
-
-    #[test]
-    fn a_different_process_seed_yields_disjoint_ids_for_the_same_request() {
-        // The fleet-uniqueness invariant: two instances (distinct process seeds)
-        // must not derive the same id for the same (process-local) request id —
-        // otherwise unrelated requests on different instances would collide.
-        let s = b"req-5";
-        assert_ne!(
-            derive16_with(1, s),
-            derive16_with(2, s),
-            "different seeds must give different trace ids"
-        );
-        assert_ne!(
-            fnv1a(7 ^ 1, s),
-            fnv1a(7 ^ 2, s),
-            "different seeds must give different span ids"
-        );
-    }
-
-    #[test]
-    fn derived_ids_are_stable_per_request_and_distinct_across_requests() {
-        let a1 = TraceContext::propagate(None, &RequestId::from("a")).to_traceparent();
-        let a2 = TraceContext::propagate(None, &RequestId::from("a")).to_traceparent();
-        let b = TraceContext::propagate(None, &RequestId::from("b")).to_traceparent();
-        assert_eq!(a1, a2, "same request id derives the same context");
-        assert_ne!(a1, b, "different requests get different traces");
-    }
-}
+#[path = "trace_tests.rs"]
+mod tests;

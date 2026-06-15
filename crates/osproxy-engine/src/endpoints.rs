@@ -38,7 +38,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         self.gate_write(&resolved).await?;
         let ack = self
             .sink
-            .write(batch.with_trace(Some(wire_trace(ctx))))
+            .write(batch.with_trace(Some(&wire_trace(ctx))))
             .await?;
         trace.record_dispatch(dispatch_info(&resolved, &ack));
         Ok(response_for(&ack))
@@ -155,7 +155,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         self.gate_write(&resolved).await?;
         let ack = self
             .sink
-            .write(WriteBatch::single(op).with_trace(Some(wire_trace(ctx))))
+            .write(WriteBatch::single(op).with_trace(Some(&wire_trace(ctx))))
             .await?;
         trace.record_dispatch(dispatch_info(&resolved, &ack));
 
@@ -250,7 +250,11 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
 /// or mints a new root when absent, always with a fresh span id for the proxy's
 /// hop (`docs/05` §2). Pure identity — never carries request values.
 pub(crate) fn wire_trace(ctx: &RequestCtx<'_>) -> TraceContext {
-    TraceContext::propagate(ctx.headers().get("traceparent"), ctx.request_id())
+    TraceContext::propagate(
+        ctx.headers().get("traceparent"),
+        ctx.headers().get("tracestate"),
+        ctx.request_id(),
+    )
 }
 
 /// Shapes a write acknowledgement into an OpenSearch-style ingest response.
