@@ -16,6 +16,10 @@
 //! - [`judge()`] — scores a profile against [`NfrThresholds`], emitting a per-NFR
 //!   [`Verdict`]. This is the automated gate: a load run that exceeds the added-
 //!   latency or reuse-rate budget fails it, with a finding that names the NFR.
+//! - [`ScalabilityCurve`] + [`judge_scalability`] — the *shape* under rising
+//!   concurrency: a sweep of [`LatencySummary`] whose tail-amplification and
+//!   throughput-scaling are judged against NFR-P2 ("no tail amplification from
+//!   pooling"). Where [`NfrProfile`] is one operating point, this is the trend.
 //!
 //! **Shape-only, like the rest of osproxy's observability:** a profile carries
 //! timings and counts, never request bodies, tenant values, or cluster
@@ -29,8 +33,10 @@
 
 mod judge;
 mod profile;
+mod scale;
 mod summary;
 
 pub use judge::{judge, Finding, NfrThresholds, Verdict};
 pub use profile::NfrProfile;
+pub use scale::{judge_scalability, ScalabilityCurve, ScalabilityPoint, ScalabilityThresholds};
 pub use summary::LatencySummary;
