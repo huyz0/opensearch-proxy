@@ -15,8 +15,13 @@
 //! [`PlacementTable`](osproxy_tenancy::PlacementTable); distributed watched
 //! stores (etcd/Consul/Redis/OS index) implement the same [`MigrationStore`]
 //! contract in M7 without changing the control protocol.
+//!
+//! It also owns [`CursorAffinity`] — the bounded, TTL'd `cursor_id -> cluster`
+//! map that pins scroll/PIT follow-ups to their creating cluster (`docs/03` §6).
 #![deny(missing_docs)]
 
+mod affinity;
 mod migration;
 
+pub use affinity::{Affinity, CursorAffinity, DEFAULT_CAPACITY, DEFAULT_CURSOR_TTL};
 pub use migration::{ControlError, ControlPlane, MigrationStore, DEFAULT_DRAIN_BARRIER};
