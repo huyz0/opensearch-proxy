@@ -13,6 +13,7 @@ members = [
     "crates/osproxy-engine",
     "crates/osproxy-config",
     "crates/osproxy-server",
+    "crates/osproxy-bench",
     "xtask",
 ]
 

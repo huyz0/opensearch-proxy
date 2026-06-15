@@ -1,0 +1,16 @@
+[package]
+name = "osproxy-bench"
+description = "NFR-P performance-profile vocabulary: latency percentiles, a machine-readable proxy-vs-baseline profile, and a deterministic threshold judge. The Docker-backed load runner that fills the profile in lives behind it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json.workspace = true
+
+[lints]
+workspace = true
