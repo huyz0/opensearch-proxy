@@ -74,6 +74,14 @@ impl<A: Authenticator> IngressHandler for AppHandler<A> {
             };
         }
 
+        // Break-glass read: the forensic tape captured while a `ring_buffer`
+        // directive was in effect (`docs/05` §5), oldest first. Shape-only like
+        // every explain document; same auth-gating note as `/debug/explain`.
+        if req.path == "/debug/breakglass" {
+            let tape = serde_json::Value::Array(self.pipeline.break_glass().snapshot());
+            return IngressResponse::json(200, tape.to_string().into_bytes());
+        }
+
         // Authenticate before any routing. The bearer token is consumed here and
         // never reaches the pipeline or telemetry.
         let principal = match self

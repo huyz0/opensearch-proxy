@@ -137,8 +137,9 @@ Single-instance by design (the tape lives on the instance that handled the
 requests) and bounded (capacity-evicted), so it costs nothing until a directive
 turns it on and cannot grow without limit once on. Each entry is the same
 shape-only explain document, so the tape carries no tenant value, body, or
-credential. The pipeline exposes it via `break_glass()` for a debug endpoint to
-read.
+credential. The binary serves it at **`GET /debug/breakglass`** (a JSON array,
+oldest first) — the operator read, the same shape-only, would-be-auth-gated
+surface as `/debug/explain`; the pipeline exposes it via `break_glass()`.
 
 ## 4. `/debug/explain`
 
