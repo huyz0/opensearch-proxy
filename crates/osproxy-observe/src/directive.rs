@@ -183,6 +183,18 @@ impl DirectiveSet {
         Self { directives }
     }
 
+    /// How many directives the set holds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.directives.len()
+    }
+
+    /// Whether the set is empty (every request evaluates to `Off`).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.directives.is_empty()
+    }
+
     /// The effective level for a request: the **highest** level among the
     /// directives that apply (target matches, not expired, in sample), or
     /// [`DiagLevel::Off`] if none do.

@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use osproxy_core::{ClusterId, IndexName, SystemClock};
 use osproxy_engine::Pipeline;
-use osproxy_observe::DiagLevel;
+use osproxy_observe::{DiagLevel, InMemoryDirectiveStore};
 use osproxy_otlp::OtlpHttpExporter;
 use osproxy_server::auth::ReferenceAuthenticator;
 use osproxy_server::directive::HmacDirectiveVerifier;
@@ -55,10 +55,13 @@ async fn run() -> Result<(), String> {
     let sink = OpenSearchSink::new(endpoints);
 
     let tenancy = ReferenceTenancy::new(cluster, IndexName::from(index.as_str()));
+    // The fleet directive store the pipeline reads and the admin endpoint writes.
+    let directive_store = Arc::new(InMemoryDirectiveStore::new());
     let pipeline = with_debug_directive(with_diag_baseline(with_otlp_export(Pipeline::new(
         TenancyRouter::new(tenancy),
         sink,
-    )))?);
+    )))?)
+    .with_directive_store(directive_store.clone());
 
     let tokens = parse_tokens(&env_or("OSPROXY_TOKENS", ""));
     let auth_mode = if tokens.is_empty() {
@@ -66,10 +69,11 @@ async fn run() -> Result<(), String> {
     } else {
         "token"
     };
-    let handler = Arc::new(
+    let handler = Arc::new(with_directive_admin(
         AppHandler::new(pipeline, ReferenceAuthenticator::new(tokens))
             .with_request_log(request_log()),
-    );
+        directive_store,
+    ));
 
     let listener = TcpListener::bind(&bind)
         .await
@@ -230,6 +234,24 @@ fn with_debug_directive<T: TenancySpi, S: Sink + Reader>(
     println!("osproxy X-Debug-Directive header channel: on (HMAC-verified)");
     let verifier = HmacDirectiveVerifier::new(key.as_bytes(), Arc::new(SystemClock));
     pipeline.with_directive_verifier(Arc::new(verifier))
+}
+
+/// Enables the `POST /admin/directives` channel when
+/// `OSPROXY_DIRECTIVE_ADMIN_TOKEN` is set (the shared bearer token an operator
+/// presents to publish a fleet directive set into `store`); otherwise the
+/// endpoint stays disabled (reports `not_enabled`).
+fn with_directive_admin<A: osproxy_spi::Authenticator>(
+    handler: AppHandler<A>,
+    store: Arc<InMemoryDirectiveStore>,
+) -> AppHandler<A> {
+    let Some(token) = std::env::var("OSPROXY_DIRECTIVE_ADMIN_TOKEN")
+        .ok()
+        .filter(|v| !v.is_empty())
+    else {
+        return handler;
+    };
+    println!("osproxy fleet directive admin: on (POST /admin/directives)");
+    handler.with_directive_admin(store, token, Arc::new(SystemClock))
 }
 
 /// Builds a TLS provider from `OSPROXY_TLS_CERT`/`OSPROXY_TLS_KEY` (PEM file

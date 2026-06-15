@@ -133,8 +133,8 @@ impl DirectiveVerifier for HmacDirectiveVerifier {
 }
 
 /// Maps a [`DiagLevel`] name to the level. The inverse of the variant names, so
-/// the token vocabulary tracks the enum.
-fn parse_level(name: &str) -> Option<DiagLevel> {
+/// the token vocabulary tracks the enum. Shared with the directive-admin decoder.
+pub(crate) fn parse_level(name: &str) -> Option<DiagLevel> {
     match name {
         "Off" => Some(DiagLevel::Off),
         "Shape" => Some(DiagLevel::Shape),

@@ -124,6 +124,16 @@ same `DirectiveStore` trait unchanged, keeping a watched local snapshot so
 an absolute expiry, so even a published set that is never replaced self-expires
 at evaluation — a forgotten fleet "on" turns itself off.
 
+The reference binary exposes a **`POST /admin/directives`** channel (enabled by
+`OSPROXY_DIRECTIVE_ADMIN_TOKEN`, presented as `Authorization: Bearer`) that
+publishes a set into the shared store, so the fleet flips with no restart. Body:
+`{"directives":[{"id","level","ttl_secs",<optional "tenant"/"index"/"principal",
+"sample_per_mille","ring_buffer">}]}`. The decoder is **fail-closed**: a bad
+token (401), wrong method (405), or any malformed/unknown/out-of-range field
+(400) leaves the active set unchanged — a misspelled targeting key is rejected
+rather than silently widening a directive to the whole fleet. `ttl_secs` is
+relative and resolved to an absolute expiry on publish.
+
 ### 3c. Break-glass ring buffer
 
 When a directive sets `ring_buffer: true`, every request it selects is captured —

@@ -2,15 +2,28 @@
 //! drives the engine pipeline, mapping the outcome to an HTTP response.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
-use osproxy_core::{ErrorCode, RequestId};
+use osproxy_core::{Clock, ErrorCode, RequestId};
 use osproxy_engine::{Pipeline, RequestError};
+use osproxy_observe::InMemoryDirectiveStore;
 use osproxy_sink::OpenSearchSink;
-use osproxy_spi::{AuthError, Authenticator, ClientCredentials, HeaderView, Protocol, RequestCtx};
+use osproxy_spi::{
+    AuthError, Authenticator, ClientCredentials, HeaderView, HttpMethod, Protocol, RequestCtx,
+};
 use osproxy_transport::{IngressHandler, IngressRequest, IngressResponse};
 
+use crate::directives_api::decode_directive_set;
 use crate::log::{NoLog, RequestLog};
 use crate::tenancy::ReferenceTenancy;
+
+/// The privileged fleet-directive admin channel: a shared store to publish into,
+/// gated by a bearer token, with a clock to resolve relative TTLs.
+struct DirectiveAdmin {
+    store: Arc<InMemoryDirectiveStore>,
+    token: String,
+    clock: Arc<dyn Clock>,
+}
 
 /// The concrete pipeline this binary serves.
 pub type AppPipeline = Pipeline<ReferenceTenancy, OpenSearchSink>;
@@ -22,6 +35,7 @@ pub struct AppHandler<A> {
     authenticator: A,
     request_seq: AtomicU64,
     request_log: Box<dyn RequestLog>,
+    directive_admin: Option<DirectiveAdmin>,
 }
 
 impl<A> std::fmt::Debug for AppHandler<A> {
@@ -42,6 +56,7 @@ impl<A: Authenticator> AppHandler<A> {
             authenticator,
             request_seq: AtomicU64::new(0),
             request_log: Box::new(NoLog),
+            directive_admin: None,
         }
     }
 
@@ -52,12 +67,84 @@ impl<A: Authenticator> AppHandler<A> {
         self
     }
 
+    /// Enables the `POST /admin/directives` channel (builder style): publishes a
+    /// fleet directive set into `store` when the request carries the bearer
+    /// `token`. Without this, the endpoint reports `not_enabled`.
+    #[must_use]
+    pub fn with_directive_admin(
+        mut self,
+        store: Arc<InMemoryDirectiveStore>,
+        token: String,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        self.directive_admin = Some(DirectiveAdmin {
+            store,
+            token,
+            clock,
+        });
+        self
+    }
+
     /// A per-request correlation id. A monotonic counter is enough for the
     /// reference binary; a real deployment would carry a propagated trace id.
     fn next_request_id(&self) -> RequestId {
         let n = self.request_seq.fetch_add(1, Ordering::Relaxed) + 1;
         RequestId::from(format!("req-{n}").as_str())
     }
+
+    /// Handles `POST /admin/directives`: publishes a fleet directive set into the
+    /// shared store when enabled and the bearer token matches. Fail-closed at
+    /// every step — disabled, wrong method, bad token, or malformed body all leave
+    /// the active set unchanged.
+    fn publish_directives(&self, req: &IngressRequest) -> IngressResponse {
+        let Some(admin) = &self.directive_admin else {
+            return IngressResponse::json(404, br#"{"error":"not_enabled"}"#.to_vec());
+        };
+        if req.method != HttpMethod::Post {
+            return IngressResponse::json(405, br#"{"error":"method_not_allowed"}"#.to_vec());
+        }
+        if !bearer_token_matches(req, &admin.token) {
+            return IngressResponse::json(401, br#"{"error":"unauthorized"}"#.to_vec());
+        }
+        match decode_directive_set(&req.body, admin.clock.as_ref()) {
+            Ok(set) => {
+                let count = set.len();
+                admin.store.publish(set);
+                IngressResponse::json(200, format!(r#"{{"published":{count}}}"#).into_bytes())
+            }
+            Err(reason) => {
+                IngressResponse::json(400, format!(r#"{{"error":"{reason}"}}"#).into_bytes())
+            }
+        }
+    }
+}
+
+/// Whether the request's bearer token equals `expected`. The `Bearer` scheme is
+/// matched case-insensitively (RFC 6750); the token bytes are compared in
+/// constant time so a wrong admin token cannot be narrowed by timing.
+fn bearer_token_matches(req: &IngressRequest, expected: &str) -> bool {
+    let presented = req
+        .headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+        .and_then(|(_, v)| v.split_once(' '))
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+        .map_or("", |(_, token)| token);
+    constant_time_eq(presented.as_bytes(), expected.as_bytes())
+}
+
+/// Constant-time comparison **for equal-length inputs** (no early return on the
+/// first differing byte). The length itself is not concealed — acceptable for a
+/// fixed shared admin token, where the length is not the secret.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 impl<A: Authenticator> IngressHandler for AppHandler<A> {
@@ -80,6 +167,12 @@ impl<A: Authenticator> IngressHandler for AppHandler<A> {
         if req.path == "/debug/breakglass" {
             let tape = serde_json::Value::Array(self.pipeline.break_glass().snapshot());
             return IngressResponse::json(200, tape.to_string().into_bytes());
+        }
+
+        // Privileged: publish a fleet directive set. Token-gated and fail-closed —
+        // a forged token or a malformed body changes nothing (`docs/05` §3).
+        if req.path == "/admin/directives" {
+            return self.publish_directives(&req);
         }
 
         // Authenticate before any routing. The bearer token is consumed here and
@@ -171,4 +264,44 @@ fn error_body(err: &RequestError) -> Vec<u8> {
         err.retryable(),
     )
     .into_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_auth(value: &str) -> IngressRequest {
+        IngressRequest {
+            method: HttpMethod::Post,
+            path: "/admin/directives".to_owned(),
+            endpoint: osproxy_core::EndpointKind::Unknown,
+            logical_index: String::new(),
+            doc_id: None,
+            headers: vec![("Authorization".to_owned(), value.to_owned())],
+            body: vec![],
+            client_cert_subject: None,
+        }
+    }
+
+    #[test]
+    fn bearer_match_is_exact_but_scheme_is_case_insensitive() {
+        assert!(bearer_token_matches(&with_auth("Bearer s3cret"), "s3cret"));
+        // Scheme case does not matter (RFC 6750); the token must match exactly.
+        assert!(bearer_token_matches(&with_auth("bearer s3cret"), "s3cret"));
+        assert!(!bearer_token_matches(&with_auth("Bearer s3cre"), "s3cret"));
+        assert!(!bearer_token_matches(
+            &with_auth("Bearer s3cret!"),
+            "s3cret"
+        ));
+        // Missing scheme, wrong scheme, or no header: rejected.
+        assert!(!bearer_token_matches(&with_auth("s3cret"), "s3cret"));
+        assert!(!bearer_token_matches(&with_auth("Basic s3cret"), "s3cret"));
+    }
+
+    #[test]
+    fn constant_time_eq_matches_byte_compare_semantics() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"ab"), "differing lengths differ");
+    }
 }
