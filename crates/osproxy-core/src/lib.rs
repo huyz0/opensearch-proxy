@@ -17,6 +17,8 @@
 //!   testable (`docs/12`).
 //! - [`target`] — the [`target::Target`] a routing decision resolves to
 //!   (`docs/02`).
+//! - [`trace`] — the [`trace::TraceContext`] W3C propagation primitive that
+//!   carries distributed-trace identity to downstream calls (`docs/05` §2).
 //!
 //! The module tree is intentionally flat and small; each concept lives in its
 //! own file (`docs/08` §2).
@@ -27,9 +29,11 @@ pub mod error;
 pub mod ids;
 pub mod target;
 pub mod time;
+pub mod trace;
 
 pub use endpoint::EndpointKind;
 pub use error::{ErrorCode, ErrorContext};
 pub use ids::{ClusterId, Epoch, FieldName, IndexName, PartitionId, PrincipalId, RequestId};
 pub use target::Target;
 pub use time::{Clock, Instant, ManualClock, SystemClock};
+pub use trace::TraceContext;

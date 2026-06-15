@@ -106,7 +106,7 @@ async fn prepare<T: TenancySpi>(
     let (op, shape) = crate::read::build_search_op(&resolved, &item.query)
         .map_err(|_| error_response(400, "invalid_query"))?;
     Ok(Prepared {
-        op,
+        op: op.with_trace(Some(crate::endpoints::wire_trace(ctx))),
         shape,
         logical_index,
         partition: resolved.partition.as_str().to_owned(),

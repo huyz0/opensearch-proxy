@@ -22,7 +22,7 @@ use hyper::body::{Bytes, Incoming};
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
-use osproxy_core::{ClusterId, Epoch, IndexName, Target};
+use osproxy_core::{ClusterId, Epoch, IndexName, RequestId, Target, TraceContext};
 use osproxy_sink::{DocOp, OpenSearchSink, ReadOp, Reader, Sink, WriteBatch, WriteOp};
 use tokio::net::TcpListener;
 
@@ -33,6 +33,7 @@ struct Captured {
     uri: String,
     body: String,
     version: String,
+    traceparent: Option<String>,
 }
 
 /// Starts a one-shot mock server returning `response` (status 201) and capturing
@@ -52,12 +53,18 @@ async fn start_mock(response: &'static str) -> (String, Arc<Mutex<Captured>>) {
                 let method = req.method().to_string();
                 let uri = req.uri().to_string();
                 let version = format!("{:?}", req.version());
+                let traceparent = req
+                    .headers()
+                    .get("traceparent")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned);
                 let body = req.into_body().collect().await.unwrap().to_bytes();
                 *captured.lock().unwrap() = Captured {
                     method,
                     uri,
                     body: String::from_utf8_lossy(&body).into_owned(),
                     version,
+                    traceparent,
                 };
                 Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from(response))))
             }
@@ -108,6 +115,42 @@ fn sink_for(cluster: &str, base: String) -> OpenSearchSink {
     let mut endpoints = HashMap::new();
     endpoints.insert(ClusterId::from(cluster), base);
     OpenSearchSink::new(endpoints)
+}
+
+#[tokio::test]
+async fn the_trace_context_is_propagated_to_the_upstream() {
+    let (base, captured) = start_mock(r#"{"_id":"acme:1","result":"created"}"#).await;
+    let sink = sink_for("eu-1", base);
+
+    // A client request arrives carrying an upstream traceparent.
+    let incoming = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    let ctx = TraceContext::propagate(Some(incoming), &RequestId::from("req-42"));
+    let op = WriteOp::new(
+        Target::new(ClusterId::from("eu-1"), IndexName::from("orders-shared")),
+        DocOp::Index {
+            id: Some("acme:1".to_owned()),
+            routing: Some("acme".to_owned()),
+            body: br#"{"_tenant":"acme"}"#.to_vec(),
+        },
+        Epoch::new(1),
+    )
+    .with_trace(Some(ctx));
+    sink.write(WriteBatch::single(op)).await.unwrap();
+
+    let got = captured.lock().unwrap().clone();
+    let traceparent = got
+        .traceparent
+        .expect("upstream must receive a traceparent");
+    // Same trace id: the upstream span joins the client's distributed trace.
+    assert!(
+        traceparent.starts_with("00-4bf92f3577b34da6a3ce929d0e0e4736-"),
+        "trace id must be preserved end to end: {traceparent}"
+    );
+    // New span id: the upstream is a child of the proxy, not of the client.
+    assert!(
+        !traceparent.contains("00f067aa0ba902b7"),
+        "proxy must present its own span id downstream: {traceparent}"
+    );
 }
 
 #[tokio::test]

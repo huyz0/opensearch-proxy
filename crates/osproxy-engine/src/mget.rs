@@ -105,7 +105,7 @@ async fn prepare<T: TenancySpi>(
     let (op, shape) = build_read_op(&resolved, &item.id)
         .map_err(|_| error_doc(&logical_index, &item.id, "irreversible_id"))?;
     Ok(Prepared {
-        op,
+        op: op.with_trace(Some(crate::endpoints::wire_trace(ctx))),
         shape,
         logical_index,
         logical_id: item.id.clone(),

@@ -1,7 +1,7 @@
 //! The unit of work handed to a [`Sink`](crate::Sink): epoch-stamped writes
 //! against a single target.
 
-use osproxy_core::{Epoch, Target};
+use osproxy_core::{Epoch, Target, TraceContext};
 use osproxy_spi::Protocol;
 
 /// A single write operation against a resolved [`Target`].
@@ -21,6 +21,9 @@ pub struct WriteOp {
     /// The upstream wire protocol this op is dispatched over (per-request,
     /// `docs/04` §7). Defaults to [`Protocol::Http1`].
     pub protocol: Protocol,
+    /// The W3C trace context to forward downstream (`traceparent`), so the
+    /// upstream's spans join this request's distributed trace.
+    pub trace: Option<TraceContext>,
 }
 
 impl WriteOp {
@@ -32,6 +35,7 @@ impl WriteOp {
             doc,
             epoch,
             protocol: Protocol::Http1,
+            trace: None,
         }
     }
 
@@ -39,6 +43,13 @@ impl WriteOp {
     #[must_use]
     pub fn with_protocol(mut self, protocol: Protocol) -> Self {
         self.protocol = protocol;
+        self
+    }
+
+    /// Sets the trace context to propagate downstream (builder style).
+    #[must_use]
+    pub fn with_trace(mut self, trace: Option<TraceContext>) -> Self {
+        self.trace = trace;
         self
     }
 }
@@ -115,6 +126,16 @@ impl WriteBatch {
     #[must_use]
     pub fn with(mut self, op: WriteOp) -> Self {
         self.ops.push(op);
+        self
+    }
+
+    /// Tags every operation in the batch with the same downstream trace context
+    /// (builder style), so all upstream requests for this batch propagate it.
+    #[must_use]
+    pub fn with_trace(mut self, trace: Option<TraceContext>) -> Self {
+        for op in &mut self.ops {
+            op.trace = trace;
+        }
         self
     }
 

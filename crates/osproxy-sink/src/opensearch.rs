@@ -15,11 +15,12 @@ use std::time::Duration;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
+use hyper::header::{HeaderName, HeaderValue};
 use hyper::{Method, Request, Response};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use osproxy_core::{Clock, ClusterId, SystemClock};
+use osproxy_core::{Clock, ClusterId, SystemClock, TraceContext};
 use osproxy_spi::Protocol;
 use serde_json::Value;
 
@@ -200,9 +201,15 @@ impl OpenSearchSink {
         &self,
         pool: &ClusterPool,
         protocol: Protocol,
-        req: Request<Full<Bytes>>,
+        mut req: Request<Full<Bytes>>,
+        trace: Option<&TraceContext>,
         fail_kind: &'static str,
     ) -> Result<(Response<Incoming>, bool), SinkError> {
+        // Propagate the W3C trace context to every upstream call (one choke point).
+        if let Some(value) = trace.and_then(|t| HeaderValue::from_str(&t.to_traceparent()).ok()) {
+            req.headers_mut()
+                .insert(HeaderName::from_static("traceparent"), value);
+        }
         if !pool.breaker.allows(self.clock.now(), self.cooldown) {
             return Err(SinkError::Transport {
                 kind: "cluster shed (circuit open)",
@@ -250,15 +257,16 @@ impl OpenSearchSink {
             })?;
 
         let (resp, reused) = self
-            .send(pool, op.protocol, req, "upstream query failed")
+            .send(
+                pool,
+                op.protocol,
+                req,
+                op.trace.as_ref(),
+                "upstream query failed",
+            )
             .await?;
         let status = resp.status().as_u16();
-        if status >= 500 {
-            return Err(SinkError::Upstream {
-                status,
-                retryable: matches!(status, 502..=504),
-            });
-        }
+        reject_5xx(status)?;
         let body = resp
             .into_body()
             .collect()
@@ -278,15 +286,16 @@ impl OpenSearchSink {
         let (req, fallback_id) = build_request(&pool.base, &op.target.index, &op.doc)?;
 
         let (resp, reused) = self
-            .send(pool, op.protocol, req, "upstream request failed")
+            .send(
+                pool,
+                op.protocol,
+                req,
+                op.trace.as_ref(),
+                "upstream request failed",
+            )
             .await?;
         let status = resp.status().as_u16();
-        if status >= 500 {
-            return Err(SinkError::Upstream {
-                status,
-                retryable: matches!(status, 502..=504),
-            });
-        }
+        reject_5xx(status)?;
 
         let body = resp
             .into_body()
@@ -318,16 +327,17 @@ impl Reader for OpenSearchSink {
             })?;
 
         let (resp, reused) = self
-            .send(pool, op.protocol, req, "upstream read failed")
+            .send(
+                pool,
+                op.protocol,
+                req,
+                op.trace.as_ref(),
+                "upstream read failed",
+            )
             .await?;
         let status = resp.status().as_u16();
         // 404 is a normal "document does not exist"; only 5xx is a real failure.
-        if status >= 500 {
-            return Err(SinkError::Upstream {
-                status,
-                retryable: matches!(status, 502..=504),
-            });
-        }
+        reject_5xx(status)?;
         let body = resp
             .into_body()
             .collect()
@@ -375,4 +385,16 @@ impl Sink for OpenSearchSink {
         }
         Ok(WriteAck::new(results).with_pool_reuse(all_reused))
     }
+}
+
+/// Rejects a 5xx upstream response as a retryable upstream error (502–504 are
+/// retryable); below 500 passes through (e.g. a 404 read is a normal miss).
+fn reject_5xx(status: u16) -> Result<(), SinkError> {
+    if status >= 500 {
+        return Err(SinkError::Upstream {
+            status,
+            retryable: matches!(status, 502..=504),
+        });
+    }
+    Ok(())
 }

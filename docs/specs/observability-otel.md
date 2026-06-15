@@ -11,6 +11,27 @@ pins the wire conventions.
 - Traces via OTLP (gRPC/HTTP). Logs as structured JSON correlated by trace id.
 - One trace per request; spans per docs/05 §2.
 
+## 1a. Context propagation (W3C Trace Context)
+
+The proxy is a span in a larger distributed trace, so it **propagates** standard
+trace headers rather than starting an island trace:
+
+- **Inbound**: a client's `traceparent` (W3C Trace Context) is parsed at the
+  engine. If present and well-formed, the request continues that trace (same
+  `trace_id`); if absent or malformed, the proxy mints a sampled root.
+- **This hop**: a fresh `span_id` is generated for the proxy's own span, derived
+  from the request id (deterministic, dependency-free — no RNG in `core`).
+- **Outbound**: every upstream call (write, read, query, and each demuxed
+  `_bulk`/`_mget`/`_msearch` sub-request) carries a `traceparent` whose
+  `trace_id` matches the inbound trace and whose parent is the proxy's span, so
+  OpenSearch's spans nest under the proxy.
+
+The primitive is `osproxy_core::TraceContext` (`TraceContext::propagate`); it is
+injected once at the sink's single send choke point. It holds **only** trace/span
+identity — never request values — so propagation cannot become a value-leak
+channel (the shape-only rule, docs/05 §7). `tracestate` pass-through and emitting
+the `trace_id` into `/debug/explain` for log↔trace correlation are follow-ups.
+
 ## 2. Attribute naming
 
 Use stable, namespaced keys. Custom keys under the `osproxy.*` namespace; reuse

@@ -6,6 +6,7 @@
 //! `/debug/explain` store) lives in [`crate::pipeline`]; this module is the body
 //! of each endpoint, kept separate so neither file becomes a god module.
 
+use osproxy_core::TraceContext;
 use osproxy_sink::{Reader, Sink, WriteAck, WriteBatch};
 use osproxy_spi::{RequestCtx, TenancySpi};
 use osproxy_tenancy::Resolved;
@@ -35,7 +36,10 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         trace.record_rewrite(rewrite_info(&resolved, &batch));
 
         self.gate_write(&resolved).await?;
-        let ack = self.sink.write(batch).await?;
+        let ack = self
+            .sink
+            .write(batch.with_trace(Some(wire_trace(ctx))))
+            .await?;
         trace.record_dispatch(dispatch_info(&resolved, &ack));
         Ok(response_for(&ack))
     }
@@ -91,7 +95,10 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         })?;
         let (read_op, shape) = build_read_op(&resolved, logical_id)?;
 
-        let outcome = self.sink.get(read_op).await?;
+        let outcome = self
+            .sink
+            .get(read_op.with_trace(Some(wire_trace(ctx))))
+            .await?;
         trace.record_dispatch(read_dispatch_info(
             &resolved,
             outcome.status,
@@ -146,7 +153,10 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         let op = build_delete_op(&resolved, logical_id)?;
 
         self.gate_write(&resolved).await?;
-        let ack = self.sink.write(WriteBatch::single(op)).await?;
+        let ack = self
+            .sink
+            .write(WriteBatch::single(op).with_trace(Some(wire_trace(ctx))))
+            .await?;
         trace.record_dispatch(dispatch_info(&resolved, &ack));
 
         let status = ack.results().first().map_or(200, |r| r.status);
@@ -169,7 +179,10 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         trace.record_resolve(resolve_info(&resolved));
 
         let (search_op, shape) = build_search_op(&resolved, ctx.body())?;
-        let outcome = self.sink.search(search_op).await?;
+        let outcome = self
+            .sink
+            .search(search_op.with_trace(Some(wire_trace(ctx))))
+            .await?;
         trace.record_dispatch(read_dispatch_info(
             &resolved,
             outcome.status,
@@ -214,7 +227,10 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         trace.record_resolve(resolve_info(&resolved));
 
         let (search_op, _shape) = build_search_op(&resolved, ctx.body())?;
-        let outcome = self.sink.count(search_op).await?;
+        let outcome = self
+            .sink
+            .count(search_op.with_trace(Some(wire_trace(ctx))))
+            .await?;
         trace.record_dispatch(read_dispatch_info(
             &resolved,
             outcome.status,
@@ -227,6 +243,14 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             body,
         })
     }
+}
+
+/// The W3C trace context to forward to the upstream for this request: continues
+/// the client's incoming `traceparent` (keeping the trace connected end-to-end)
+/// or mints a new root when absent, always with a fresh span id for the proxy's
+/// hop (`docs/05` §2). Pure identity — never carries request values.
+pub(crate) fn wire_trace(ctx: &RequestCtx<'_>) -> TraceContext {
+    TraceContext::propagate(ctx.headers().get("traceparent"), ctx.request_id())
 }
 
 /// Shapes a write acknowledgement into an OpenSearch-style ingest response.

@@ -99,7 +99,11 @@ pub(crate) async fn prepare<T: TenancySpi>(
         r
     };
 
-    build_op(&resolved, &item, action, logical_index)
+    let mut prepared = build_op(&resolved, &item, action, logical_index)?;
+    prepared.op = prepared
+        .op
+        .with_trace(Some(crate::endpoints::wire_trace(ctx)));
+    Ok(prepared)
 }
 
 /// Builds the write op for a resolved bulk item (index/create, update, delete).

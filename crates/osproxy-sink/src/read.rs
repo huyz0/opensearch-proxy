@@ -7,7 +7,7 @@
 //!
 //! [`Sink`]: crate::Sink
 
-use osproxy_core::Target;
+use osproxy_core::{Target, TraceContext};
 use osproxy_spi::Protocol;
 
 use crate::error::SinkError;
@@ -27,6 +27,10 @@ pub struct ReadOp {
     /// The upstream wire protocol this read is dispatched over. Defaults to
     /// [`Protocol::Http1`].
     pub protocol: Protocol,
+    /// The W3C trace context to forward downstream (`traceparent`), so the
+    /// upstream's spans join this request's distributed trace. `None` = no
+    /// propagation header is sent.
+    pub trace: Option<TraceContext>,
 }
 
 impl ReadOp {
@@ -38,6 +42,7 @@ impl ReadOp {
             id: id.into(),
             routing,
             protocol: Protocol::Http1,
+            trace: None,
         }
     }
 
@@ -45,6 +50,13 @@ impl ReadOp {
     #[must_use]
     pub fn with_protocol(mut self, protocol: Protocol) -> Self {
         self.protocol = protocol;
+        self
+    }
+
+    /// Sets the trace context to propagate downstream (builder style).
+    #[must_use]
+    pub fn with_trace(mut self, trace: Option<TraceContext>) -> Self {
+        self.trace = trace;
         self
     }
 }
@@ -107,6 +119,8 @@ pub struct SearchOp {
     /// The upstream wire protocol this search is dispatched over. Defaults to
     /// [`Protocol::Http1`].
     pub protocol: Protocol,
+    /// The W3C trace context to forward downstream (`traceparent`).
+    pub trace: Option<TraceContext>,
 }
 
 impl SearchOp {
@@ -117,6 +131,7 @@ impl SearchOp {
             target,
             body,
             protocol: Protocol::Http1,
+            trace: None,
         }
     }
 
@@ -124,6 +139,13 @@ impl SearchOp {
     #[must_use]
     pub fn with_protocol(mut self, protocol: Protocol) -> Self {
         self.protocol = protocol;
+        self
+    }
+
+    /// Sets the trace context to propagate downstream (builder style).
+    #[must_use]
+    pub fn with_trace(mut self, trace: Option<TraceContext>) -> Self {
+        self.trace = trace;
         self
     }
 }
