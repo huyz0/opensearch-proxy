@@ -281,6 +281,13 @@ impl CursorOutcome {
             pool_reuse: false,
         }
     }
+
+    /// Records whether the dispatch reused a pooled connection (builder style).
+    #[must_use]
+    pub fn with_pool_reuse(mut self, reused: bool) -> Self {
+        self.pool_reuse = reused;
+        self
+    }
 }
 
 /// Where reads come from.

@@ -8,6 +8,7 @@
 
 pub mod auth;
 mod bearer;
+pub mod cursor;
 pub mod directive;
 pub mod directives_api;
 pub mod handler;

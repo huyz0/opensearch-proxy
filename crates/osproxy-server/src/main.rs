@@ -18,6 +18,7 @@ use osproxy_engine::Pipeline;
 use osproxy_observe::{DiagLevel, InMemoryDirectiveStore};
 use osproxy_otlp::OtlpHttpExporter;
 use osproxy_server::auth::ReferenceAuthenticator;
+use osproxy_server::cursor::HmacCursorSigner;
 use osproxy_server::directive::HmacDirectiveVerifier;
 use osproxy_server::handler::AppHandler;
 use osproxy_server::log::{NoLog, RequestLog, StdoutJsonLog};
@@ -56,11 +57,7 @@ async fn run() -> Result<(), String> {
     let tenancy = ReferenceTenancy::new(cluster, IndexName::from(index.as_str()));
     // The fleet directive store the pipeline reads and the admin endpoint writes.
     let directive_store = Arc::new(InMemoryDirectiveStore::new());
-    let pipeline = with_debug_directive(with_diag_baseline(with_otlp_export(Pipeline::new(
-        TenancyRouter::new(tenancy),
-        sink,
-    )))?)
-    .with_directive_store(directive_store.clone());
+    let pipeline = assemble_pipeline(tenancy, sink, directive_store.clone())?;
 
     let tokens = parse_tokens(&env_or("OSPROXY_TOKENS", ""));
     let auth_mode = if tokens.is_empty() {
@@ -232,6 +229,43 @@ fn with_debug_directive<T: TenancySpi, S: Sink + Reader>(
     println!("osproxy X-Debug-Directive header channel: on (HMAC-verified)");
     let verifier = HmacDirectiveVerifier::new(key.as_bytes(), Arc::new(SystemClock));
     pipeline.with_directive_verifier(Arc::new(verifier))
+}
+
+/// Assembles the engine pipeline the binary serves: the concrete tenancy + sink
+/// wrapped with the env-gated observability and affinity layers (OTLP export,
+/// diagnostics baseline, signed debug-directive header, fleet directive store,
+/// cursor affinity). Each layer is off unless its env knob is set.
+fn assemble_pipeline(
+    tenancy: ReferenceTenancy,
+    sink: OpenSearchSink,
+    directive_store: Arc<InMemoryDirectiveStore>,
+) -> Result<Pipeline<ReferenceTenancy, OpenSearchSink>, String> {
+    let pipeline = with_cursor_affinity(
+        with_debug_directive(with_diag_baseline(with_otlp_export(Pipeline::new(
+            TenancyRouter::new(tenancy),
+            sink,
+        )))?)
+        .with_directive_store(directive_store),
+    );
+    Ok(pipeline)
+}
+
+/// Enables opt-in scroll/PIT cursor affinity when `OSPROXY_CURSOR_AFFINITY_KEY`
+/// is set: the proxy signs the cluster-in-cursor envelope with that shared HMAC
+/// key, so a continued scroll routes to its pinned cluster across the fleet with
+/// no shared store (`docs/03` §6). The **same key must be set on every instance**.
+/// Unset ⇒ affinity off and cursor requests fail closed (`CursorUnresolvable`).
+fn with_cursor_affinity<T: TenancySpi, S: Sink + Reader>(
+    pipeline: Pipeline<T, S>,
+) -> Pipeline<T, S> {
+    let Some(key) = std::env::var("OSPROXY_CURSOR_AFFINITY_KEY")
+        .ok()
+        .filter(|v| !v.is_empty())
+    else {
+        return pipeline;
+    };
+    println!("osproxy scroll/PIT cursor affinity: on (HMAC-signed envelope)");
+    pipeline.with_cursor_signer(Arc::new(HmacCursorSigner::new(key.as_bytes())))
 }
 
 /// Enables the `POST /admin/directives` channel when

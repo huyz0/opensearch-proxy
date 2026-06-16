@@ -23,7 +23,8 @@ use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use osproxy_core::{ClusterId, Epoch, IndexName, RequestId, Target, TraceContext};
-use osproxy_sink::{DocOp, OpenSearchSink, ReadOp, Reader, Sink, WriteBatch, WriteOp};
+use osproxy_sink::{CursorOp, DocOp, OpenSearchSink, ReadOp, Reader, Sink, WriteBatch, WriteOp};
+use osproxy_spi::HttpMethod;
 use tokio::net::TcpListener;
 
 /// What the mock captured from the single request it served.
@@ -165,6 +166,36 @@ async fn the_trace_context_is_propagated_to_the_upstream() {
         got.tracestate.as_deref(),
         Some("vendor1=abc,congo=t61rcWkgMzE"),
         "the caller's tracestate must pass through unchanged"
+    );
+}
+
+#[tokio::test]
+async fn cursor_passthrough_forwards_method_path_and_body_to_the_pinned_cluster() {
+    // The engine has already recovered the cluster + real id from the envelope;
+    // the sink forwards the raw op (method, path, body) verbatim to that cluster.
+    let (base, captured) = start_mock(r#"{"_scroll_id":"X","hits":{"hits":[]}}"#).await;
+    let sink = sink_for("eu-1", base);
+
+    let op = CursorOp::new(
+        ClusterId::from("eu-1"),
+        HttpMethod::Post,
+        "/_search/scroll",
+        br#"{"scroll":"1m","scroll_id":"REALID"}"#.to_vec(),
+    );
+    let outcome = sink.cursor(op).await.unwrap();
+
+    let got = captured.lock().unwrap().clone();
+    assert_eq!(got.method, "POST");
+    assert_eq!(got.uri, "/_search/scroll");
+    assert!(
+        got.body.contains("REALID"),
+        "real id forwarded: {}",
+        got.body
+    );
+    assert_eq!(outcome.status, 200, "the upstream status is forwarded");
+    assert!(
+        outcome.body.starts_with(br#"{"_scroll_id""#),
+        "the upstream response is forwarded back verbatim"
     );
 }
 

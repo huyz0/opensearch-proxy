@@ -26,7 +26,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use osproxy_core::{Clock, ClusterId, SystemClock, TraceContext};
-use osproxy_spi::Protocol;
+use osproxy_spi::{HttpMethod, Protocol};
 use serde_json::Value;
 
 use crate::ack::{OpResult, WriteAck};
@@ -34,7 +34,9 @@ use crate::batch::{WriteBatch, WriteOp};
 use crate::breaker::Breaker;
 use crate::conn::{CountingConnector, PoolStats};
 use crate::error::SinkError;
-use crate::read::{CountOutcome, ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome};
+use crate::read::{
+    CountOutcome, CursorOp, CursorOutcome, ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome,
+};
 use crate::sink::Sink;
 use crate::wire::{build_request, doc_uri, parse_result};
 
@@ -380,6 +382,55 @@ impl Reader for OpenSearchSink {
             .and_then(|v| v.get("count").and_then(Value::as_u64))
             .unwrap_or(0);
         Ok(CountOutcome::new(status, count).with_pool_reuse(reused))
+    }
+
+    async fn cursor(&self, op: CursorOp) -> Result<CursorOutcome, SinkError> {
+        // Forward the raw scroll/PIT op to the cluster the engine pinned it to;
+        // `op.path` is the upstream endpoint (e.g. `/_search/scroll`) and `op.body`
+        // already carries the real (unwrapped) cursor id.
+        let pool = self.pool_for(&op.cluster)?;
+        let req = Request::builder()
+            .method(hyper_method(op.method))
+            .uri(format!("{}{}", pool.base, op.path))
+            .header("content-type", "application/json")
+            .body(Full::new(Bytes::from(op.body.clone())))
+            .map_err(|_| SinkError::Transport {
+                kind: "building upstream cursor request",
+            })?;
+        let (resp, reused) = self
+            .send(
+                pool,
+                op.protocol,
+                req,
+                op.trace.as_ref(),
+                "upstream cursor failed",
+            )
+            .await?;
+        let status = resp.status().as_u16();
+        reject_5xx(status)?;
+        let body = resp
+            .into_body()
+            .collect()
+            .await
+            .map_err(|_| SinkError::Transport {
+                kind: "reading upstream cursor response",
+            })?
+            .to_bytes()
+            .to_vec();
+        Ok(CursorOutcome::new(status, body).with_pool_reuse(reused))
+    }
+}
+
+/// Maps the SPI method to a hyper method for the cursor passthrough.
+fn hyper_method(method: HttpMethod) -> Method {
+    match method {
+        HttpMethod::Get => Method::GET,
+        HttpMethod::Put => Method::PUT,
+        HttpMethod::Delete => Method::DELETE,
+        HttpMethod::Head => Method::HEAD,
+        // `Post` and any future (non-exhaustive) method map to POST — the
+        // scroll/PIT continue default.
+        _ => Method::POST,
     }
 }
 
