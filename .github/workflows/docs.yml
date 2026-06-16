@@ -34,6 +34,8 @@ jobs:
           cache-dependency-path: site/package-lock.json
       # Enables Pages on the repo if it is not already (no manual setting needed).
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - name: Install and build
         working-directory: site
         run: |
