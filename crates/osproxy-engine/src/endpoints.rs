@@ -6,7 +6,7 @@
 //! `/debug/explain` store) lives in [`crate::pipeline`]; this module is the body
 //! of each endpoint, kept separate so neither file becomes a god module.
 
-use osproxy_core::TraceContext;
+use osproxy_core::{ClusterId, CursorSigner, TraceContext};
 use osproxy_observe::DispatchInfo;
 use osproxy_sink::{CursorOp, Reader, Sink, WriteAck, WriteBatch};
 use osproxy_spi::{RequestCtx, TenancySpi};
@@ -196,10 +196,28 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             resolved.partition.as_str(),
             &shape,
         )?;
+        // If this search opened a scroll, its response carries a `_scroll_id`;
+        // wrap it with the resolved cluster so the continue lands on the same
+        // place (`docs/03` §6). A plain search has none, so this is a no-op.
+        let body = self.wrap_scroll_id(body, &resolved.decision.target.cluster);
         Ok(PipelineResponse {
             status: outcome.status,
             body,
         })
+    }
+
+    /// Wraps a `_scroll_id` in a search response with `cluster` when cursor
+    /// affinity is enabled, so a continued scroll returns to the same cluster. A
+    /// response without a `_scroll_id`, or affinity off, is returned unchanged —
+    /// and the cheap byte pre-check skips the JSON parse for plain searches.
+    fn wrap_scroll_id(&self, body: Vec<u8>, cluster: &ClusterId) -> Vec<u8> {
+        let Some(signer) = &self.cursor_signer else {
+            return body;
+        };
+        if !has_scroll_id(&body) {
+            return body;
+        }
+        wrap_scroll_id_in_response(body, signer.as_ref(), cluster)
     }
 
     /// The multi-search path (`docs/04` §4): the search counterpart of `_bulk`.
@@ -284,6 +302,32 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             body: outcome.body,
         })
     }
+}
+
+/// Whether a response body mentions `_scroll_id` at all — a cheap pre-filter so
+/// a plain (non-scroll) search never pays for a JSON parse just to find none.
+fn has_scroll_id(body: &[u8]) -> bool {
+    const NEEDLE: &[u8] = b"_scroll_id";
+    body.windows(NEEDLE.len()).any(|w| w == NEEDLE)
+}
+
+/// Replaces the response's `_scroll_id` with its signed envelope (`cluster` +
+/// id). Returns the body unchanged if it is not JSON or carries no string
+/// `_scroll_id`, so a malformed or scroll-less response is never corrupted.
+fn wrap_scroll_id_in_response(
+    body: Vec<u8>,
+    signer: &dyn CursorSigner,
+    cluster: &ClusterId,
+) -> Vec<u8> {
+    let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return body;
+    };
+    let Some(id) = v.get("_scroll_id").and_then(serde_json::Value::as_str) else {
+        return body;
+    };
+    let wrapped = osproxy_core::cursor::wrap(signer, cluster, id);
+    v["_scroll_id"] = serde_json::Value::String(wrapped);
+    serde_json::to_vec(&v).unwrap_or(body)
 }
 
 /// The wrapped scroll id carried by a cursor request: the path form

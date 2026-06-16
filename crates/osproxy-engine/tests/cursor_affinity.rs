@@ -8,15 +8,15 @@
 use std::sync::{Arc, Mutex};
 
 use osproxy_core::cursor::{self, CursorSigner};
-use osproxy_core::{ClusterId, EndpointKind, ErrorCode, PartitionId, RequestId};
+use osproxy_core::{ClusterId, EndpointKind, Epoch, ErrorCode, IndexName, PartitionId, RequestId};
 use osproxy_engine::{Pipeline, RequestError};
 use osproxy_sink::{
     CountOutcome, CursorOp, CursorOutcome, MemorySink, ReadOp, ReadOutcome, Reader, SearchOp,
     SearchOutcome, Sink, SinkError, WriteAck, WriteBatch,
 };
 use osproxy_spi::{
-    DocIdRule, HeaderView, HttpMethod, InjectedField, JsonPath, PartitionKeySpec, PlacementAt,
-    Principal, Protocol, RequestCtx, SensitivitySpec, SpiError, TenancySpi,
+    DocIdRule, HeaderView, HttpMethod, InjectedField, JsonPath, PartitionKeySpec, Placement,
+    PlacementAt, Principal, Protocol, RequestCtx, SensitivitySpec, SpiError, TenancySpi,
 };
 use osproxy_tenancy::TenancyRouter;
 
@@ -64,8 +64,13 @@ impl Reader for RecordingSink {
     async fn get(&self, op: ReadOp) -> Result<ReadOutcome, SinkError> {
         self.inner.get(op).await
     }
-    async fn search(&self, op: SearchOp) -> Result<SearchOutcome, SinkError> {
-        self.inner.search(op).await
+    async fn search(&self, _op: SearchOp) -> Result<SearchOutcome, SinkError> {
+        // A scroll-opening search: the upstream returns a `_scroll_id` the proxy
+        // must wrap before handing it to the client.
+        Ok(SearchOutcome::new(
+            200,
+            br#"{"_scroll_id":"UPSTREAMSCROLL","hits":{"total":{"value":0},"hits":[]}}"#.to_vec(),
+        ))
     }
     async fn count(&self, op: SearchOp) -> Result<CountOutcome, SinkError> {
         self.inner.count(op).await
@@ -92,10 +97,17 @@ impl TenancySpi for StubTenancy {
     fn sensitive_fields(&self) -> SensitivitySpec {
         SensitivitySpec::none()
     }
-    async fn placement_for(&self, partition: &PartitionId) -> Result<PlacementAt, SpiError> {
-        Err(SpiError::PlacementMissing {
-            partition: partition.clone(),
-        })
+    async fn placement_for(&self, _partition: &PartitionId) -> Result<PlacementAt, SpiError> {
+        // Resolve every partition to one shared cluster — the search test needs a
+        // successful resolution; the cursor tests bypass this entirely.
+        Ok(PlacementAt::new(
+            Placement::SharedIndex {
+                cluster: ClusterId::from("eu-1"),
+                index: IndexName::from("shared"),
+                inject: vec![],
+            },
+            Epoch::new(1),
+        ))
     }
 }
 
@@ -188,6 +200,43 @@ async fn the_path_form_scroll_id_is_unwrapped_from_the_doc_id() {
     let op = seen.lock().unwrap().clone().unwrap();
     assert_eq!(op.cluster, ClusterId::from("us-2"));
     assert!(String::from_utf8(op.body).unwrap().contains(REAL_ID));
+}
+
+#[tokio::test]
+async fn a_scroll_opening_search_wraps_the_scroll_id_for_the_client() {
+    // The create → continue loop closes: a search that opens a scroll returns a
+    // *wrapped* `_scroll_id` that unwraps back to the cluster it was served from.
+    let signer = Arc::new(FnvSigner(5));
+    let (p, _seen) = pipeline(Some(signer.clone()));
+    let principal = Principal::new(osproxy_core::PrincipalId::from("svc"));
+    let rid = RequestId::from("s");
+    let headers: Vec<(String, String)> = vec![];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::Search,
+        Protocol::Http1,
+        "orders",
+        HeaderView::new(&headers),
+        br#"{"query":{"match_all":{}},"tenant_id":"acme"}"#,
+    );
+    let resp = p.handle(&ctx).await.expect("search succeeds");
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    let wrapped = v["_scroll_id"]
+        .as_str()
+        .expect("response carries a scroll id");
+    assert_ne!(
+        wrapped, "UPSTREAMSCROLL",
+        "the raw upstream id must not leak"
+    );
+    let (cluster, real) = cursor::unwrap(signer.as_ref(), wrapped).expect("the token verifies");
+    assert_eq!(
+        cluster,
+        ClusterId::from("eu-1"),
+        "pinned to the serving cluster"
+    );
+    assert_eq!(real, "UPSTREAMSCROLL", "unwraps to the real upstream id");
 }
 
 #[tokio::test]
