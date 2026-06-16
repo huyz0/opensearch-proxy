@@ -77,7 +77,12 @@ impl Reader for RecordingSink {
     }
     async fn cursor(&self, op: CursorOp) -> Result<CursorOutcome, SinkError> {
         *self.seen.lock().unwrap() = Some(op);
-        Ok(CursorOutcome::new(200, br#"{"hits":{"hits":[]}}"#.to_vec()))
+        // The upstream returns the next page's raw `_scroll_id`; the proxy must
+        // re-wrap it before the client sees it.
+        Ok(CursorOutcome::new(
+            200,
+            br#"{"_scroll_id":"NEXTPAGE","hits":{"hits":[]}}"#.to_vec(),
+        ))
     }
 }
 
@@ -237,6 +242,36 @@ async fn a_scroll_opening_search_wraps_the_scroll_id_for_the_client() {
         "pinned to the serving cluster"
     );
     assert_eq!(real, "UPSTREAMSCROLL", "unwraps to the real upstream id");
+}
+
+#[tokio::test]
+async fn a_scroll_continue_re_wraps_the_next_page_scroll_id() {
+    // Each scroll page returns a fresh `_scroll_id`; the continue response must
+    // re-wrap it so the client's next continue verifies (never the raw id).
+    let signer = Arc::new(FnvSigner(9));
+    let token = cursor::wrap(signer.as_ref(), &ClusterId::from("eu-1"), REAL_ID);
+    let (p, _seen) = pipeline(Some(signer.clone()));
+    let principal = Principal::new(osproxy_core::PrincipalId::from("svc"));
+    let rid = RequestId::from("c");
+    let headers: Vec<(String, String)> = vec![];
+    let body = format!(r#"{{"scroll":"1m","scroll_id":"{token}"}}"#);
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::Cursor,
+        Protocol::Http1,
+        "",
+        HeaderView::new(&headers),
+        body.as_bytes(),
+    );
+    let resp = p.handle(&ctx).await.expect("continue ok");
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    let next = v["_scroll_id"].as_str().expect("next page id present");
+    assert_ne!(next, "NEXTPAGE", "the raw next-page id must not leak");
+    let (cluster, real) = cursor::unwrap(signer.as_ref(), next).expect("re-wrapped id verifies");
+    assert_eq!(cluster, ClusterId::from("eu-1"));
+    assert_eq!(real, "NEXTPAGE");
 }
 
 #[tokio::test]

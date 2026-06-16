@@ -301,6 +301,10 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         let op = CursorOp::new(cluster.clone(), ctx.method(), req.upstream_path, body)
             .with_trace(Some(wire_trace(ctx)));
         let outcome = self.sink.cursor(op).await?;
+        // A scroll continue's response carries the *next* page's `_scroll_id`;
+        // re-wrap it with the same cluster so the client's next continue verifies
+        // (`docs/03` §6). PIT close responses carry none, so this is a no-op there.
+        let resp_body = self.wrap_scroll_id(outcome.body, &cluster);
         trace.record_dispatch(DispatchInfo {
             cluster,
             upstream_status: outcome.status,
@@ -308,7 +312,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         });
         Ok(PipelineResponse {
             status: outcome.status,
-            body: outcome.body,
+            body: resp_body,
         })
     }
 }

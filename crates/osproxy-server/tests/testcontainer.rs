@@ -28,6 +28,7 @@ use hyper_util::rt::TokioExecutor;
 use osproxy_core::{ClusterId, IndexName};
 use osproxy_engine::Pipeline;
 use osproxy_server::auth::ReferenceAuthenticator;
+use osproxy_server::cursor::HmacCursorSigner;
 use osproxy_server::handler::AppHandler;
 use osproxy_server::tenancy::ReferenceTenancy;
 use osproxy_sink::OpenSearchSink;
@@ -83,6 +84,26 @@ async fn spawn_proxy(upstream: String) -> String {
         Pipeline::new(TenancyRouter::new(tenancy), sink),
         ReferenceAuthenticator::dev(),
     ));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = osproxy_transport::serve(listener, handler).await;
+    });
+    format!("http://{addr}")
+}
+
+/// Like [`spawn_proxy`], but with scroll/PIT cursor affinity enabled (a fixed
+/// test key), so scroll responses carry a signed `_scroll_id` envelope.
+async fn spawn_proxy_with_affinity(upstream: String) -> String {
+    let cluster = ClusterId::from("default");
+    let mut endpoints = HashMap::new();
+    endpoints.insert(cluster.clone(), upstream);
+    let sink = OpenSearchSink::new(endpoints);
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from(INDEX));
+    let pipeline = Pipeline::new(TenancyRouter::new(tenancy), sink)
+        .with_cursor_signer(Arc::new(HmacCursorSigner::new(b"scroll-test-key")));
+    let handler = Arc::new(AppHandler::new(pipeline, ReferenceAuthenticator::dev()));
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -506,4 +527,89 @@ async fn blind_diagnosis_for_success_and_failure() {
     .unwrap();
     assert_eq!(status, 400);
     assert!(body.contains("partition_unresolved"), "{body}");
+}
+
+/// Ingests three `acme` docs through the proxy and refreshes the index so they
+/// are searchable.
+async fn seed_acme_docs(client: &HttpClient, proxy: &str, os_base: &str) {
+    for id in 1..=3 {
+        let (status, body) = send(
+            client,
+            Method::POST,
+            &format!("{proxy}/orders/_doc"),
+            Bytes::from(format!(r#"{{"tenant_id":"acme","id":{id},"msg":"m{id}"}}"#)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, 201, "ingest {id}: {body}");
+    }
+    let _ = send(
+        client,
+        Method::POST,
+        &format!("{os_base}/{INDEX}/_refresh"),
+        Bytes::new(),
+    )
+    .await
+    .unwrap();
+}
+
+/// The full scroll loop against real OpenSearch: a scroll-opening search returns
+/// a *wrapped* `_scroll_id` (proving `?scroll=` reached the upstream), and a
+/// continue with that wrapped id pages forward (proving unwrap + route + re-wrap).
+#[tokio::test]
+#[ignore = "requires Docker; run with --ignored"]
+async fn scroll_create_and_continue_round_trip_through_the_proxy() {
+    let client: HttpClient = Client::builder(TokioExecutor::new()).build_http();
+    let (_container, os_base) = start_opensearch().await;
+    assert!(wait_ready(&client, &os_base).await, "opensearch not ready");
+    let proxy = spawn_proxy_with_affinity(os_base.clone()).await;
+    seed_acme_docs(&client, &proxy, &os_base).await;
+
+    // Open a scroll (size 1 so it spans multiple pages). Searches carry the
+    // partition in the `x-tenant` header, not the body.
+    let (status, body) = request_with_tenant(
+        &client,
+        Method::POST,
+        &format!("{proxy}/orders/_search?scroll=1m"),
+        "acme",
+        Bytes::from_static(br#"{"size":1,"query":{"match_all":{}}}"#),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, 200, "scroll open: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let scroll_id = v["_scroll_id"]
+        .as_str()
+        .expect("scroll create returns a _scroll_id");
+    assert!(
+        scroll_id.contains('.'),
+        "the scroll id must be a wrapped envelope, not the raw upstream id: {scroll_id}"
+    );
+    assert_eq!(
+        v["hits"]["hits"].as_array().unwrap().len(),
+        1,
+        "first page has one hit: {body}"
+    );
+
+    // Continue with the WRAPPED id: the proxy unwraps, routes, and re-wraps the
+    // next page's id.
+    let (status, body) = send(
+        &client,
+        Method::POST,
+        &format!("{proxy}/_search/scroll"),
+        Bytes::from(format!(r#"{{"scroll":"1m","scroll_id":"{scroll_id}"}}"#)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, 200, "scroll continue: {body}");
+    let v2: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(
+        v2["_scroll_id"].as_str().is_some_and(|s| s.contains('.')),
+        "the continue response re-wraps the next page id: {body}"
+    );
+    assert_eq!(
+        v2["hits"]["hits"].as_array().unwrap().len(),
+        1,
+        "second page has one hit: {body}"
+    );
 }
