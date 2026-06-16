@@ -16,6 +16,7 @@
 
 mod bulk;
 mod bulkprep;
+mod cursor;
 mod endpoints;
 mod error;
 mod mget;

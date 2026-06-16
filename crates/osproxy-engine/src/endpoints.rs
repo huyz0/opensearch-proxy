@@ -6,12 +6,15 @@
 //! `/debug/explain` store) lives in [`crate::pipeline`]; this module is the body
 //! of each endpoint, kept separate so neither file becomes a god module.
 
-use osproxy_core::{ClusterId, CursorSigner, TraceContext};
+use osproxy_core::{ClusterId, TraceContext};
 use osproxy_observe::DispatchInfo;
 use osproxy_sink::{CursorOp, Reader, Sink, WriteAck, WriteBatch};
 use osproxy_spi::{RequestCtx, TenancySpi};
 use osproxy_tenancy::Resolved;
 
+use crate::cursor::{
+    cursor_request, has_scroll_id, rewrite_cursor_body, wrap_scroll_id_in_response,
+};
 use crate::error::RequestError;
 use crate::observe::{dispatch_info, read_dispatch_info, resolve_info, rewrite_info};
 use crate::pipeline::{Pipeline, PipelineResponse};
@@ -278,18 +281,17 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
                 reason: "cursor affinity is not enabled",
             });
         };
-        let wrapped = wrapped_scroll_id(ctx).ok_or(RequestError::Cursor {
+        let req = cursor_request(ctx).ok_or(RequestError::Cursor {
             reason: "no cursor id in the request",
         })?;
-        let (cluster, real_id) = osproxy_core::cursor::unwrap(signer.as_ref(), &wrapped).ok_or(
-            RequestError::Cursor {
+        let (cluster, real_id) = osproxy_core::cursor::unwrap(signer.as_ref(), &req.wrapped)
+            .ok_or(RequestError::Cursor {
                 reason: "cursor envelope is invalid or expired",
-            },
-        )?;
-        // Always forward the body form upstream with the real id substituted, so a
-        // large scroll id never rides in a URL path (`docs/03` §6).
-        let body = scroll_continue_body(ctx.body(), &real_id);
-        let op = CursorOp::new(cluster.clone(), ctx.method(), "/_search/scroll", body)
+            })?;
+        // Forward the body form upstream with the real id substituted, so a large
+        // cursor id never rides in a URL path (`docs/03` §6).
+        let body = rewrite_cursor_body(ctx.body(), req.id_field, &real_id);
+        let op = CursorOp::new(cluster.clone(), ctx.method(), req.upstream_path, body)
             .with_trace(Some(wire_trace(ctx)));
         let outcome = self.sink.cursor(op).await?;
         trace.record_dispatch(DispatchInfo {
@@ -302,55 +304,6 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             body: outcome.body,
         })
     }
-}
-
-/// Whether a response body mentions `_scroll_id` at all — a cheap pre-filter so
-/// a plain (non-scroll) search never pays for a JSON parse just to find none.
-fn has_scroll_id(body: &[u8]) -> bool {
-    const NEEDLE: &[u8] = b"_scroll_id";
-    body.windows(NEEDLE.len()).any(|w| w == NEEDLE)
-}
-
-/// Replaces the response's `_scroll_id` with its signed envelope (`cluster` +
-/// id). Returns the body unchanged if it is not JSON or carries no string
-/// `_scroll_id`, so a malformed or scroll-less response is never corrupted.
-fn wrap_scroll_id_in_response(
-    body: Vec<u8>,
-    signer: &dyn CursorSigner,
-    cluster: &ClusterId,
-) -> Vec<u8> {
-    let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&body) else {
-        return body;
-    };
-    let Some(id) = v.get("_scroll_id").and_then(serde_json::Value::as_str) else {
-        return body;
-    };
-    let wrapped = osproxy_core::cursor::wrap(signer, cluster, id);
-    v["_scroll_id"] = serde_json::Value::String(wrapped);
-    serde_json::to_vec(&v).unwrap_or(body)
-}
-
-/// The wrapped scroll id carried by a cursor request: the path form
-/// (`/_search/scroll/{id}`) rides in the doc id, the body form in `scroll_id`.
-fn wrapped_scroll_id(ctx: &RequestCtx<'_>) -> Option<String> {
-    if let Some(id) = ctx.doc_id() {
-        return Some(id.to_owned());
-    }
-    let v: serde_json::Value = serde_json::from_slice(ctx.body()).ok()?;
-    v.get("scroll_id")?.as_str().map(str::to_owned)
-}
-
-/// The upstream scroll body with the real (unwrapped) id substituted, preserving
-/// any `scroll` keep-alive the client sent; falls back to a minimal body for the
-/// path form (which carries none).
-fn scroll_continue_body(client_body: &[u8], real_id: &str) -> Vec<u8> {
-    let mut v = serde_json::from_slice::<serde_json::Value>(client_body)
-        .ok()
-        .filter(serde_json::Value::is_object)
-        .unwrap_or_else(|| serde_json::json!({}));
-    v["scroll_id"] = serde_json::Value::String(real_id.to_owned());
-    serde_json::to_vec(&v)
-        .unwrap_or_else(|_| format!(r#"{{"scroll_id":"{real_id}"}}"#).into_bytes())
 }
 
 /// The W3C trace context to forward to the upstream for this request: continues

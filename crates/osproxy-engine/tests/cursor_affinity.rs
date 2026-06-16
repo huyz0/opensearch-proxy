@@ -240,6 +240,32 @@ async fn a_scroll_opening_search_wraps_the_scroll_id_for_the_client() {
 }
 
 #[tokio::test]
+async fn a_pit_close_routes_to_its_pinned_cluster_via_the_pit_endpoint() {
+    // `DELETE /_pit {"id": <wrapped>}` recovers the cluster from the body `id` and
+    // forwards the close to the pinned cluster at `/_pit` with the real id.
+    let signer = Arc::new(FnvSigner(3));
+    let token = cursor::wrap(signer.as_ref(), &ClusterId::from("eu-1"), REAL_ID);
+    let (p, seen) = pipeline(Some(signer));
+
+    let body = format!(r#"{{"id":"{token}"}}"#);
+    run(&p, HttpMethod::Delete, body.as_bytes(), None)
+        .await
+        .expect("pit close routes");
+    let op = seen.lock().unwrap().clone().unwrap();
+    assert_eq!(op.cluster, ClusterId::from("eu-1"));
+    assert_eq!(op.path, "/_pit", "pit close targets the _pit endpoint");
+    let forwarded = String::from_utf8(op.body).unwrap();
+    assert!(
+        forwarded.contains(REAL_ID),
+        "real id substituted: {forwarded}"
+    );
+    assert!(
+        !forwarded.contains(&token),
+        "wrapper stripped before upstream"
+    );
+}
+
+#[tokio::test]
 async fn affinity_disabled_fails_closed() {
     let (p, seen) = pipeline(None); // no signer ⇒ affinity off
     let err = run(&p, HttpMethod::Post, br#"{"scroll_id":"anything"}"#, None)
