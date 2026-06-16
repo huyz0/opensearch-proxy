@@ -238,6 +238,9 @@ pub struct CursorOp {
     pub path: String,
     /// The request body to forward (the real, unwrapped cursor id substituted in).
     pub body: Vec<u8>,
+    /// An already-allow-listed query string (without the `?`) to append to the
+    /// upstream URL — e.g. `keep_alive=1m` on PIT create. Filtered by the engine.
+    pub query: Option<String>,
     /// The upstream wire protocol. Defaults to [`Protocol::Http1`].
     pub protocol: Protocol,
     /// The W3C trace context to forward downstream.
@@ -258,9 +261,17 @@ impl CursorOp {
             method,
             path: path.into(),
             body,
+            query: None,
             protocol: Protocol::Http1,
             trace: None,
         }
+    }
+
+    /// Sets the (already allow-listed) upstream query string (builder style).
+    #[must_use]
+    pub fn with_query(mut self, query: Option<String>) -> Self {
+        self.query = query;
+        self
     }
 
     /// Sets the trace context to propagate downstream (builder style).

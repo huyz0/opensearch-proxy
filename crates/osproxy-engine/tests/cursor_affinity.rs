@@ -4,19 +4,25 @@
 //! affinity is off or the envelope does not verify.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+// JUSTIFY(file-length): one cohesive cursor-affinity suite — the shared
+// RecordingSink / StubTenancy / signer scaffolding backs every scroll and PIT
+// scenario (continue, path-form, re-wrap, create, search, close, fail-closed);
+// splitting would duplicate that scaffold across files for no real separation.
 
 use std::sync::{Arc, Mutex};
 
 use osproxy_core::cursor::{self, CursorSigner};
-use osproxy_core::{ClusterId, EndpointKind, Epoch, ErrorCode, IndexName, PartitionId, RequestId};
+use osproxy_core::{
+    ClusterId, EndpointKind, Epoch, ErrorCode, FieldName, IndexName, PartitionId, RequestId,
+};
 use osproxy_engine::{Pipeline, RequestError};
 use osproxy_sink::{
     CountOutcome, CursorOp, CursorOutcome, MemorySink, ReadOp, ReadOutcome, Reader, SearchOp,
     SearchOutcome, Sink, SinkError, WriteAck, WriteBatch,
 };
 use osproxy_spi::{
-    DocIdRule, HeaderView, HttpMethod, InjectedField, JsonPath, PartitionKeySpec, Placement,
-    PlacementAt, Principal, Protocol, RequestCtx, SensitivitySpec, SpiError, TenancySpi,
+    DocIdRule, HeaderView, HttpMethod, InjectedField, InjectedValue, JsonPath, PartitionKeySpec,
+    Placement, PlacementAt, Principal, Protocol, RequestCtx, SensitivitySpec, SpiError, TenancySpi,
 };
 use osproxy_tenancy::TenancyRouter;
 
@@ -76,13 +82,17 @@ impl Reader for RecordingSink {
         self.inner.count(op).await
     }
     async fn cursor(&self, op: CursorOp) -> Result<CursorOutcome, SinkError> {
+        // The upstream response shape depends on the op: a PIT create returns a
+        // raw `id`, a PIT search returns hits, a scroll continue a `_scroll_id`.
+        let resp: &[u8] = if op.path.ends_with("/_pit") {
+            br#"{"id":"RAWPIT"}"#
+        } else if op.path == "/_search" {
+            br#"{"hits":{"total":{"value":0},"hits":[]}}"#
+        } else {
+            br#"{"_scroll_id":"NEXTPAGE","hits":{"hits":[]}}"#
+        };
         *self.seen.lock().unwrap() = Some(op);
-        // The upstream returns the next page's raw `_scroll_id`; the proxy must
-        // re-wrap it before the client sees it.
-        Ok(CursorOutcome::new(
-            200,
-            br#"{"_scroll_id":"NEXTPAGE","hits":{"hits":[]}}"#.to_vec(),
-        ))
+        Ok(CursorOutcome::new(200, resp.to_vec()))
     }
 }
 
@@ -97,19 +107,26 @@ impl TenancySpi for StubTenancy {
         None
     }
     fn injected_fields(&self) -> Vec<InjectedField> {
-        vec![]
+        vec![InjectedField::new(
+            FieldName::from("_tenant"),
+            InjectedValue::PartitionId,
+        )]
     }
     fn sensitive_fields(&self) -> SensitivitySpec {
         SensitivitySpec::none()
     }
     async fn placement_for(&self, _partition: &PartitionId) -> Result<PlacementAt, SpiError> {
-        // Resolve every partition to one shared cluster — the search test needs a
-        // successful resolution; the cursor tests bypass this entirely.
+        // Resolve every partition to one shared cluster, injecting `_tenant` so the
+        // search path applies a real partition filter (isolation). The cursor
+        // tests bypass this entirely.
         Ok(PlacementAt::new(
             Placement::SharedIndex {
                 cluster: ClusterId::from("eu-1"),
                 index: IndexName::from("shared"),
-                inject: vec![],
+                inject: vec![InjectedField::new(
+                    FieldName::from("_tenant"),
+                    InjectedValue::PartitionId,
+                )],
             },
             Epoch::new(1),
         ))
@@ -297,6 +314,101 @@ async fn a_pit_close_routes_to_its_pinned_cluster_via_the_pit_endpoint() {
     assert!(
         !forwarded.contains(&token),
         "wrapper stripped before upstream"
+    );
+}
+
+#[tokio::test]
+async fn a_pit_create_resolves_the_index_cluster_and_wraps_the_returned_id() {
+    let signer = Arc::new(FnvSigner(13));
+    let (p, seen) = pipeline(Some(signer.clone()));
+    let principal = Principal::new(osproxy_core::PrincipalId::from("svc"));
+    let rid = RequestId::from("pc");
+    let headers: Vec<(String, String)> = vec![];
+    // PIT create: a Cursor endpoint *with* a logical index; the tenant resolves
+    // the (shared) cluster, and `keep_alive` is allow-list forwarded.
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::Cursor,
+        Protocol::Http1,
+        "orders",
+        HeaderView::new(&headers),
+        br#"{"tenant_id":"acme"}"#,
+    )
+    .with_query(Some("keep_alive=5m"));
+    let resp = p.handle(&ctx).await.expect("pit create ok");
+
+    let op = seen.lock().unwrap().clone().unwrap();
+    assert_eq!(
+        op.cluster,
+        ClusterId::from("eu-1"),
+        "opened on the resolved cluster"
+    );
+    assert_eq!(
+        op.path, "/shared/_pit",
+        "the physical index's _pit endpoint"
+    );
+    assert_eq!(
+        op.query.as_deref(),
+        Some("keep_alive=5m"),
+        "keep_alive forwarded"
+    );
+    // The returned id is wrapped with the cluster it was opened on.
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    let id = v["id"].as_str().expect("pit create returns an id");
+    assert_ne!(id, "RAWPIT", "the raw pit id must not leak");
+    let (cluster, real) = cursor::unwrap(signer.as_ref(), id).expect("wrapped id verifies");
+    assert_eq!(cluster, ClusterId::from("eu-1"));
+    assert_eq!(real, "RAWPIT");
+}
+
+#[tokio::test]
+async fn a_pit_search_routes_to_the_pit_cluster_and_substitutes_the_real_id() {
+    let signer = Arc::new(FnvSigner(17));
+    // The PIT was created on `us-9`; the search must route *there*, not to the
+    // tenant's resolved cluster (`eu-1`) — while still resolving for the filter.
+    let pit = cursor::wrap(signer.as_ref(), &ClusterId::from("us-9"), "RAWPIT");
+    let (p, seen) = pipeline(Some(signer));
+    let principal = Principal::new(osproxy_core::PrincipalId::from("svc"));
+    let rid = RequestId::from("ps");
+    let headers: Vec<(String, String)> = vec![];
+    let body =
+        format!(r#"{{"query":{{"match_all":{{}}}},"pit":{{"id":"{pit}"}},"tenant_id":"acme"}}"#);
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::Search,
+        Protocol::Http1,
+        "",
+        HeaderView::new(&headers),
+        body.as_bytes(),
+    );
+    let resp = p.handle(&ctx).await.expect("pit search ok");
+    assert_eq!(resp.status, 200);
+
+    let op = seen.lock().unwrap().clone().unwrap();
+    assert_eq!(
+        op.cluster,
+        ClusterId::from("us-9"),
+        "routes to the PIT's pinned cluster, not the resolved target"
+    );
+    assert_eq!(op.path, "/_search");
+    let forwarded = String::from_utf8(op.body).unwrap();
+    assert!(
+        forwarded.contains("RAWPIT"),
+        "real pit id substituted: {forwarded}"
+    );
+    assert!(
+        !forwarded.contains(&pit),
+        "the wrapped pit id must be stripped before upstream"
+    );
+    // Isolation (NFR-S4): the query was wrapped in the partition filter — pinning
+    // the PIT's cluster did NOT bypass tenancy.
+    assert!(
+        forwarded.contains(r#""term":{"_tenant":"acme"}"#),
+        "the partition filter must be applied to a PIT search: {forwarded}"
     );
 }
 

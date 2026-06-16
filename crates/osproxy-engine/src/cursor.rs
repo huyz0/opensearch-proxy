@@ -57,6 +57,53 @@ pub(crate) fn wrap_scroll_id_in_response(
     serde_json::to_vec(&v).unwrap_or(body)
 }
 
+/// The wrapped PIT id from a search body (`{"pit":{"id": <wrapped>}}`), if present
+/// — the marker that a search is pinned to a point-in-time and must route to the
+/// PIT's cluster rather than resolve a fresh target.
+pub(crate) fn pit_id_in_body(body: &[u8]) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    v.get("pit")?
+        .get("id")?
+        .as_str()
+        .map(std::borrow::ToOwned::to_owned)
+}
+
+/// The search body with the real (unwrapped) PIT id substituted into
+/// `pit.id`, leaving the query (already partition-filtered) untouched. Returns the
+/// body unchanged if it has no `pit` object.
+pub(crate) fn rewrite_pit_id(body: Vec<u8>, real_id: &str) -> Vec<u8> {
+    let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return body;
+    };
+    let Some(pit) = v.get_mut("pit").and_then(serde_json::Value::as_object_mut) else {
+        return body;
+    };
+    pit.insert(
+        "id".to_owned(),
+        serde_json::Value::String(real_id.to_owned()),
+    );
+    serde_json::to_vec(&v).unwrap_or(body)
+}
+
+/// Replaces a PIT-create response's top-level `id` with its signed envelope
+/// (`cluster` + id), so the client's later PIT search/close recovers the cluster.
+/// Returns the body unchanged if it has no string `id`.
+pub(crate) fn wrap_pit_id_in_response(
+    body: Vec<u8>,
+    signer: &dyn CursorSigner,
+    cluster: &ClusterId,
+) -> Vec<u8> {
+    let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return body;
+    };
+    let Some(id) = v.get("id").and_then(serde_json::Value::as_str) else {
+        return body;
+    };
+    let wrapped = osproxy_core::cursor::wrap(signer, cluster, id);
+    v["id"] = serde_json::Value::String(wrapped);
+    serde_json::to_vec(&v).unwrap_or(body)
+}
+
 /// A cursor continue/clear/close request, recovered from a scroll or PIT request:
 /// the wrapped id plus where to substitute the real id and which upstream
 /// endpoint to forward it to.

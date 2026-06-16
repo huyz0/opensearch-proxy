@@ -395,9 +395,13 @@ impl Reader for OpenSearchSink {
         // `op.path` is the upstream endpoint (e.g. `/_search/scroll`) and `op.body`
         // already carries the real (unwrapped) cursor id.
         let pool = self.pool_for(&op.cluster)?;
+        let uri = match &op.query {
+            Some(q) if !q.is_empty() => format!("{}{}?{q}", pool.base, op.path),
+            _ => format!("{}{}", pool.base, op.path),
+        };
         let req = Request::builder()
             .method(hyper_method(op.method))
-            .uri(format!("{}{}", pool.base, op.path))
+            .uri(uri)
             .header("content-type", "application/json")
             .body(Full::new(Bytes::from(op.body.clone())))
             .map_err(|_| SinkError::Transport {

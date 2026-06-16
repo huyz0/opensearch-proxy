@@ -52,6 +52,9 @@ pub fn classify(method: HttpMethod, path: &str) -> Classified {
         },
         //   /{index}/_pit (create — resolves the index's cluster, wraps the id)
         [index, "_pit"] => classified(EndpointKind::Cursor, index),
+        // /_search with no index — a PIT search (the PIT defines the index set);
+        // the engine reads the `pit` in the body and routes to its pinned cluster.
+        ["_search"] => classified(EndpointKind::Search, ""),
         // /{index}/_search and /{index}/_count
         [index, "_search"] => classified(EndpointKind::Search, index),
         [index, "_count"] => classified(EndpointKind::Count, index),
@@ -202,6 +205,14 @@ mod tests {
         let pit_delete = classify(HttpMethod::Delete, "/_pit");
         assert_eq!(pit_delete.endpoint, EndpointKind::Cursor);
         assert!(pit_delete.logical_index.is_empty());
+    }
+
+    #[test]
+    fn a_no_index_search_classifies_as_search() {
+        // `POST /_search` (no index) is a PIT search; the engine reads the body.
+        let c = classify(HttpMethod::Post, "/_search");
+        assert_eq!(c.endpoint, EndpointKind::Search);
+        assert!(c.logical_index.is_empty());
     }
 
     #[test]

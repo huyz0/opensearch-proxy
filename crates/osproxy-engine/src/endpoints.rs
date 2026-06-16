@@ -13,7 +13,7 @@ use osproxy_spi::{RequestCtx, TenancySpi};
 use osproxy_tenancy::Resolved;
 
 use crate::cursor::{
-    cursor_request, forwardable_query, has_scroll_id, rewrite_cursor_body,
+    cursor_request, forwardable_query, has_scroll_id, pit_id_in_body, rewrite_cursor_body,
     wrap_scroll_id_in_response,
 };
 use crate::error::RequestError;
@@ -51,7 +51,10 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
 
     /// Resolves `ctx`'s routing, retrying a momentarily-unavailable placement
     /// backend with bounded backoff (`docs/06` §3a) before surfacing the error.
-    async fn resolve_with_retry(&self, ctx: &RequestCtx<'_>) -> Result<Resolved, RequestError> {
+    pub(crate) async fn resolve_with_retry(
+        &self,
+        ctx: &RequestCtx<'_>,
+    ) -> Result<Resolved, RequestError> {
         with_retry(self.retry, || self.router.resolve(ctx))
             .await
             .map_err(Into::into)
@@ -180,6 +183,13 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         ctx: &RequestCtx<'_>,
         trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
+        // A search pinned to a point-in-time routes to the PIT's cluster, but
+        // still applies the partition filter + field strip (isolation, NFR-S4).
+        if self.cursor_signer.is_some() {
+            if let Some(wrapped) = pit_id_in_body(ctx.body()) {
+                return self.pit_search(ctx, trace, &wrapped).await;
+            }
+        }
         let resolved = self.resolve_with_retry(ctx).await?;
         trace.record_resolve(resolve_info(&resolved));
 
@@ -288,6 +298,12 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
                 reason: "cursor affinity is not enabled",
             });
         };
+        // A cursor request with a logical index is a PIT create (`/{index}/_pit`):
+        // it resolves the index's cluster and wraps the returned id, rather than
+        // recovering a cluster from an existing cursor.
+        if !ctx.logical_index().is_empty() {
+            return self.pit_create(ctx, trace).await;
+        }
         let req = cursor_request(ctx).ok_or(RequestError::Cursor {
             reason: "no cursor id in the request",
         })?;

@@ -23,6 +23,7 @@ mod mget;
 mod msearch;
 mod observe;
 mod pipeline;
+mod pit;
 mod plan;
 mod read;
 mod retry;
