@@ -391,9 +391,16 @@ impl Reader for OpenSearchSink {
     }
 
     async fn cursor(&self, op: CursorOp) -> Result<CursorOutcome, SinkError> {
-        // Forward the raw scroll/PIT op to the cluster the engine pinned it to;
-        // `op.path` is the upstream endpoint (e.g. `/_search/scroll`) and `op.body`
-        // already carries the real (unwrapped) cursor id.
+        // Forward the raw scroll/PIT/admin op to the cluster the engine pinned it
+        // to; `op.path` is the upstream endpoint (e.g. `/_search/scroll`) and
+        // `op.body` already carries the real (unwrapped) cursor id.
+        //
+        // Defense in depth: this is the one choke point where a passthrough path
+        // is concatenated verbatim into the upstream URI. Refuse a `..` segment
+        // here so no current or future op type can let a path resolve past its
+        // allow-listed prefix upstream — the engine already guards the admin path,
+        // and cursor paths are engine-built, so this should never fire.
+        reject_path_traversal(&op.path)?;
         let pool = self.pool_for(&op.cluster)?;
         let uri = match &op.query {
             Some(q) if !q.is_empty() => format!("{}{}?{q}", pool.base, op.path),
@@ -463,6 +470,19 @@ impl Sink for OpenSearchSink {
 
 /// Rejects a 5xx upstream response as a retryable upstream error (502–504 are
 /// retryable); below 500 passes through (e.g. a 404 read is a normal miss).
+/// Refuses a forwarded passthrough path containing a `..` segment. Such a path
+/// could resolve upstream (or at an intermediary) past the prefix an operator
+/// allow-listed; the proxy never normalizes paths, so it fails closed here rather
+/// than dispatch. Value-free, like every other [`SinkError`].
+fn reject_path_traversal(path: &str) -> Result<(), SinkError> {
+    if path.split('/').any(|seg| seg == "..") {
+        return Err(SinkError::Transport {
+            kind: "refusing a forwarded path with a `..` segment",
+        });
+    }
+    Ok(())
+}
+
 fn reject_5xx(status: u16) -> Result<(), SinkError> {
     if status >= 500 {
         return Err(SinkError::Upstream {

@@ -202,6 +202,29 @@ async fn cursor_passthrough_forwards_method_path_and_body_to_the_pinned_cluster(
 }
 
 #[tokio::test]
+async fn a_passthrough_path_with_a_traversal_segment_is_refused_without_dispatch() {
+    // Defense in depth at the one choke point that concatenates a passthrough
+    // path verbatim into the upstream URI: a `..` segment is refused before any
+    // request is built, so it can never resolve past an allow-listed prefix.
+    let (base, captured) = start_mock(r"{}").await;
+    let sink = sink_for("eu-1", base);
+
+    let op = CursorOp::new(
+        ClusterId::from("eu-1"),
+        HttpMethod::Get,
+        "/_cat/../_cluster/settings",
+        Vec::new(),
+    );
+    let err = sink.cursor(op).await.expect_err("a `..` path is refused");
+    assert_eq!(err.code(), osproxy_core::ErrorCode::UpstreamFailed);
+    assert_eq!(
+        captured.lock().unwrap().method,
+        "",
+        "a refused path never reaches the upstream"
+    );
+}
+
+#[tokio::test]
 async fn a_search_appends_its_allow_listed_query_to_the_upstream_url() {
     // The engine forwards only `scroll`/`keep_alive`; the sink appends it so a
     // scroll-opening search actually opens a scroll upstream.
