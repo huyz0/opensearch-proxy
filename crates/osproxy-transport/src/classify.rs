@@ -24,8 +24,22 @@ pub struct Classified {
 /// The path's query string, if any, must already be stripped by the caller.
 #[must_use]
 pub fn classify(method: HttpMethod, path: &str) -> Classified {
-    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    match segments.as_slice() {
+    // No classified endpoint has more than three meaningful path segments
+    // (`/{index}/{verb}/{id}`), and the `Admin` arm only inspects the first. So
+    // collect at most four segments onto the stack — the fourth's mere presence
+    // forces anything longer than a three-segment shape to the `Unknown`/`Admin`
+    // arms, exactly as a full `Vec` would, but without a per-request heap
+    // allocation (classify runs on every request).
+    let mut buf = [""; 4];
+    let mut count = 0usize;
+    for seg in path.split('/').filter(|s| !s.is_empty()) {
+        if count < buf.len() {
+            buf[count] = seg;
+        }
+        count += 1;
+    }
+    let segments = &buf[..count.min(buf.len())];
+    match segments {
         // /{index}/_doc/{id} and /{index}/_create/{id}
         [index, verb @ ("_doc" | "_create"), id] => Classified {
             endpoint: by_id_endpoint(method, verb),

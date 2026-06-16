@@ -45,7 +45,9 @@ osproxy-bench = { path = "crates/osproxy-bench" }
 # Third-party (pinned conservatively; add as milestones need them).
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `raw_value` lets hot paths re-emit untouched JSON subtrees verbatim instead of
+# materializing them into `Value` trees (see `osproxy-rewrite::wrap_query`).
+serde_json = { version = "1", features = ["raw_value"] }
 tokio = { version = "1", default-features = false }
 # HTTP stack for upstream delivery and ingress. hyper-util's pooled client gives
 # us TCP+TLS connection reuse (NFR-P) without hand-rolling a pool.

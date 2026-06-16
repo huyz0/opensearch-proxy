@@ -78,15 +78,18 @@ fn document_transform_budgets() {
         "strip_fields must not allocate (NFR-P3)"
     );
 
-    // wrap_query: parse the client query, nest it under the partition filter, and
-    // re-serialize — the heaviest per-search transform; a baseline to watch.
+    // wrap_query: parse only the top level (sibling subtrees and the client query
+    // stay as raw byte spans via RawValue), nest the query under the partition
+    // filter, and re-serialize — the heaviest per-search transform. Down from 33
+    // when the whole body was materialized into a Value tree; the remaining cost
+    // is the top-level map, the constructed bool subtree, and the output buffer.
     let body = br#"{"query":{"match":{"msg":"hi"}}}"#;
     let filter = vec![(FieldName::from("_tenant"), Value::from("acme"))];
     assert_eq!(
         allocs(|| {
             let _ = std::hint::black_box(wrap_query(body, &filter).unwrap());
         }),
-        33,
+        12,
         "wrap_query allocation budget"
     );
 }

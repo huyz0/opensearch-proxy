@@ -8,8 +8,11 @@
 //! structural enclosure. This is the read-path counterpart of the write-path
 //! field injection.
 
+use std::collections::BTreeMap;
+
 use osproxy_core::FieldName;
-use serde_json::{json, Map, Value};
+use serde_json::value::RawValue;
+use serde_json::{Map, Value};
 
 use crate::error::RewriteError;
 
@@ -43,32 +46,77 @@ use crate::error::RewriteError;
 /// assert_eq!(doc["query"]["bool"]["must"][0]["match"]["msg"], "hi");
 /// ```
 pub fn wrap_query(body: &[u8], filter: &[(FieldName, Value)]) -> Result<Vec<u8>, RewriteError> {
-    let mut root = parse_root(body)?;
+    // Parse only the top level. Untouched sibling keys (`size`, `sort`, `aggs`, …)
+    // and the client's own query stay as raw byte spans rather than being
+    // materialized into `Value` trees — serde still fully validates the JSON and
+    // proves the body is an object, so the isolation guarantee is unchanged; we
+    // only avoid re-allocating subtrees the proxy does not inspect.
+    let mut top = parse_top(body)?;
 
-    // The client's query becomes the inner `must`; absent means match-all.
-    let client_query = root.remove("query");
-    let must = client_query.map_or_else(Vec::new, |q| vec![q]);
-    let filter_terms: Vec<Value> = filter
-        .iter()
-        .map(|(name, value)| json!({ "term": { name.as_str(): value } }))
-        .collect();
+    // The client's query becomes the inner `must`; absent means match-all. It is
+    // re-embedded verbatim (its raw bytes), never re-serialized.
+    let client_query = top.remove("query");
+    let query = build_filtered_query(client_query.as_deref(), filter)?;
+    top.insert("query".to_owned(), query);
 
-    root.insert(
-        "query".to_owned(),
-        json!({ "bool": { "must": must, "filter": filter_terms } }),
-    );
-    serde_json::to_vec(&Value::Object(root)).map_err(|_| RewriteError::InvalidJson)
+    // RawValue values serialize as their raw bytes, so the preserved siblings are
+    // copied out verbatim without a second parse.
+    serde_json::to_vec(&top).map_err(|_| RewriteError::InvalidJson)
 }
 
-/// Parses the search body into its top-level object, treating an empty body as
-/// an empty object (a bare `_search` with no body is a match-all).
-fn parse_root(body: &[u8]) -> Result<Map<String, Value>, RewriteError> {
-    if body.iter().all(u8::is_ascii_whitespace) {
-        return Ok(Map::new());
+/// Builds the `{"bool":{"must":[…],"filter":[…]}}` subtree, embedding the client
+/// query (if any) verbatim and the partition `filter` terms, as one [`RawValue`].
+fn build_filtered_query(
+    client_query: Option<&RawValue>,
+    filter: &[(FieldName, Value)],
+) -> Result<Box<RawValue>, RewriteError> {
+    let mut q = Vec::with_capacity(64 + client_query.map_or(0, |q| q.get().len()));
+    q.extend_from_slice(br#"{"bool":{"must":"#);
+    match client_query {
+        // The client query is a single `must` clause, embedded byte-for-byte.
+        Some(raw) => {
+            q.push(b'[');
+            q.extend_from_slice(raw.get().as_bytes());
+            q.push(b']');
+        }
+        None => q.extend_from_slice(b"[]"),
     }
-    match serde_json::from_slice::<Value>(body).map_err(|_| RewriteError::InvalidJson)? {
-        Value::Object(map) => Ok(map),
-        _ => Err(RewriteError::NotAnObject),
+    q.extend_from_slice(br#","filter":["#);
+    for (i, (name, value)) in filter.iter().enumerate() {
+        if i > 0 {
+            q.push(b',');
+        }
+        q.extend_from_slice(br#"{"term":"#);
+        // Serialize `{<name>: <value>}` with serde so the field name and value are
+        // correctly quoted/escaped — never hand-rolled.
+        let mut term = Map::with_capacity(1);
+        term.insert(name.as_str().to_owned(), value.clone());
+        serde_json::to_writer(&mut q, &term).map_err(|_| RewriteError::InvalidJson)?;
+        q.push(b'}');
+    }
+    q.extend_from_slice(b"]}}");
+
+    let s = String::from_utf8(q).map_err(|_| RewriteError::InvalidJson)?;
+    RawValue::from_string(s).map_err(|_| RewriteError::InvalidJson)
+}
+
+/// Parses the search body's top-level object, with each value left as a raw byte
+/// span. An empty body is an empty object (a bare `_search` is a match-all). A
+/// valid-but-non-object body is [`RewriteError::NotAnObject`]; malformed JSON is
+/// [`RewriteError::InvalidJson`].
+fn parse_top(body: &[u8]) -> Result<BTreeMap<String, Box<RawValue>>, RewriteError> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(BTreeMap::new());
+    }
+    match serde_json::from_slice::<BTreeMap<String, Box<RawValue>>>(body) {
+        Ok(map) => Ok(map),
+        // The map parse fails both for non-object JSON and for malformed JSON;
+        // re-validate (cold path) as a raw value to tell the two apart so the
+        // caller still gets a precise error.
+        Err(_) => match serde_json::from_slice::<&RawValue>(body) {
+            Ok(_) => Err(RewriteError::NotAnObject),
+            Err(_) => Err(RewriteError::InvalidJson),
+        },
     }
 }
 
@@ -119,6 +167,61 @@ mod tests {
         let doc: Value = serde_json::from_slice(&wrapped).unwrap();
         let terms = doc["query"]["bool"]["filter"].as_array().unwrap();
         assert_eq!(terms.len(), 2);
+    }
+
+    #[test]
+    fn a_nested_query_key_is_not_confused_with_the_top_level_one() {
+        // Only the *top-level* `query` is lifted into the bool. A `query` key
+        // nested inside a sibling subtree must ride along untouched.
+        let wrapped = wrap_query(
+            br#"{"query":{"match":{"msg":"hi"}},"aggs":{"q":{"terms":{"field":"query"}}}}"#,
+            &filter(),
+        )
+        .unwrap();
+        let doc: Value = serde_json::from_slice(&wrapped).unwrap();
+        assert_eq!(doc["query"]["bool"]["must"][0]["match"]["msg"], "hi");
+        // The nested aggregation (which itself mentions "query") survives verbatim.
+        assert_eq!(doc["aggs"]["q"]["terms"]["field"], "query");
+    }
+
+    #[test]
+    fn complex_sibling_subtrees_survive_verbatim() {
+        let body = br#"{"size":5,"sort":[{"ts":"desc"},"_score"],"_source":["a","b"],"query":{"term":{"k":"v"}}}"#;
+        let wrapped = wrap_query(body, &filter()).unwrap();
+        let doc: Value = serde_json::from_slice(&wrapped).unwrap();
+        assert_eq!(doc["size"], 5);
+        assert_eq!(doc["sort"][0]["ts"], "desc");
+        assert_eq!(doc["sort"][1], "_score");
+        assert_eq!(doc["_source"][1], "b");
+        assert_eq!(doc["query"]["bool"]["must"][0]["term"]["k"], "v");
+        assert_eq!(doc["query"]["bool"]["filter"][0]["term"]["_tenant"], "acme");
+    }
+
+    #[test]
+    fn escaped_and_unicode_content_in_the_client_query_is_preserved() {
+        // Embedding the query verbatim must not corrupt escapes or non-ASCII.
+        let body = "{\"query\":{\"match\":{\"msg\":\"a\\\"b\\\\c\\té \u{4e2d}\"}}}";
+        let wrapped = wrap_query(body.as_bytes(), &filter()).unwrap();
+        let doc: Value = serde_json::from_slice(&wrapped).unwrap();
+        assert_eq!(
+            doc["query"]["bool"]["must"][0]["match"]["msg"],
+            "a\"b\\c\t\u{e9} \u{4e2d}"
+        );
+    }
+
+    #[test]
+    fn a_non_string_filter_value_is_embedded_correctly() {
+        let wrapped = wrap_query(
+            br#"{"query":{"match_all":{}}}"#,
+            &[
+                (FieldName::from("_active"), Value::from(true)),
+                (FieldName::from("_shard"), Value::from(7)),
+            ],
+        )
+        .unwrap();
+        let doc: Value = serde_json::from_slice(&wrapped).unwrap();
+        assert_eq!(doc["query"]["bool"]["filter"][0]["term"]["_active"], true);
+        assert_eq!(doc["query"]["bool"]["filter"][1]["term"]["_shard"], 7);
     }
 
     #[test]

@@ -37,7 +37,10 @@ pub trait CursorSigner: Send + Sync {
 #[must_use]
 pub fn wrap(signer: &dyn CursorSigner, cluster: &ClusterId, cursor: &str) -> String {
     let tag = signer.tag(&binding(cluster, cursor));
-    let mut out = String::new();
+    // Pre-size to the exact token length so the String never reallocates while
+    // framing: two hex fields (2 chars/byte), two `.` separators, the cursor.
+    let mut out =
+        String::with_capacity(cluster.as_str().len() * 2 + tag.len() * 2 + 2 + cursor.len());
     push_hex(&mut out, cluster.as_str().as_bytes());
     out.push('.');
     push_hex(&mut out, &tag);
@@ -55,11 +58,14 @@ pub fn unwrap(signer: &dyn CursorSigner, token: &str) -> Option<(ClusterId, Stri
     let cluster_hex = parts.next()?;
     let tag_hex = parts.next()?;
     let cursor = parts.next()?;
-    let cluster_bytes = decode_hex(cluster_hex)?;
-    let cluster = ClusterId::from(std::str::from_utf8(&cluster_bytes).ok()?);
-    let provided = decode_hex(tag_hex)?;
+    // Decode the cluster hex straight into the owned String the id will hold, so
+    // there is no intermediate byte Vec to free (the id is move-constructed).
+    let cluster = ClusterId::from(decode_hex_to_string(cluster_hex)?);
+    // Verify by re-deriving the expected tag and comparing it against the
+    // provided hex *in place* — no decoded-tag Vec is allocated. The compare is
+    // constant-time over content for an equal length, like `constant_time_eq`.
     let expected = signer.tag(&binding(&cluster, cursor));
-    if constant_time_eq(&provided, &expected) {
+    if hex_eq_ct(tag_hex, &expected) {
         Some((cluster, cursor.to_owned()))
     } else {
         None
@@ -76,16 +82,23 @@ fn binding(cluster: &ClusterId, cursor: &str) -> Vec<u8> {
     msg
 }
 
-/// Constant-time equality of two byte slices — unequal lengths are unequal, and
-/// equal lengths compare without an early return, so a forged tag leaks no timing
-/// signal about how many bytes matched.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
+/// Constant-time equality of `expected` (raw bytes) against a hex string, without
+/// decoding the hex into its own buffer. A length mismatch is unequal; for an
+/// equal length the loop runs to completion without an early return, so a forged
+/// tag leaks no timing signal about how many bytes matched. A non-hex digit makes
+/// the whole comparison unequal (a malformed tag is a forged tag).
+fn hex_eq_ct(hex: &str, expected: &[u8]) -> bool {
+    let hex = hex.as_bytes();
+    if hex.len() != expected.len() * 2 {
         return false;
     }
     let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
+    for (pair, &want) in hex.chunks_exact(2).zip(expected.iter()) {
+        match (hex_val(pair[0]), hex_val(pair[1])) {
+            (Some(hi), Some(lo)) => diff |= ((hi << 4) | lo) ^ want,
+            // Mark a mismatch but keep scanning: no early return on content.
+            _ => diff |= 1,
+        }
     }
     diff == 0
 }
@@ -99,9 +112,11 @@ fn push_hex(out: &mut String, bytes: &[u8]) {
     }
 }
 
-/// Decodes a lowercase/uppercase hex string into bytes, or `None` on an odd
-/// length or a non-hex digit.
-fn decode_hex(hex: &str) -> Option<Vec<u8>> {
+/// Decodes a lowercase/uppercase hex string directly into an owned UTF-8 string,
+/// or `None` on an odd length, a non-hex digit, or non-UTF-8 bytes. The decode
+/// buffer becomes the `String` without a second allocation, so recovering the
+/// cluster id costs one allocation rather than a byte `Vec` plus a copy.
+fn decode_hex_to_string(hex: &str) -> Option<String> {
     if !hex.len().is_multiple_of(2) {
         return None;
     }
@@ -112,7 +127,7 @@ fn decode_hex(hex: &str) -> Option<Vec<u8>> {
         let lo = hex_val(pair[1])?;
         out.push((hi << 4) | lo);
     }
-    Some(out)
+    String::from_utf8(out).ok()
 }
 
 /// The value of a single hex digit, or `None` if it is not one.

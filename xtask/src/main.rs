@@ -195,10 +195,14 @@ fn bench() -> Result<(), String> {
 /// gate: wall-clock is host-specific and noisy, so it must never fail a build;
 /// the deterministic gates stay dhat (alloc) and iai-callgrind (instructions).
 fn bench_local() -> Result<(), String> {
-    cargo(
-        &["bench", "-p", "osproxy-rewrite", "--bench", "hot_paths"],
-        &[],
-    )
+    for (pkg, bench) in [
+        ("osproxy-rewrite", "hot_paths"),
+        ("osproxy-transport", "classify"),
+        ("osproxy-observe", "directive"),
+    ] {
+        cargo(&["bench", "-p", pkg, "--bench", bench], &[])?;
+    }
+    Ok(())
 }
 
 /// Builds and tests the FIPS build (`--features fips`), which the default gates

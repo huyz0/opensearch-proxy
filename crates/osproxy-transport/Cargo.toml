@@ -43,6 +43,12 @@ hyper = { workspace = true, features = ["client"] }
 hyper-util = { workspace = true, features = ["client", "client-legacy", "http1", "http2", "tokio"] }
 tonic = { workspace = true, features = ["server", "router", "transport", "channel", "tls-ring"] }
 rcgen.workspace = true
+dhat = "0.3"
+divan.workspace = true
+
+[[bench]]
+name = "classify"
+harness = false
 
 [lints]
 workspace = true

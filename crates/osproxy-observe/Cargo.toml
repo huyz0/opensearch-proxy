@@ -13,5 +13,13 @@ osproxy-core.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 
+[dev-dependencies]
+dhat = "0.3"
+divan.workspace = true
+
+[[bench]]
+name = "directive"
+harness = false
+
 [lints]
 workspace = true
