@@ -43,6 +43,15 @@ pub enum RequestError {
         /// A short, value-free description of the violated invariant.
         reason: &'static str,
     },
+
+    /// A scroll/PIT cursor could not be resolved to its pinned cluster — its
+    /// affinity envelope is absent, malformed, or fails its signature. The client
+    /// must re-issue the originating search (`docs/03` §6).
+    #[error("cursor unresolvable: {reason}")]
+    Cursor {
+        /// A short, value-free reason (e.g. `"missing"`, `"bad signature"`).
+        reason: &'static str,
+    },
 }
 
 impl RequestError {
@@ -58,6 +67,7 @@ impl RequestError {
             // rejected request shape; reuse the unsupported-endpoint code until
             // a dedicated rewrite code is added (additive, docs/08 §7).
             Self::Rewrite(_) | Self::Internal { .. } => ErrorCode::UnsupportedEndpoint,
+            Self::Cursor { .. } => ErrorCode::CursorUnresolvable,
         }
     }
 
@@ -69,7 +79,9 @@ impl RequestError {
             Self::Sink(e) => e.retryable(),
             // A stale epoch is retryable: the retry re-resolves the placement.
             Self::StaleEpoch { .. } => true,
-            Self::Rewrite(_) | Self::Internal { .. } => false,
+            // Malformed body, internal bug, or an unresolvable cursor: a blind
+            // retry cannot help (the cursor case wants a re-issued search).
+            Self::Rewrite(_) | Self::Internal { .. } | Self::Cursor { .. } => false,
         }
     }
 }

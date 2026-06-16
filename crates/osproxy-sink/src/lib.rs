@@ -32,5 +32,7 @@ pub use conn::PoolStats;
 pub use error::SinkError;
 pub use memory::MemorySink;
 pub use opensearch::OpenSearchSink;
-pub use read::{CountOutcome, ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome};
+pub use read::{
+    CountOutcome, CursorOp, CursorOutcome, ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome,
+};
 pub use sink::Sink;

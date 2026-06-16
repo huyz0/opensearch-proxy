@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use osproxy_core::{Clock, EndpointKind, RequestId, SystemClock};
+use osproxy_core::{Clock, CursorSigner, EndpointKind, RequestId, SystemClock};
 use osproxy_observe::{
     explain_json, resource_spans, BreakGlassBuffer, ClassifyInfo, DiagLevel, DirectiveSet,
     DirectiveStore, DirectiveVerifier, EgressInfo, ExplainStore, NoVerifier, NoopExporter,
@@ -67,6 +67,10 @@ pub struct Pipeline<T, S> {
     /// The break-glass tape, captured into only when a `ring_buffer` directive
     /// applies to a request. Empty (near-zero cost) until then.
     break_glass: Arc<BreakGlassBuffer>,
+    /// Signs/verifies scroll & PIT affinity envelopes (`docs/03` §6). `None` =
+    /// affinity **off** (the opt-in default): cursor requests fail closed with a
+    /// `CursorUnresolvable` error rather than route blindly.
+    pub(crate) cursor_signer: Option<Arc<dyn CursorSigner>>,
 }
 
 /// The diagnostics decision for one request: how much to record/export, and
@@ -107,7 +111,17 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             directive_store: Arc::new(Arc::new(DirectiveSet::new())),
             verifier: Arc::new(NoVerifier),
             break_glass: Arc::new(BreakGlassBuffer::new(BREAK_GLASS_CAPACITY)),
+            cursor_signer: None,
         }
+    }
+
+    /// Enables opt-in scroll/PIT cursor affinity (`docs/03` §6) with `signer`
+    /// signing the cluster↔cursor envelope. Without this, cursor requests fail
+    /// closed (`CursorUnresolvable`) rather than route to an unknown cluster.
+    #[must_use]
+    pub fn with_cursor_signer(mut self, signer: Arc<dyn CursorSigner>) -> Self {
+        self.cursor_signer = Some(signer);
+        self
     }
 
     /// Sets the placement-backend retry policy (builder style).
@@ -317,6 +331,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             EndpointKind::Search => self.search(ctx, trace).await,
             EndpointKind::MultiSearch => self.multi_search(ctx, trace).await,
             EndpointKind::Count => self.count(ctx, trace).await,
+            EndpointKind::Cursor => self.cursor(ctx, trace).await,
             other => Err(RequestError::Spi(SpiError::UnsupportedEndpoint {
                 endpoint: other,
             })),

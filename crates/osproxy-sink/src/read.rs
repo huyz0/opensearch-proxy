@@ -7,8 +7,8 @@
 //!
 //! [`Sink`]: crate::Sink
 
-use osproxy_core::{Target, TraceContext};
-use osproxy_spi::Protocol;
+use osproxy_core::{ClusterId, Target, TraceContext};
+use osproxy_spi::{HttpMethod, Protocol};
 
 use crate::error::SinkError;
 
@@ -211,6 +211,78 @@ impl CountOutcome {
     }
 }
 
+/// A raw cursor passthrough op (`docs/03` §6): forward `method path` with `body`
+/// to the specific `cluster` the cursor is pinned to — scroll/PIT continue,
+/// clear, or close. Unlike the typed ops, the destination is *already resolved*
+/// (the engine recovered it from the cursor's signed envelope), so this carries
+/// the cluster directly rather than a partition.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CursorOp {
+    /// The cluster the cursor is pinned to.
+    pub cluster: ClusterId,
+    /// The HTTP method to forward (continue is `POST`/`GET`, clear/close `DELETE`).
+    pub method: HttpMethod,
+    /// The upstream path (e.g. `/_search/scroll`), already with the real cursor id.
+    pub path: String,
+    /// The request body to forward (the real, unwrapped cursor id substituted in).
+    pub body: Vec<u8>,
+    /// The upstream wire protocol. Defaults to [`Protocol::Http1`].
+    pub protocol: Protocol,
+    /// The W3C trace context to forward downstream.
+    pub trace: Option<TraceContext>,
+}
+
+impl CursorOp {
+    /// Constructs a cursor passthrough op (defaulting to HTTP/1.1 upstream).
+    #[must_use]
+    pub fn new(
+        cluster: ClusterId,
+        method: HttpMethod,
+        path: impl Into<String>,
+        body: Vec<u8>,
+    ) -> Self {
+        Self {
+            cluster,
+            method,
+            path: path.into(),
+            body,
+            protocol: Protocol::Http1,
+            trace: None,
+        }
+    }
+
+    /// Sets the trace context to propagate downstream (builder style).
+    #[must_use]
+    pub fn with_trace(mut self, trace: Option<TraceContext>) -> Self {
+        self.trace = trace;
+        self
+    }
+}
+
+/// The outcome of a cursor passthrough: the upstream status and raw body,
+/// forwarded back to the client verbatim.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CursorOutcome {
+    /// The upstream HTTP status.
+    pub status: u16,
+    /// The raw upstream response body.
+    pub body: Vec<u8>,
+    /// Whether this op rode a reused pooled connection (NFR-P telemetry).
+    pub pool_reuse: bool,
+}
+
+impl CursorOutcome {
+    /// Constructs a cursor outcome.
+    #[must_use]
+    pub fn new(status: u16, body: Vec<u8>) -> Self {
+        Self {
+            status,
+            body,
+            pool_reuse: false,
+        }
+    }
+}
+
 /// Where reads come from.
 ///
 /// The read counterpart of [`Sink`](crate::Sink). Kept separate because a read
@@ -259,4 +331,24 @@ pub trait Reader: Send + Sync {
         &self,
         op: SearchOp,
     ) -> impl std::future::Future<Output = Result<CountOutcome, SinkError>> + Send;
+
+    /// Forwards a raw cursor request to its pinned cluster (scroll/PIT continue,
+    /// clear, close). The default is **unsupported** — a sink that cannot
+    /// passthrough (the in-memory test sink, a write-only queue) rejects it;
+    /// `OpenSearchSink` overrides it with a real upstream call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SinkError`] if the sink does not support passthrough or the
+    /// upstream cannot be reached.
+    fn cursor(
+        &self,
+        _op: CursorOp,
+    ) -> impl std::future::Future<Output = Result<CursorOutcome, SinkError>> + Send {
+        async {
+            Err(SinkError::Transport {
+                kind: "cursor passthrough not supported by this sink",
+            })
+        }
+    }
 }

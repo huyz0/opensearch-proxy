@@ -7,7 +7,8 @@
 //! of each endpoint, kept separate so neither file becomes a god module.
 
 use osproxy_core::TraceContext;
-use osproxy_sink::{Reader, Sink, WriteAck, WriteBatch};
+use osproxy_observe::DispatchInfo;
+use osproxy_sink::{CursorOp, Reader, Sink, WriteAck, WriteBatch};
 use osproxy_spi::{RequestCtx, TenancySpi};
 use osproxy_tenancy::Resolved;
 
@@ -243,6 +244,69 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             body,
         })
     }
+
+    /// The cursor (scroll/PIT) continue/clear path (`docs/03` §6): recover the
+    /// pinned cluster from the request's signed affinity envelope and forward the
+    /// raw op there, **bypassing partition resolution**. Fails closed with
+    /// `CursorUnresolvable` when affinity is off or the envelope does not verify —
+    /// never a blind cross-cluster dispatch.
+    pub(crate) async fn cursor(
+        &self,
+        ctx: &RequestCtx<'_>,
+        trace: &mut RequestTrace,
+    ) -> Result<PipelineResponse, RequestError> {
+        let Some(signer) = &self.cursor_signer else {
+            return Err(RequestError::Cursor {
+                reason: "cursor affinity is not enabled",
+            });
+        };
+        let wrapped = wrapped_scroll_id(ctx).ok_or(RequestError::Cursor {
+            reason: "no cursor id in the request",
+        })?;
+        let (cluster, real_id) = osproxy_core::cursor::unwrap(signer.as_ref(), &wrapped).ok_or(
+            RequestError::Cursor {
+                reason: "cursor envelope is invalid or expired",
+            },
+        )?;
+        // Always forward the body form upstream with the real id substituted, so a
+        // large scroll id never rides in a URL path (`docs/03` §6).
+        let body = scroll_continue_body(ctx.body(), &real_id);
+        let op = CursorOp::new(cluster.clone(), ctx.method(), "/_search/scroll", body)
+            .with_trace(Some(wire_trace(ctx)));
+        let outcome = self.sink.cursor(op).await?;
+        trace.record_dispatch(DispatchInfo {
+            cluster,
+            upstream_status: outcome.status,
+            pool_reuse: outcome.pool_reuse,
+        });
+        Ok(PipelineResponse {
+            status: outcome.status,
+            body: outcome.body,
+        })
+    }
+}
+
+/// The wrapped scroll id carried by a cursor request: the path form
+/// (`/_search/scroll/{id}`) rides in the doc id, the body form in `scroll_id`.
+fn wrapped_scroll_id(ctx: &RequestCtx<'_>) -> Option<String> {
+    if let Some(id) = ctx.doc_id() {
+        return Some(id.to_owned());
+    }
+    let v: serde_json::Value = serde_json::from_slice(ctx.body()).ok()?;
+    v.get("scroll_id")?.as_str().map(str::to_owned)
+}
+
+/// The upstream scroll body with the real (unwrapped) id substituted, preserving
+/// any `scroll` keep-alive the client sent; falls back to a minimal body for the
+/// path form (which carries none).
+fn scroll_continue_body(client_body: &[u8], real_id: &str) -> Vec<u8> {
+    let mut v = serde_json::from_slice::<serde_json::Value>(client_body)
+        .ok()
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    v["scroll_id"] = serde_json::Value::String(real_id.to_owned());
+    serde_json::to_vec(&v)
+        .unwrap_or_else(|_| format!(r#"{{"scroll_id":"{real_id}"}}"#).into_bytes())
 }
 
 /// The W3C trace context to forward to the upstream for this request: continues

@@ -134,6 +134,9 @@ fn remediation(err: &RequestError) -> &'static str {
             "the partition is migrating; retry to re-resolve the new placement"
         }
         RequestError::Internal { .. } => "internal error; inspect logs",
+        RequestError::Cursor { .. } => {
+            "the scroll/PIT cursor is expired or invalid; re-issue the originating search"
+        }
     }
 }
 

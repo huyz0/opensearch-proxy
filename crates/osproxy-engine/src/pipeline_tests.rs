@@ -102,7 +102,8 @@ async fn ingest_doc_returns_created_response() {
 
 #[tokio::test]
 async fn unimplemented_endpoint_is_unsupported() {
-    // Cursor is tenancy-aware but not yet wired in the pipeline (M5).
+    // Admin endpoints (`_cat`/`_cluster`) have no tenancy semantics and are not
+    // wired in the pipeline — they fall through to a typed unsupported error.
     let p = pipeline();
     let principal = Principal::new(PrincipalId::from("svc"));
     let rid = RequestId::from("r");
@@ -111,14 +112,14 @@ async fn unimplemented_endpoint_is_unsupported() {
         &principal,
         &rid,
         &headers,
-        EndpointKind::Cursor,
+        EndpointKind::Admin,
         br#"{"q":1}"#,
     );
     let err = p.handle(&c).await.unwrap_err();
     assert!(matches!(
         err,
         RequestError::Spi(SpiError::UnsupportedEndpoint {
-            endpoint: EndpointKind::Cursor
+            endpoint: EndpointKind::Admin
         })
     ));
 }

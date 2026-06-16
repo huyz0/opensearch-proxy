@@ -40,6 +40,10 @@ pub enum ErrorCode {
     UpstreamFailed,
     /// The proxy is shedding load.
     Overloaded,
+    /// A scroll/PIT cursor could not be resolved to its pinned cluster — its
+    /// affinity envelope is missing, malformed, or unverifiable. The client must
+    /// re-issue the originating search (`docs/03` §6).
+    CursorUnresolvable,
 }
 
 impl ErrorCode {
@@ -56,6 +60,7 @@ impl ErrorCode {
             Self::Unauthorized => "unauthorized",
             Self::UpstreamFailed => "upstream_failed",
             Self::Overloaded => "overloaded",
+            Self::CursorUnresolvable => "cursor_unresolvable",
         }
     }
 }
@@ -156,6 +161,7 @@ mod tests {
             ErrorCode::Unauthorized,
             ErrorCode::UpstreamFailed,
             ErrorCode::Overloaded,
+            ErrorCode::CursorUnresolvable,
         ];
         let mut seen = std::collections::HashSet::new();
         for code in all {
