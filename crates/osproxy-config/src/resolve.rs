@@ -136,6 +136,7 @@ fn observability(raw: &Raw) -> Result<ObservabilityConfig, ConfigError> {
         diag_baseline: diag_baseline(raw)?,
         debug_directive_key: opt(raw, "debug_directive_key"),
         directive_admin_token: opt(raw, "directive_admin_token"),
+        debug_endpoints: bool_or(raw, "debug_endpoints", true)?,
     })
 }
 

@@ -82,6 +82,10 @@ pub struct ObservabilityConfig {
     pub debug_directive_key: Option<String>,
     /// The bearer token gating `POST/GET /admin/directives`, or `None` (disabled).
     pub directive_admin_token: Option<String>,
+    /// Whether the pre-auth `/debug/explain` and `/debug/breakglass` surfaces are
+    /// served (default `true`). Set `false` in production so operational metadata
+    /// is not exposed unauthenticated; `/metrics` stays on regardless.
+    pub debug_endpoints: bool,
 }
 
 /// The admin pass-through policy: the cluster that answers admin requests and the

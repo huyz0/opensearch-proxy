@@ -23,6 +23,17 @@ pub(crate) fn matches(headers: &[(String, String)], expected: &str) -> bool {
     token_eq(parse(headers).unwrap_or("").as_bytes(), expected.as_bytes())
 }
 
+/// The header list with any `Authorization` header removed (case-insensitive),
+/// so the credential consumed at the ingress never travels into the pipeline,
+/// observability, or logs.
+pub(crate) fn without_authorization(headers: &[(String, String)]) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case("authorization"))
+        .cloned()
+        .collect()
+}
+
 /// Constant-time comparison **for equal-length inputs** (no early return on the
 /// first differing byte). The length itself is not concealed — acceptable for a
 /// fixed shared token, where the length is not the secret.
@@ -62,6 +73,25 @@ mod tests {
         assert!(!matches(&auth("Bearer s3cre"), "s3cret"));
         assert!(!matches(&auth("Bearer s3cret!"), "s3cret"));
         assert!(!matches(&auth("s3cret"), "s3cret"), "scheme required");
+    }
+
+    #[test]
+    fn without_authorization_strips_only_that_header_case_insensitively() {
+        let headers = vec![
+            ("Authorization".to_owned(), "Bearer s3cret".to_owned()),
+            ("content-type".to_owned(), "application/json".to_owned()),
+            ("x-tenant".to_owned(), "acme".to_owned()),
+        ];
+        let safe = without_authorization(&headers);
+        assert!(
+            !safe
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("authorization")),
+            "the credential is gone: {safe:?}"
+        );
+        // Everything the engine still needs survives.
+        assert!(safe.iter().any(|(k, _)| k == "content-type"));
+        assert!(safe.iter().any(|(k, v)| k == "x-tenant" && v == "acme"));
     }
 
     #[test]

@@ -70,7 +70,8 @@ async fn run() -> Result<(), String> {
     let handler = Arc::new(with_directive_admin(
         AppHandler::new(pipeline, ReferenceAuthenticator::new(tokens))
             .with_request_log(request_log(cfg.observability.log_requests))
-            .with_require_tls_for_mutation(cfg.require_tls_for_mutation),
+            .with_require_tls_for_mutation(cfg.require_tls_for_mutation)
+            .with_debug_endpoints(debug_endpoints(cfg.observability.debug_endpoints)),
         directive_store,
         cfg.observability.directive_admin_token.as_deref(),
     ));
@@ -159,6 +160,20 @@ fn request_log(enabled: bool) -> Box<dyn RequestLog> {
     } else {
         Box::new(NoLog)
     }
+}
+
+/// Announces whether the pre-auth `/debug/*` diagnostics surfaces are served and
+/// returns the flag for the handler. Default on; set `OSPROXY_DEBUG_ENDPOINTS=false`
+/// in production so operational metadata is not exposed unauthenticated.
+fn debug_endpoints(enabled: bool) -> bool {
+    if enabled {
+        println!(
+            "osproxy /debug endpoints: on (disable with OSPROXY_DEBUG_ENDPOINTS=false in prod)"
+        );
+    } else {
+        println!("osproxy /debug endpoints: off");
+    }
+    enabled
 }
 
 /// Wires OTLP span export onto the pipeline when `OSPROXY_OTLP_ENDPOINT` is set

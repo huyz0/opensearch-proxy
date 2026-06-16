@@ -1,5 +1,10 @@
 //! The ingress handler: authenticates the caller, builds a request context, and
 //! drives the engine pipeline, mapping the outcome to an HTTP response.
+//
+// JUSTIFY(file-length): the single ingress-orchestration point — pre-auth
+// introspection routing, the TLS and auth/authz gates, and data-plane dispatch
+// are one cohesive flow over the handler's private state; splitting it would
+// force those fields pub(crate) and scatter the request lifecycle across files.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -47,6 +52,11 @@ pub struct AppHandler<A, Z = AllowAllAuthorizer> {
     /// (NFR-S1) — the proxy must terminate TLS to rewrite the stream. An operator
     /// on a trusted network can opt out.
     require_tls_for_mutation: bool,
+    /// When true (default), the pre-auth `/debug/explain` and `/debug/breakglass`
+    /// surfaces are served. They are shape-only, but still expose operational
+    /// metadata to anyone who can reach the port, so production deployments turn
+    /// them off; disabled, both report `not_enabled` (`/metrics` stays on).
+    debug_endpoints: bool,
 }
 
 impl<A, Z> std::fmt::Debug for AppHandler<A, Z> {
@@ -72,6 +82,7 @@ impl<A: Authenticator> AppHandler<A, AllowAllAuthorizer> {
             directive_admin: None,
             metrics: Metrics::new(),
             require_tls_for_mutation: true,
+            debug_endpoints: true,
         }
     }
 }
@@ -91,7 +102,17 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
             directive_admin: self.directive_admin,
             metrics: self.metrics,
             require_tls_for_mutation: self.require_tls_for_mutation,
+            debug_endpoints: self.debug_endpoints,
         }
+    }
+
+    /// Sets whether the pre-auth `/debug/explain` and `/debug/breakglass`
+    /// surfaces are served (builder style). Default `true`; set `false` in
+    /// production so operational metadata is not exposed unauthenticated.
+    #[must_use]
+    pub fn with_debug_endpoints(mut self, enabled: bool) -> Self {
+        self.debug_endpoints = enabled;
+        self
     }
 
     /// Sets whether body-mutating requests are refused over cleartext (NFR-S1).
@@ -199,18 +220,32 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
     /// token-gated `/admin/directives` (GET reads, POST publishes). Returns `Some`
     /// when `req` targets one of them, else `None` (the request is data plane).
     fn introspection_route(&self, req: &IngressRequest) -> Option<IngressResponse> {
-        // /debug/explain/{id}: the shape-only causal trace for one request.
-        if let Some(id) = req.path.strip_prefix("/debug/explain/") {
-            return Some(match self.pipeline.explain(&RequestId::from(id)) {
-                Some(doc) => IngressResponse::json(200, doc.to_string().into_bytes()),
-                None => IngressResponse::json(404, br#"{"error":"unknown_request_id"}"#.to_vec()),
-            });
-        }
-        // /debug/breakglass: the forensic tape captured under a ring_buffer
-        // directive (`docs/05` §5), oldest first. Shape-only like the explain doc.
-        if req.path == "/debug/breakglass" {
-            let tape = serde_json::Value::Array(self.pipeline.break_glass().snapshot());
-            return Some(IngressResponse::json(200, tape.to_string().into_bytes()));
+        // /debug/*: the shape-only diagnostics surfaces, served only when enabled
+        // (off in production so operational metadata is not exposed unauthenticated).
+        // Disabled, they report `not_enabled` rather than 404, to distinguish "turned
+        // off here" from "no such route".
+        if req.path.starts_with("/debug/") {
+            if !self.debug_endpoints {
+                return Some(IngressResponse::json(
+                    404,
+                    br#"{"error":"not_enabled"}"#.to_vec(),
+                ));
+            }
+            // /debug/explain/{id}: the shape-only causal trace for one request.
+            if let Some(id) = req.path.strip_prefix("/debug/explain/") {
+                return Some(match self.pipeline.explain(&RequestId::from(id)) {
+                    Some(doc) => IngressResponse::json(200, doc.to_string().into_bytes()),
+                    None => {
+                        IngressResponse::json(404, br#"{"error":"unknown_request_id"}"#.to_vec())
+                    }
+                });
+            }
+            // /debug/breakglass: the forensic tape captured under a ring_buffer
+            // directive (`docs/05` §5), oldest first. Shape-only like the explain doc.
+            if req.path == "/debug/breakglass" {
+                let tape = serde_json::Value::Array(self.pipeline.break_glass().snapshot());
+                return Some(IngressResponse::json(200, tape.to_string().into_bytes()));
+            }
         }
         // /metrics: the always-on, prod-safe operational snapshot (shape-only
         // counts/rates/cluster ids, so no auth; see `metrics_snapshot`).
@@ -295,6 +330,11 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
                 .with_header("x-request-id", request_id.as_str());
         }
 
+        // The credentials were consumed above; strip the `Authorization` header so
+        // the bearer token never reaches the pipeline, observability, or logs. The
+        // partition header, `traceparent`, and `x-debug-directive` are preserved —
+        // the engine still needs them.
+        let safe_headers = crate::bearer::without_authorization(&req.headers);
         let ctx = RequestCtx::new(
             &principal,
             &request_id,
@@ -302,7 +342,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
             req.endpoint,
             req.protocol,
             &req.logical_index,
-            HeaderView::new(&req.headers),
+            HeaderView::new(&safe_headers),
             &req.body,
         )
         .with_doc_id(req.doc_id.as_deref())

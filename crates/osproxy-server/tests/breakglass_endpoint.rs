@@ -59,6 +59,33 @@ async fn the_breakglass_endpoint_returns_the_captured_tape() {
 }
 
 #[tokio::test]
+async fn debug_endpoints_are_refused_when_disabled() {
+    // Production posture: with /debug off, both diagnostics surfaces report
+    // not_enabled (pre-auth, like when on), while /metrics stays available.
+    let tape = Arc::new(BreakGlassBuffer::new(8));
+    tape.capture(json!({"request_id": "r1", "outcome": "ok"}));
+
+    let endpoints: HashMap<ClusterId, String> = HashMap::new();
+    let sink = OpenSearchSink::new(endpoints);
+    let tenancy = ReferenceTenancy::new(ClusterId::from("c"), IndexName::from("shared"));
+    let pipeline = Pipeline::new(TenancyRouter::new(tenancy), sink).with_break_glass(tape);
+    let handler =
+        AppHandler::new(pipeline, ReferenceAuthenticator::dev()).with_debug_endpoints(false);
+
+    let bg = handler.handle(get("/debug/breakglass")).await;
+    assert_eq!(bg.status, 404, "breakglass refused when disabled");
+    assert!(String::from_utf8_lossy(&bg.body).contains("not_enabled"));
+
+    let explain = handler.handle(get("/debug/explain/whatever")).await;
+    assert_eq!(explain.status, 404, "explain refused when disabled");
+    assert!(String::from_utf8_lossy(&explain.body).contains("not_enabled"));
+
+    // /metrics is the always-on, prod-safe surface — unaffected by the switch.
+    let metrics = handler.handle(get("/metrics")).await;
+    assert_eq!(metrics.status, 200, "metrics stays on when /debug is off");
+}
+
+#[tokio::test]
 async fn an_empty_tape_is_an_empty_array() {
     let endpoints: HashMap<ClusterId, String> = HashMap::new();
     let sink = OpenSearchSink::new(endpoints);
