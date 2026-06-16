@@ -38,6 +38,20 @@ pub fn classify(method: HttpMethod, path: &str) -> Classified {
             logical_index: (*index).to_owned(),
             doc_id: None,
         },
+        // Cursor lifecycle — scroll & PIT, bound to the cluster that created them
+        // (`docs/03` §6). These carry a wrapped cursor the engine unwraps to route
+        // to the pinned cluster; the path-form scroll id rides in `doc_id`.
+        //   /_search/scroll (body-form scroll continue/clear) and /_pit (PIT
+        //   delete) — both carry the wrapped cursor in the body, no logical index.
+        ["_search", "scroll"] | ["_pit"] => classified(EndpointKind::Cursor, ""),
+        //   /_search/scroll/{scroll_id} (path-form continue/clear)
+        ["_search", "scroll", scroll_id] => Classified {
+            endpoint: EndpointKind::Cursor,
+            logical_index: String::new(),
+            doc_id: Some((*scroll_id).to_owned()),
+        },
+        //   /{index}/_pit (create — resolves the index's cluster, wraps the id)
+        [index, "_pit"] => classified(EndpointKind::Cursor, index),
         // /{index}/_search and /{index}/_count
         [index, "_search"] => classified(EndpointKind::Search, index),
         [index, "_count"] => classified(EndpointKind::Count, index),
@@ -162,6 +176,41 @@ mod tests {
         assert_eq!(
             classify(HttpMethod::Post, "/orders/_bulk").endpoint,
             EndpointKind::IngestBulk
+        );
+    }
+
+    #[test]
+    fn scroll_and_pit_paths_are_cursor() {
+        // Scroll continue/clear — body form and path form.
+        assert_eq!(
+            classify(HttpMethod::Post, "/_search/scroll").endpoint,
+            EndpointKind::Cursor
+        );
+        let path_form = classify(HttpMethod::Get, "/_search/scroll/c2Nyb2xs");
+        assert_eq!(path_form.endpoint, EndpointKind::Cursor);
+        assert_eq!(path_form.doc_id.as_deref(), Some("c2Nyb2xs"));
+        assert!(
+            classify(HttpMethod::Delete, "/_search/scroll")
+                .logical_index
+                .is_empty(),
+            "scroll clear carries no logical index"
+        );
+        // PIT create resolves the named index's cluster; PIT delete does not.
+        let pit_create = classify(HttpMethod::Post, "/orders/_pit");
+        assert_eq!(pit_create.endpoint, EndpointKind::Cursor);
+        assert_eq!(pit_create.logical_index, "orders");
+        let pit_delete = classify(HttpMethod::Delete, "/_pit");
+        assert_eq!(pit_delete.endpoint, EndpointKind::Cursor);
+        assert!(pit_delete.logical_index.is_empty());
+    }
+
+    #[test]
+    fn a_real_search_is_not_mistaken_for_a_cursor() {
+        // `_search` on an index is a normal search; only `_search/scroll` is a
+        // cursor, so the new arms must not shadow the search arm.
+        assert_eq!(
+            classify(HttpMethod::Post, "/orders/_search").endpoint,
+            EndpointKind::Search
         );
     }
 
