@@ -13,6 +13,9 @@ use std::collections::HashMap;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use osproxy_config::{
+    AdminPassthroughConfig, Config, DiagBaseline, ObservabilityConfig, TlsConfig,
+};
 use osproxy_core::{ClusterId, IndexName, SystemClock};
 use osproxy_engine::{AdminPolicy, Pipeline};
 use osproxy_observe::{DiagLevel, InMemoryDirectiveStore};
@@ -42,64 +45,60 @@ async fn main() -> ExitCode {
     }
 }
 
-/// Reads configuration from the environment, builds the pipeline, and serves
-/// until interrupted.
+/// Loads and validates configuration (file → env → flags), builds the pipeline,
+/// and serves until interrupted.
 async fn run() -> Result<(), String> {
-    let bind = env_or("OSPROXY_BIND", "127.0.0.1:8080");
-    let upstream = env_or("OSPROXY_UPSTREAM", "http://127.0.0.1:9200");
-    let index = env_or("OSPROXY_INDEX", "osproxy-shared");
+    // Load + fully validate config (file → env → flags) before any socket opens;
+    // an invalid value is a typed error naming the field (`docs/01` §6).
+    let cfg = Config::load(std::env::args().skip(1)).map_err(|e| e.to_string())?;
     let cluster = ClusterId::from("default");
 
     let mut endpoints = HashMap::new();
-    endpoints.insert(cluster.clone(), upstream.clone());
+    endpoints.insert(cluster.clone(), cfg.upstream.clone());
     let sink = OpenSearchSink::new(endpoints);
 
-    let tenancy = ReferenceTenancy::new(cluster, IndexName::from(index.as_str()));
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from(cfg.index.as_str()));
     // The fleet directive store the pipeline reads and the admin endpoint writes.
     let directive_store = Arc::new(InMemoryDirectiveStore::new());
-    let pipeline = assemble_pipeline(tenancy, sink, directive_store.clone())?;
+    let pipeline = assemble_pipeline(tenancy, sink, directive_store.clone(), &cfg);
 
-    let tokens = parse_tokens(&env_or("OSPROXY_TOKENS", ""));
+    let tokens: HashMap<String, String> = cfg.tokens.iter().cloned().collect();
     let auth_mode = if tokens.is_empty() {
         "dev (open)"
     } else {
         "token"
     };
-    // NFR-S1 enforcement is on by default; an operator on a trusted network can
-    // opt out with OSPROXY_ALLOW_CLEARTEXT_MUTATION=1 (e.g. local/dev over h1).
-    let require_tls = !env_truthy("OSPROXY_ALLOW_CLEARTEXT_MUTATION");
     let handler = Arc::new(with_directive_admin(
         AppHandler::new(pipeline, ReferenceAuthenticator::new(tokens))
-            .with_request_log(request_log())
-            .with_require_tls_for_mutation(require_tls),
+            .with_request_log(request_log(cfg.observability.log_requests))
+            .with_require_tls_for_mutation(cfg.require_tls_for_mutation),
         directive_store,
+        cfg.observability.directive_admin_token.as_deref(),
     ));
 
-    let listener = TcpListener::bind(&bind)
+    let listener = TcpListener::bind(cfg.bind)
         .await
-        .map_err(|e| format!("binding {bind}: {e}"))?;
+        .map_err(|e| format!("binding {}: {e}", cfg.bind))?;
 
-    // TLS when both cert and key paths are configured; cleartext otherwise. The
-    // same provider terminates the HTTP and gRPC listeners.
-    let provider = load_tls_provider()?.map(Arc::new);
+    // TLS when cert + key paths are configured; cleartext otherwise. The same
+    // provider terminates the HTTP and gRPC listeners.
+    let provider = load_tls_provider(cfg.tls.as_ref())?.map(Arc::new);
 
     // Optional gRPC ingress on its own listener, driving the same handler
     // (same pipeline, tenancy, and observability) as the HTTP front door.
-    if let Some(grpc_bind) = std::env::var("OSPROXY_GRPC_BIND")
-        .ok()
-        .filter(|v| !v.is_empty())
-    {
-        let grpc_listener = TcpListener::bind(&grpc_bind)
+    if let Some(grpc_bind) = cfg.grpc_bind {
+        let grpc_listener = TcpListener::bind(grpc_bind)
             .await
             .map_err(|e| format!("binding gRPC {grpc_bind}: {e}"))?;
         spawn_grpc(
             grpc_listener,
             provider.clone(),
             Arc::clone(&handler),
-            &grpc_bind,
+            &grpc_bind.to_string(),
         );
     }
 
+    let (bind, upstream, index) = (cfg.bind, &cfg.upstream, &cfg.index);
     if let Some(provider) = provider {
         println!(
             "osproxy listening on https://{bind}, upstream {upstream}, shared index {index}, auth {auth_mode}"
@@ -154,11 +153,8 @@ async fn shutdown_signal() {
 /// The structured per-request logger: stdout JSON lines (each the shape-only
 /// explain document, carrying `trace_id`) when `OSPROXY_LOG_REQUESTS` is set,
 /// off otherwise. Correlates with the OTLP traces/spans by `trace_id`.
-fn request_log() -> Box<dyn RequestLog> {
-    if std::env::var("OSPROXY_LOG_REQUESTS")
-        .ok()
-        .is_some_and(|v| !v.is_empty())
-    {
+fn request_log(enabled: bool) -> Box<dyn RequestLog> {
+    if enabled {
         println!("osproxy structured request logging: on (stdout JSON)");
         Box::new(StdoutJsonLog)
     } else {
@@ -170,49 +166,36 @@ fn request_log() -> Box<dyn RequestLog> {
 /// (the collector base URL, e.g. `http://otel-collector:4318`); otherwise export
 /// stays off (no telemetry cost). `OSPROXY_SERVICE_NAME` sets the reported
 /// `service.name` (default `osproxy`).
-fn with_otlp_export<T: TenancySpi, S: Sink + Reader>(pipeline: Pipeline<T, S>) -> Pipeline<T, S> {
-    let Some(endpoint) = std::env::var("OSPROXY_OTLP_ENDPOINT")
-        .ok()
-        .filter(|v| !v.is_empty())
-    else {
+fn with_otlp_export<T: TenancySpi, S: Sink + Reader>(
+    pipeline: Pipeline<T, S>,
+    obs: &ObservabilityConfig,
+) -> Pipeline<T, S> {
+    let Some(endpoint) = obs.otlp_endpoint.as_deref() else {
         return pipeline;
     };
-    let service = env_or("OSPROXY_SERVICE_NAME", "osproxy");
+    let service = obs.service_name.clone();
     println!("osproxy OTLP span export -> {endpoint}/v1/traces (service={service})");
     pipeline
-        .with_exporter(Arc::new(OtlpHttpExporter::new(&endpoint)))
+        .with_exporter(Arc::new(OtlpHttpExporter::new(endpoint)))
         .with_service_name(service)
 }
 
-/// Sets the pipeline's baseline diagnostics level from `OSPROXY_DIAG_BASELINE`
-/// (case-insensitive `off`/`shape`/`shape-timing`/`shape-rewrite-diff`); the
-/// pipeline default (`shape`) is kept when the var is unset. Set it to `off` so
-/// nothing is exported until a directive — fleet store or signed
-/// `X-Debug-Directive` header — selects a request. Returns an error on an
-/// unrecognized value rather than silently picking a level.
+/// Sets the pipeline's baseline diagnostics level from the validated config
+/// (`diag_baseline`, default `shape`). Set it to `off` so nothing is exported
+/// until a directive — fleet store or signed `X-Debug-Directive` header — selects
+/// a request. The value was already validated at load, so this cannot fail.
 fn with_diag_baseline<T: TenancySpi, S: Sink + Reader>(
     pipeline: Pipeline<T, S>,
-) -> Result<Pipeline<T, S>, String> {
-    let Some(raw) = std::env::var("OSPROXY_DIAG_BASELINE")
-        .ok()
-        .filter(|v| !v.is_empty())
-    else {
-        return Ok(pipeline);
+    baseline: DiagBaseline,
+) -> Pipeline<T, S> {
+    let level = match baseline {
+        DiagBaseline::Off => DiagLevel::Off,
+        DiagBaseline::Shape => DiagLevel::Shape,
+        DiagBaseline::ShapeTiming => DiagLevel::ShapeTiming,
+        DiagBaseline::ShapeRewriteDiff => DiagLevel::ShapeRewriteDiff,
     };
-    let level = match raw.to_ascii_lowercase().as_str() {
-        "off" => DiagLevel::Off,
-        "shape" => DiagLevel::Shape,
-        "shape-timing" => DiagLevel::ShapeTiming,
-        "shape-rewrite-diff" => DiagLevel::ShapeRewriteDiff,
-        other => {
-            return Err(format!(
-                "OSPROXY_DIAG_BASELINE: unknown level {other:?} \
-                 (off|shape|shape-timing|shape-rewrite-diff)"
-            ))
-        }
-    };
-    println!("osproxy diagnostics baseline: {raw}");
-    Ok(pipeline.with_baseline_level(level))
+    println!("osproxy diagnostics baseline: {}", baseline.as_str());
+    pipeline.with_baseline_level(level)
 }
 
 /// Wires the signed `X-Debug-Directive` header channel when
@@ -223,11 +206,9 @@ fn with_diag_baseline<T: TenancySpi, S: Sink + Reader>(
 /// turns them on for a single request.
 fn with_debug_directive<T: TenancySpi, S: Sink + Reader>(
     pipeline: Pipeline<T, S>,
+    key: Option<&str>,
 ) -> Pipeline<T, S> {
-    let Some(key) = std::env::var("OSPROXY_DEBUG_DIRECTIVE_KEY")
-        .ok()
-        .filter(|v| !v.is_empty())
-    else {
+    let Some(key) = key else {
         return pipeline;
     };
     println!("osproxy X-Debug-Directive header channel: on (HMAC-verified)");
@@ -236,22 +217,28 @@ fn with_debug_directive<T: TenancySpi, S: Sink + Reader>(
 }
 
 /// Assembles the engine pipeline the binary serves: the concrete tenancy + sink
-/// wrapped with the env-gated observability and affinity layers (OTLP export,
+/// wrapped with the config-gated observability and affinity layers (OTLP export,
 /// diagnostics baseline, signed debug-directive header, fleet directive store,
-/// cursor affinity). Each layer is off unless its env knob is set.
+/// cursor affinity). Each layer is off unless its setting is configured.
 fn assemble_pipeline(
     tenancy: ReferenceTenancy,
     sink: OpenSearchSink,
     directive_store: Arc<InMemoryDirectiveStore>,
-) -> Result<Pipeline<ReferenceTenancy, OpenSearchSink>, String> {
-    let pipeline = with_admin_passthrough(with_cursor_affinity(
-        with_debug_directive(with_diag_baseline(with_otlp_export(Pipeline::new(
-            TenancyRouter::new(tenancy),
-            sink,
-        )))?)
-        .with_directive_store(directive_store),
-    ));
-    Ok(pipeline)
+    cfg: &Config,
+) -> Pipeline<ReferenceTenancy, OpenSearchSink> {
+    let base = Pipeline::new(TenancyRouter::new(tenancy), sink);
+    let observed = with_debug_directive(
+        with_diag_baseline(
+            with_otlp_export(base, &cfg.observability),
+            cfg.observability.diag_baseline,
+        ),
+        cfg.observability.debug_directive_key.as_deref(),
+    )
+    .with_directive_store(directive_store);
+    with_admin_passthrough(
+        with_cursor_affinity(observed, cfg.cursor_affinity_key.as_deref()),
+        cfg.admin_passthrough.as_ref(),
+    )
 }
 
 /// Enables opt-in admin (`_cat`/`_cluster`/`_nodes`) pass-through when
@@ -261,26 +248,18 @@ fn assemble_pipeline(
 /// requests are rejected (the default; `docs/decisions/006`).
 fn with_admin_passthrough<T: TenancySpi, S: Sink + Reader>(
     pipeline: Pipeline<T, S>,
+    admin: Option<&AdminPassthroughConfig>,
 ) -> Pipeline<T, S> {
-    let Some(cluster) = std::env::var("OSPROXY_ADMIN_PASSTHROUGH_CLUSTER")
-        .ok()
-        .filter(|v| !v.is_empty())
-    else {
+    let Some(admin) = admin else {
         return pipeline;
     };
-    let prefixes: Vec<String> = env_or(
-        "OSPROXY_ADMIN_PASSTHROUGH_PREFIXES",
-        "/_cat/,/_cluster/,/_nodes/",
-    )
-    .split(',')
-    .map(str::trim)
-    .filter(|p| !p.is_empty())
-    .map(str::to_owned)
-    .collect();
-    println!("osproxy admin pass-through: on (cluster={cluster}, prefixes={prefixes:?})");
+    println!(
+        "osproxy admin pass-through: on (cluster={}, prefixes={:?})",
+        admin.cluster, admin.prefixes
+    );
     pipeline.with_admin_passthrough(AdminPolicy::new(
-        ClusterId::from(cluster.as_str()),
-        prefixes,
+        ClusterId::from(admin.cluster.as_str()),
+        admin.prefixes.clone(),
     ))
 }
 
@@ -291,11 +270,9 @@ fn with_admin_passthrough<T: TenancySpi, S: Sink + Reader>(
 /// Unset ⇒ affinity off and cursor requests fail closed (`CursorUnresolvable`).
 fn with_cursor_affinity<T: TenancySpi, S: Sink + Reader>(
     pipeline: Pipeline<T, S>,
+    key: Option<&str>,
 ) -> Pipeline<T, S> {
-    let Some(key) = std::env::var("OSPROXY_CURSOR_AFFINITY_KEY")
-        .ok()
-        .filter(|v| !v.is_empty())
-    else {
+    let Some(key) = key else {
         return pipeline;
     };
     println!("osproxy scroll/PIT cursor affinity: on (HMAC-signed envelope)");
@@ -309,15 +286,13 @@ fn with_cursor_affinity<T: TenancySpi, S: Sink + Reader>(
 fn with_directive_admin<A: osproxy_spi::Authenticator>(
     handler: AppHandler<A>,
     store: Arc<InMemoryDirectiveStore>,
+    token: Option<&str>,
 ) -> AppHandler<A> {
-    let Some(token) = std::env::var("OSPROXY_DIRECTIVE_ADMIN_TOKEN")
-        .ok()
-        .filter(|v| !v.is_empty())
-    else {
+    let Some(token) = token else {
         return handler;
     };
     println!("osproxy fleet directive admin: on (POST /admin/directives)");
-    handler.with_directive_admin(store, token, Arc::new(SystemClock))
+    handler.with_directive_admin(store, token.to_owned(), Arc::new(SystemClock))
 }
 
 /// Builds a TLS provider from `OSPROXY_TLS_CERT`/`OSPROXY_TLS_KEY` (PEM file
@@ -325,57 +300,22 @@ fn with_directive_admin<A: osproxy_spi::Authenticator>(
 /// set without the other or the files cannot be read/parsed. If
 /// `OSPROXY_TLS_CLIENT_CA` is also set, mutual TLS is required and clients must
 /// present a certificate chaining to that CA.
-fn load_tls_provider() -> Result<Option<DefaultCryptoProvider>, String> {
-    let cert_path = std::env::var("OSPROXY_TLS_CERT")
-        .ok()
-        .filter(|v| !v.is_empty());
-    let key_path = std::env::var("OSPROXY_TLS_KEY")
-        .ok()
-        .filter(|v| !v.is_empty());
-    let (cert, key) = match (cert_path, key_path) {
-        (None, None) => return Ok(None),
-        (Some(cert), Some(key)) => (cert, key),
-        _ => return Err("set both OSPROXY_TLS_CERT and OSPROXY_TLS_KEY, or neither".to_owned()),
+fn load_tls_provider(tls: Option<&TlsConfig>) -> Result<Option<DefaultCryptoProvider>, String> {
+    let Some(tls) = tls else {
+        return Ok(None);
     };
+    let cert_pem =
+        std::fs::read(&tls.cert_path).map_err(|e| format!("reading {}: {e}", tls.cert_path))?;
+    let key_pem =
+        std::fs::read(&tls.key_path).map_err(|e| format!("reading {}: {e}", tls.key_path))?;
 
-    let cert_pem = std::fs::read(&cert).map_err(|e| format!("reading {cert}: {e}"))?;
-    let key_pem = std::fs::read(&key).map_err(|e| format!("reading {key}: {e}"))?;
-
-    let provider = match std::env::var("OSPROXY_TLS_CLIENT_CA")
-        .ok()
-        .filter(|v| !v.is_empty())
-    {
+    let provider = match &tls.client_ca_path {
         Some(ca) => {
-            let ca_pem = std::fs::read(&ca).map_err(|e| format!("reading {ca}: {e}"))?;
+            let ca_pem = std::fs::read(ca).map_err(|e| format!("reading {ca}: {e}"))?;
             DefaultCryptoProvider::from_pem_mtls(&cert_pem, &key_pem, &ca_pem)
         }
         None => DefaultCryptoProvider::from_pem(&cert_pem, &key_pem),
     }
     .map_err(|e| format!("building TLS config: {e}"))?;
     Ok(Some(provider))
-}
-
-/// Whether an environment flag is set to a truthy value (`1`/`true`/`yes`,
-/// case-insensitive). Unset, empty, or anything else is false.
-fn env_truthy(key: &str) -> bool {
-    std::env::var(key)
-        .is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
-}
-
-/// Reads an environment variable, falling back to `default` if unset or empty.
-fn env_or(key: &str, default: &str) -> String {
-    std::env::var(key)
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| default.to_owned())
-}
-
-/// Parses a `token=principal,token2=principal2` list into a map. An empty input
-/// yields an empty map, which puts the authenticator in permissive dev mode.
-fn parse_tokens(spec: &str) -> HashMap<String, String> {
-    spec.split(',')
-        .filter_map(|pair| pair.split_once('='))
-        .map(|(token, principal)| (token.trim().to_owned(), principal.trim().to_owned()))
-        .filter(|(token, principal)| !token.is_empty() && !principal.is_empty())
-        .collect()
 }

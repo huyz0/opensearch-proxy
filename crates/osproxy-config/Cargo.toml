@@ -8,8 +8,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-[dependencies]
-osproxy-core.workspace = true
+# Intentionally dependency-free (std only): the loader parses a small line-based
+# file and overlays env + flags into typed value objects. A full TOML/serde stack
+# would be unjustified weight for ~18 string settings (docs/08 dependency budget).
 
 [lints]
 workspace = true
