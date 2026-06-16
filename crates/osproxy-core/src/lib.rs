@@ -24,6 +24,7 @@
 //! own file (`docs/08` §2).
 #![deny(missing_docs)]
 
+pub mod cursor;
 pub mod endpoint;
 pub mod error;
 pub mod ids;
@@ -31,6 +32,7 @@ pub mod target;
 pub mod time;
 pub mod trace;
 
+pub use cursor::CursorSigner;
 pub use endpoint::EndpointKind;
 pub use error::{ErrorCode, ErrorContext};
 pub use ids::{ClusterId, Epoch, FieldName, IndexName, PartitionId, PrincipalId, RequestId};
