@@ -56,6 +56,7 @@ async fn parse(
         return Err(IngressResponse::json(405, error_body("method not allowed")));
     };
     let path = req.uri().path().to_owned();
+    let query = req.uri().query().map(str::to_owned);
     let headers: Vec<(String, String)> = req
         .headers()
         .iter()
@@ -93,6 +94,7 @@ async fn parse(
             doc_id: c.doc_id,
             headers,
             body,
+            query,
             client_cert_subject: conn_info.client_cert_subject.clone(),
         },
         reservation,

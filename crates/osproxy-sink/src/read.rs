@@ -119,6 +119,10 @@ pub struct SearchOp {
     /// The upstream wire protocol this search is dispatched over. Defaults to
     /// [`Protocol::Http1`].
     pub protocol: Protocol,
+    /// An already-allow-listed query string (without the `?`) to append to the
+    /// upstream URL — e.g. `scroll=1m` to open a scroll. The engine filters this
+    /// to cursor-safe params before it reaches here; the sink appends it verbatim.
+    pub query: Option<String>,
     /// The W3C trace context to forward downstream (`traceparent`).
     pub trace: Option<TraceContext>,
 }
@@ -131,6 +135,7 @@ impl SearchOp {
             target,
             body,
             protocol: Protocol::Http1,
+            query: None,
             trace: None,
         }
     }
@@ -139,6 +144,13 @@ impl SearchOp {
     #[must_use]
     pub fn with_protocol(mut self, protocol: Protocol) -> Self {
         self.protocol = protocol;
+        self
+    }
+
+    /// Sets the (already allow-listed) upstream query string (builder style).
+    #[must_use]
+    pub fn with_query(mut self, query: Option<String>) -> Self {
+        self.query = query;
         self
     }
 

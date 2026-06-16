@@ -80,6 +80,7 @@ pub struct RequestCtx<'a> {
     doc_id: Option<&'a str>,
     headers: HeaderView<'a>,
     body: &'a [u8],
+    query: Option<&'a str>,
 }
 
 impl<'a> RequestCtx<'a> {
@@ -111,6 +112,7 @@ impl<'a> RequestCtx<'a> {
             doc_id: None,
             headers,
             body,
+            query: None,
         }
     }
 
@@ -119,6 +121,16 @@ impl<'a> RequestCtx<'a> {
     #[must_use]
     pub fn with_doc_id(mut self, doc_id: Option<&'a str>) -> Self {
         self.doc_id = doc_id;
+        self
+    }
+
+    /// Sets the raw URL query string (without the `?`). Builder style. Only an
+    /// allow-list of cursor params (`scroll`/`keep_alive`) is ever forwarded
+    /// upstream — query-affecting params are dropped so the body partition filter
+    /// cannot be bypassed (NFR-S4).
+    #[must_use]
+    pub fn with_query(mut self, query: Option<&'a str>) -> Self {
+        self.query = query;
         self
     }
 
@@ -170,6 +182,13 @@ impl<'a> RequestCtx<'a> {
     #[must_use]
     pub fn doc_id(&self) -> Option<&'a str> {
         self.doc_id
+    }
+
+    /// The raw URL query string (without the `?`), if any. Consumers must forward
+    /// only an allow-list of cursor params (`scroll`/`keep_alive`) upstream.
+    #[must_use]
+    pub fn query(&self) -> Option<&'a str> {
+        self.query
     }
 
     /// The request headers.

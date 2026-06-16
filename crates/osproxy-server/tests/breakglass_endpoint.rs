@@ -29,6 +29,7 @@ fn get(path: &str) -> IngressRequest {
         doc_id: None,
         headers: vec![],
         body: vec![],
+        query: None,
         client_cert_subject: None,
     }
 }

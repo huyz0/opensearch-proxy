@@ -261,7 +261,13 @@ impl OpenSearchSink {
         op: &SearchOp,
     ) -> Result<(u16, Vec<u8>, bool), SinkError> {
         let pool = self.pool_for(&op.target.cluster)?;
-        let uri = format!("{}/{}/{verb}", pool.base, op.target.index.as_str());
+        let base = format!("{}/{}/{verb}", pool.base, op.target.index.as_str());
+        // Append the engine's allow-listed query (e.g. `scroll=1m`); never the
+        // client's raw query, so no param can bypass the body partition filter.
+        let uri = match &op.query {
+            Some(q) if !q.is_empty() => format!("{base}?{q}"),
+            _ => base,
+        };
         let req = Request::builder()
             .method(Method::POST)
             .uri(uri)

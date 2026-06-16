@@ -82,6 +82,8 @@ impl<H: IngressHandler> DocumentService for GrpcIngress<H> {
             doc_id: c.doc_id,
             headers,
             body: msg.document,
+            // gRPC has no URL query string; cursor params do not apply here.
+            query: None,
             client_cert_subject,
         };
 

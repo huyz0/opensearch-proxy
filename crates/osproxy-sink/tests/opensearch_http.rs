@@ -23,7 +23,9 @@ use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use osproxy_core::{ClusterId, Epoch, IndexName, RequestId, Target, TraceContext};
-use osproxy_sink::{CursorOp, DocOp, OpenSearchSink, ReadOp, Reader, Sink, WriteBatch, WriteOp};
+use osproxy_sink::{
+    CursorOp, DocOp, OpenSearchSink, ReadOp, Reader, SearchOp, Sink, WriteBatch, WriteOp,
+};
 use osproxy_spi::HttpMethod;
 use tokio::net::TcpListener;
 
@@ -196,6 +198,28 @@ async fn cursor_passthrough_forwards_method_path_and_body_to_the_pinned_cluster(
     assert!(
         outcome.body.starts_with(br#"{"_scroll_id""#),
         "the upstream response is forwarded back verbatim"
+    );
+}
+
+#[tokio::test]
+async fn a_search_appends_its_allow_listed_query_to_the_upstream_url() {
+    // The engine forwards only `scroll`/`keep_alive`; the sink appends it so a
+    // scroll-opening search actually opens a scroll upstream.
+    let (base, captured) = start_mock(r#"{"_scroll_id":"X","hits":{"hits":[]}}"#).await;
+    let sink = sink_for("eu-1", base);
+
+    let op = SearchOp::new(
+        Target::new(ClusterId::from("eu-1"), IndexName::from("orders-shared")),
+        br#"{"query":{"match_all":{}}}"#.to_vec(),
+    )
+    .with_query(Some("scroll=1m".to_owned()));
+    let _ = sink.search(op).await.unwrap();
+
+    let got = captured.lock().unwrap().clone();
+    assert_eq!(got.method, "POST");
+    assert_eq!(
+        got.uri, "/orders-shared/_search?scroll=1m",
+        "the scroll param must reach the upstream"
     );
 }
 

@@ -13,7 +13,8 @@ use osproxy_spi::{RequestCtx, TenancySpi};
 use osproxy_tenancy::Resolved;
 
 use crate::cursor::{
-    cursor_request, has_scroll_id, rewrite_cursor_body, wrap_scroll_id_in_response,
+    cursor_request, forwardable_query, has_scroll_id, rewrite_cursor_body,
+    wrap_scroll_id_in_response,
 };
 use crate::error::RequestError;
 use crate::observe::{dispatch_info, read_dispatch_info, resolve_info, rewrite_info};
@@ -185,7 +186,13 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
         let (search_op, shape) = build_search_op(&resolved, ctx.body())?;
         let outcome = self
             .sink
-            .search(search_op.with_trace(Some(wire_trace(ctx))))
+            .search(
+                search_op
+                    // Forward only allow-listed cursor params (e.g. `scroll=1m`)
+                    // so a scroll-opening search actually opens one upstream.
+                    .with_query(forwardable_query(ctx.query()))
+                    .with_trace(Some(wire_trace(ctx))),
+            )
             .await?;
         trace.record_dispatch(read_dispatch_info(
             &resolved,

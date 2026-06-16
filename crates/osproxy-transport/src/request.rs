@@ -26,6 +26,11 @@ pub struct IngressRequest {
     pub headers: Vec<(String, String)>,
     /// The request body.
     pub body: Vec<u8>,
+    /// The raw URL query string (without the `?`), if any. The engine forwards
+    /// only an allow-list of cursor params (`scroll`/`keep_alive`) upstream —
+    /// query-affecting params are never forwarded, so the body partition filter
+    /// cannot be bypassed (NFR-S4).
+    pub query: Option<String>,
     /// The verified client-certificate identity, if the connection was mutually
     /// authenticated (mTLS). A stable id derived from the cert, never the raw
     /// certificate material.

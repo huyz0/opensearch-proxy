@@ -41,6 +41,7 @@ fn post(body: &str, token: Option<&str>) -> IngressRequest {
         doc_id: None,
         headers,
         body: body.as_bytes().to_vec(),
+        query: None,
         client_cert_subject: None,
     }
 }
@@ -58,6 +59,7 @@ fn get(token: Option<&str>) -> IngressRequest {
         doc_id: None,
         headers,
         body: Vec::new(),
+        query: None,
         client_cert_subject: None,
     }
 }
@@ -151,6 +153,7 @@ async fn a_published_directive_takes_effect_on_the_live_pipeline() {
         doc_id: None,
         headers: vec![],
         body: b"{}".to_vec(),
+        query: None,
         client_cert_subject: None,
     };
     let _ = handler.handle(ingest).await;

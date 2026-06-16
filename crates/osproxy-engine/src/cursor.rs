@@ -7,6 +7,30 @@
 use osproxy_core::{ClusterId, CursorSigner};
 use osproxy_spi::RequestCtx;
 
+/// The only client query params the proxy forwards upstream — the cursor
+/// lifecycle knobs. Everything else (notably query-affecting params like `q`,
+/// `source`, `analyzer`) is dropped, so a client cannot bypass the mandatory
+/// body partition filter via the URL (NFR-S4).
+const FORWARDABLE_PARAMS: &[&str] = &["scroll", "keep_alive"];
+
+/// Filters a raw query string down to the [`FORWARDABLE_PARAMS`] allow-list,
+/// preserving each kept `key=value` pair verbatim. Returns `None` if nothing
+/// survives, so a plain search appends no query at all.
+pub(crate) fn forwardable_query(raw: Option<&str>) -> Option<String> {
+    let kept: Vec<&str> = raw?
+        .split('&')
+        .filter(|pair| {
+            let key = pair.split('=').next().unwrap_or(pair);
+            FORWARDABLE_PARAMS.contains(&key)
+        })
+        .collect();
+    if kept.is_empty() {
+        None
+    } else {
+        Some(kept.join("&"))
+    }
+}
+
 /// Whether a response body mentions `_scroll_id` at all — a cheap pre-filter so a
 /// plain (non-scroll) search never pays for a JSON parse just to find none.
 pub(crate) fn has_scroll_id(body: &[u8]) -> bool {
@@ -85,4 +109,34 @@ pub(crate) fn rewrite_cursor_body(client_body: &[u8], id_field: &str, real_id: &
     v[id_field] = serde_json::Value::String(real_id.to_owned());
     serde_json::to_vec(&v)
         .unwrap_or_else(|_| format!(r#"{{"{id_field}":"{real_id}"}}"#).into_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_cursor_params_are_forwarded_not_query_affecting_ones() {
+        // The isolation guard (NFR-S4): `scroll`/`keep_alive` pass; `q`, `source`,
+        // and anything else that could override the body partition filter is
+        // dropped — a client cannot bypass tenancy via the URL.
+        assert_eq!(
+            forwardable_query(Some("scroll=1m")).as_deref(),
+            Some("scroll=1m")
+        );
+        assert_eq!(
+            forwardable_query(Some("keep_alive=5m")).as_deref(),
+            Some("keep_alive=5m")
+        );
+        // `q` is dropped even when bundled with an allowed param.
+        assert_eq!(
+            forwardable_query(Some("q=*&scroll=1m")).as_deref(),
+            Some("scroll=1m"),
+            "a query-string search param must never reach the upstream"
+        );
+        assert_eq!(forwardable_query(Some("q=*")), None);
+        assert_eq!(forwardable_query(Some("source={}&analyzer=x")), None);
+        assert_eq!(forwardable_query(None), None);
+        assert_eq!(forwardable_query(Some("")), None);
+    }
 }
