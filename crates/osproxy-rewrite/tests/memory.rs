@@ -83,15 +83,19 @@ fn document_transform_budgets() {
     // filter, and re-serialize — the heaviest per-search transform. Down from 33
     // when the whole body was materialized into a Value tree; the remaining cost
     // is the top-level map, the constructed bool subtree, and the output buffer.
+    //
+    // This one is an *upper bound*, not an exact count: the constructed-buffer
+    // growth (`to_writer` into `q`, `from_utf8`, `RawValue::from_string`) reallocs
+    // a profile-dependent number of times — 12 in the normal build, 15 under
+    // coverage instrumentation. A bound still strongly guards (old path was 33)
+    // while tolerating that variance; the rest of the budgets stay exact because
+    // their paths are allocation-stable across build configs.
     let body = br#"{"query":{"match":{"msg":"hi"}}}"#;
     let filter = vec![(FieldName::from("_tenant"), Value::from("acme"))];
-    assert_eq!(
-        allocs(|| {
-            let _ = std::hint::black_box(wrap_query(body, &filter).unwrap());
-        }),
-        12,
-        "wrap_query allocation budget"
-    );
+    let n = allocs(|| {
+        let _ = std::hint::black_box(wrap_query(body, &filter).unwrap());
+    });
+    assert!(n <= 15, "wrap_query allocation budget: {n} > 15");
 }
 
 /// Bulk-path budgets (the highest-throughput ingest path; one id mapping per
