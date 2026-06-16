@@ -35,6 +35,7 @@ fn post(body: &str, token: Option<&str>) -> IngressRequest {
         .unwrap_or_default();
     IngressRequest {
         method: HttpMethod::Post,
+        protocol: osproxy_spi::Protocol::Http1,
         path: "/admin/directives".to_owned(),
         endpoint: EndpointKind::Unknown,
         logical_index: String::new(),
@@ -54,6 +55,7 @@ fn get(token: Option<&str>) -> IngressRequest {
         .unwrap_or_default();
     IngressRequest {
         method: HttpMethod::Get,
+        protocol: osproxy_spi::Protocol::Http1,
         path: "/admin/directives".to_owned(),
         endpoint: EndpointKind::Unknown,
         logical_index: String::new(),
@@ -71,11 +73,35 @@ fn admin_handler(
     store: Arc<InMemoryDirectiveStore>,
     pipeline: Pipeline<ReferenceTenancy, OpenSearchSink>,
 ) -> AppHandler<ReferenceAuthenticator> {
-    AppHandler::new(pipeline, ReferenceAuthenticator::dev()).with_directive_admin(
-        store,
+    AppHandler::new(pipeline, ReferenceAuthenticator::dev())
+        .with_directive_admin(store, TOKEN.to_owned(), Arc::new(ManualClock::new()))
+        // These tests exercise the auth/body logic over an in-process cleartext
+        // handler; the cleartext-refusal gate has its own test below.
+        .with_require_tls_for_mutation(false)
+}
+
+#[tokio::test]
+async fn publishing_over_cleartext_is_refused_when_tls_is_required() {
+    let store = Arc::new(InMemoryDirectiveStore::new());
+    let pipeline = Pipeline::new(TenancyRouter::new(tenancy()), sink());
+    // Default handler: TLS required for mutation, so a cleartext publish carrying
+    // the admin token is refused before the token is even examined.
+    let handler = AppHandler::new(pipeline, ReferenceAuthenticator::dev()).with_directive_admin(
+        store.clone(),
         TOKEN.to_owned(),
         Arc::new(ManualClock::new()),
-    )
+    );
+
+    let resp = handler
+        .handle(post(
+            r#"{"directives":[{"id":"a","level":"Shape","ttl_secs":60}]}"#,
+            Some(TOKEN),
+        ))
+        .await;
+    assert_eq!(resp.status, 403);
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(body["error"], "tls_required");
+    assert_eq!(store.load().len(), 0, "nothing published over cleartext");
 }
 
 #[tokio::test]
@@ -149,6 +175,7 @@ async fn a_published_directive_takes_effect_on_the_live_pipeline() {
     // ring_buffer directive still tapes it — capture is independent of outcome).
     let ingest = IngressRequest {
         method: HttpMethod::Put,
+        protocol: osproxy_spi::Protocol::Http1,
         path: "/orders/_doc".to_owned(),
         endpoint: EndpointKind::IngestDoc,
         logical_index: "orders".to_owned(),

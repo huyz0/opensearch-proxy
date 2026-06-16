@@ -6,13 +6,17 @@
 //! plus the endpoint classification.
 
 use osproxy_core::EndpointKind;
-use osproxy_spi::HttpMethod;
+use osproxy_spi::{HttpMethod, Protocol};
 
 /// A parsed, owned client request ready for the pipeline.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct IngressRequest {
     /// The HTTP method.
     pub method: HttpMethod,
+    /// The wire protocol the request arrived on (HTTP/1.1, HTTP/2, or gRPC). The
+    /// `auto` ingress builder negotiates h1/h2 per connection; the engine records
+    /// it for tracing and may select the upstream protocol from it (`docs/04` §7).
+    pub protocol: Protocol,
     /// The raw request path (used to route proxy admin endpoints such as
     /// `/debug/explain/{id}` that are not OpenSearch paths).
     pub path: String,

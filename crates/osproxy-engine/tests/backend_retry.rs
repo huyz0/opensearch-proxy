@@ -35,7 +35,11 @@ impl TenancySpi for FlakyTenancy {
         PartitionKeySpec::BodyField(JsonPath::new("tenant_id"))
     }
     fn doc_id_rule(&self) -> Option<osproxy_spi::DocIdRule> {
-        None
+        // SharedIndex requires a partition-scoped id (docs/03 §4), enforced by the
+        // router; provide one so this retry test uses a valid tenancy config.
+        Some(osproxy_spi::DocIdRule::new(osproxy_spi::IdTemplate::new(
+            "{partition}:{body.id}",
+        )))
     }
     fn injected_fields(&self) -> Vec<InjectedField> {
         vec![InjectedField::new(
@@ -91,7 +95,7 @@ async fn ingest(p: &Pipeline<FlakyTenancy, MemorySink>) -> Result<PipelineRespon
     let principal = Principal::new(PrincipalId::from("svc"));
     let rid = RequestId::from("r");
     let headers: Vec<(String, String)> = vec![];
-    let body = serde_json::to_vec(&json!({ "tenant_id": "acme", "msg": "hi" })).unwrap();
+    let body = serde_json::to_vec(&json!({ "tenant_id": "acme", "id": 7, "msg": "hi" })).unwrap();
     let ctx = RequestCtx::new(
         &principal,
         &rid,

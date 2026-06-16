@@ -139,8 +139,18 @@ impl<T: TenancySpi> TenancyRouter<T> {
         };
 
         let id_rule = self.spi.doc_id_rule();
-        if let (Placement::SharedIndex { .. }, Some(rule)) = (placement, id_rule.as_ref()) {
-            if !rule.template.references_partition() {
+        // In SharedIndex mode the partition id is MANDATORY in the doc-id template
+        // (docs/03 §4): by-id reads/writes (`_doc/{id}`) bypass the query filter and
+        // hit the physical id directly, so without a partition-scoped id two tenants
+        // collide on the same `_id` — a cross-tenant overwrite on write and a
+        // cross-tenant read on get. A *missing* rule is as unsafe as a partition-free
+        // one, so reject both here rather than only validating a rule that happens to
+        // be present.
+        if let Placement::SharedIndex { .. } = placement {
+            let partition_scoped = id_rule
+                .as_ref()
+                .is_some_and(|rule| rule.template.references_partition());
+            if !partition_scoped {
                 return Err(SpiError::IdRuleMissingPartition);
             }
         }
@@ -200,4 +210,93 @@ fn resolve_inject(
             ))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use osproxy_core::{ClusterId, EndpointKind, PrincipalId, RequestId};
+    use osproxy_spi::{
+        DocIdRule, HeaderView, HttpMethod, IdTemplate, PartitionKeySpec, PlacementAt, Principal,
+        Protocol, SensitivitySpec,
+    };
+
+    /// A `SharedIndex` tenancy whose `doc_id_rule` is configurable, to prove the
+    /// by-id isolation invariant is enforced regardless of the rule's presence.
+    struct SharedTenancy {
+        id_rule: Option<DocIdRule>,
+    }
+
+    impl TenancySpi for SharedTenancy {
+        fn partition_key(&self) -> PartitionKeySpec {
+            PartitionKeySpec::Header("x-tenant".to_owned())
+        }
+        fn doc_id_rule(&self) -> Option<DocIdRule> {
+            self.id_rule.clone()
+        }
+        fn injected_fields(&self) -> Vec<InjectedField> {
+            vec![InjectedField::new(
+                osproxy_core::FieldName::from("_tenant"),
+                InjectedValue::PartitionId,
+            )]
+        }
+        fn sensitive_fields(&self) -> SensitivitySpec {
+            SensitivitySpec::none()
+        }
+        async fn placement_for(&self, _partition: &PartitionId) -> Result<PlacementAt, SpiError> {
+            Ok(PlacementAt::new(
+                Placement::SharedIndex {
+                    cluster: ClusterId::from("c"),
+                    index: IndexName::from("shared"),
+                    inject: self.injected_fields(),
+                },
+                Epoch::new(1),
+            ))
+        }
+    }
+
+    async fn resolve_shared(id_rule: Option<DocIdRule>) -> Result<Resolved, SpiError> {
+        let router = TenancyRouter::new(SharedTenancy { id_rule });
+        let principal = Principal::new(PrincipalId::from("svc"));
+        let rid = RequestId::from("r1");
+        let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
+        let ctx = RequestCtx::new(
+            &principal,
+            &rid,
+            HttpMethod::Get,
+            EndpointKind::GetById,
+            Protocol::Http1,
+            "shared",
+            HeaderView::new(&headers),
+            b"",
+        );
+        router
+            .resolve_placement(&ctx, PartitionId::from("acme"), "shared")
+            .await
+    }
+
+    #[tokio::test]
+    async fn shared_index_without_an_id_rule_is_rejected() {
+        // No id rule ⇒ by-id paths would use the raw client id, colliding across
+        // tenants. Must fail closed (docs/03 §4), not silently route.
+        let err = resolve_shared(None).await.unwrap_err();
+        assert!(matches!(err, SpiError::IdRuleMissingPartition));
+    }
+
+    #[tokio::test]
+    async fn shared_index_with_a_partition_free_id_rule_is_rejected() {
+        let rule = DocIdRule::new(IdTemplate::new("{body.id}"));
+        let err = resolve_shared(Some(rule)).await.unwrap_err();
+        assert!(matches!(err, SpiError::IdRuleMissingPartition));
+    }
+
+    #[tokio::test]
+    async fn shared_index_with_a_partition_scoped_id_rule_is_accepted() {
+        let rule = DocIdRule::new(IdTemplate::new("{partition}:{body.id}"));
+        let resolved = resolve_shared(Some(rule)).await.expect("accepted");
+        assert!(matches!(
+            resolved.decision.body_transform,
+            BodyTransform::Both { .. }
+        ));
+    }
 }

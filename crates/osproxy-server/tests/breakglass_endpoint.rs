@@ -23,6 +23,7 @@ use serde_json::{json, Value};
 fn get(path: &str) -> IngressRequest {
     IngressRequest {
         method: HttpMethod::Get,
+        protocol: osproxy_spi::Protocol::Http1,
         path: path.to_owned(),
         endpoint: EndpointKind::Unknown,
         logical_index: String::new(),

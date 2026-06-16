@@ -76,6 +76,7 @@ impl<H: IngressHandler> DocumentService for GrpcIngress<H> {
 
         let ingress = IngressRequest {
             method,
+            protocol: osproxy_spi::Protocol::Grpc,
             path,
             endpoint: c.endpoint,
             logical_index: c.logical_index,

@@ -26,10 +26,11 @@ impl IngressHandler for EchoHandler {
     async fn handle(&self, req: IngressRequest) -> IngressResponse {
         let ingest = req.endpoint == EndpointKind::IngestDoc;
         let body = format!(
-            r#"{{"index":"{}","doc_id":"{}","body_len":{},"ingest":{ingest}}}"#,
+            r#"{{"index":"{}","doc_id":"{}","body_len":{},"ingest":{ingest},"protocol":"{:?}"}}"#,
             req.logical_index,
             req.doc_id.unwrap_or_default(),
             req.body.len(),
+            req.protocol,
         );
         IngressResponse::json(201, body.into_bytes())
     }
@@ -141,6 +142,8 @@ async fn request_round_trips_over_http2() {
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains(r#""index":"orders""#), "{text}");
     assert!(text.contains(r#""ingest":true"#), "{text}");
+    // The engine sees the true ingress protocol, not an assumed h1.
+    assert!(text.contains(r#""protocol":"Http2""#), "{text}");
 }
 
 #[tokio::test]

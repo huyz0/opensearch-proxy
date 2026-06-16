@@ -9,7 +9,7 @@ use osproxy_engine::{Pipeline, RequestError};
 use osproxy_observe::{DirectiveStore, InMemoryDirectiveStore, Metrics, PoolSnapshot};
 use osproxy_sink::OpenSearchSink;
 use osproxy_spi::{
-    AuthError, Authenticator, ClientCredentials, HeaderView, HttpMethod, Protocol, RequestCtx,
+    AuthError, Authenticator, ClientCredentials, HeaderView, HttpMethod, RequestCtx,
 };
 use osproxy_transport::{IngressHandler, IngressRequest, IngressResponse};
 
@@ -145,6 +145,13 @@ impl<A: Authenticator> AppHandler<A> {
         if req.method != HttpMethod::Post {
             return IngressResponse::json(405, br#"{"error":"method_not_allowed"}"#.to_vec());
         }
+        // Publishing a fleet directive set is a privileged mutation carrying a
+        // bearer token; refuse it over cleartext (same NFR-S1 stance as the data
+        // plane) so the token is never exposed on the wire. The introspection
+        // routes short-circuit before the data-plane TLS gate, so enforce it here.
+        if self.require_tls_for_mutation && !req.secure {
+            return IngressResponse::json(403, br#"{"error":"tls_required"}"#.to_vec());
+        }
         if !crate::bearer::matches(&req.headers, &admin.token) {
             return IngressResponse::json(401, br#"{"error":"unauthorized"}"#.to_vec());
         }
@@ -254,7 +261,7 @@ impl<A: Authenticator> IngressHandler for AppHandler<A> {
             &request_id,
             req.method,
             req.endpoint,
-            Protocol::Http1,
+            req.protocol,
             &req.logical_index,
             HeaderView::new(&req.headers),
             &req.body,

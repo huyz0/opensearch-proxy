@@ -21,8 +21,9 @@ use osproxy_sink::{
     SearchOutcome, Sink, SinkError, WriteAck, WriteBatch,
 };
 use osproxy_spi::{
-    DocIdRule, HeaderView, HttpMethod, InjectedField, InjectedValue, JsonPath, PartitionKeySpec,
-    Placement, PlacementAt, Principal, Protocol, RequestCtx, SensitivitySpec, SpiError, TenancySpi,
+    DocIdRule, HeaderView, HttpMethod, IdTemplate, InjectedField, InjectedValue, JsonPath,
+    PartitionKeySpec, Placement, PlacementAt, Principal, Protocol, RequestCtx, SensitivitySpec,
+    SpiError, TenancySpi,
 };
 use osproxy_tenancy::TenancyRouter;
 
@@ -104,7 +105,10 @@ impl TenancySpi for StubTenancy {
         PartitionKeySpec::BodyField(JsonPath::new("tenant_id"))
     }
     fn doc_id_rule(&self) -> Option<DocIdRule> {
-        None
+        // SharedIndex requires a partition-scoped id rule (docs/03 §4); the search
+        // path validates but does not construct an id, so any partition-referencing
+        // template satisfies the router here.
+        Some(DocIdRule::new(IdTemplate::new("{partition}:{body.id}")))
     }
     fn injected_fields(&self) -> Vec<InjectedField> {
         vec![InjectedField::new(

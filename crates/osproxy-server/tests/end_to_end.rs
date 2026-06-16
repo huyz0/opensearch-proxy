@@ -288,6 +288,7 @@ async fn a_mutating_request_over_cleartext_is_refused_when_tls_is_required() {
 
     let ingest = |secure: bool| osproxy_transport::IngressRequest {
         method: osproxy_spi::HttpMethod::Post,
+        protocol: osproxy_spi::Protocol::Http1,
         path: "/orders/_doc".to_owned(),
         endpoint: osproxy_core::EndpointKind::IngestDoc,
         logical_index: "orders".to_owned(),

@@ -11,7 +11,7 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Incoming;
 use hyper::{Method, Request, Response};
-use osproxy_spi::HttpMethod;
+use osproxy_spi::{HttpMethod, Protocol};
 
 use crate::admission::{Admission, IngressLimits, Reservation};
 use crate::classify::classify;
@@ -60,6 +60,9 @@ async fn parse(
     };
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
+    // The `auto` builder negotiates h1/h2 per connection; record which so the
+    // engine traces the true ingress protocol rather than assuming h1.
+    let protocol = map_protocol(req.version());
     let headers: Vec<(String, String)> = req
         .headers()
         .iter()
@@ -91,6 +94,7 @@ async fn parse(
     Ok((
         IngressRequest {
             method,
+            protocol,
             path,
             endpoint: c.endpoint,
             logical_index: c.logical_index,
@@ -129,6 +133,17 @@ fn map_method(method: &Method) -> Option<HttpMethod> {
         Method::DELETE => Some(HttpMethod::Delete),
         Method::HEAD => Some(HttpMethod::Head),
         _ => None,
+    }
+}
+
+/// Maps a hyper HTTP version to the SPI's protocol. HTTP/2 is distinguished; all
+/// 1.x (and the unreachable 0.9) collapse to [`Protocol::Http1`]. gRPC is not seen
+/// here — it arrives on the dedicated tonic listener, which sets it directly.
+fn map_protocol(version: hyper::Version) -> Protocol {
+    if version == hyper::Version::HTTP_2 {
+        Protocol::Http2
+    } else {
+        Protocol::Http1
     }
 }
 
