@@ -10,7 +10,6 @@
 //! (`docs/11`); mTLS and the FIPS provider attach in later slices.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -104,12 +103,16 @@ async fn run() -> Result<(), String> {
         println!(
             "osproxy listening on https://{bind}, upstream {upstream}, shared index {index}, auth {auth_mode}"
         );
-        serve_until_signal(osproxy_transport::serve_tls(listener, provider, handler)).await
+        osproxy_transport::serve_tls_with_shutdown(listener, provider, handler, shutdown_signal())
+            .await
+            .map_err(|e| format!("serving: {e}"))
     } else {
         println!(
             "osproxy listening on http://{bind}, upstream {upstream}, shared index {index}, auth {auth_mode}"
         );
-        serve_until_signal(osproxy_transport::serve(listener, handler)).await
+        osproxy_transport::serve_with_shutdown(listener, handler, shutdown_signal())
+            .await
+            .map_err(|e| format!("serving: {e}"))
     }
 }
 
@@ -138,18 +141,13 @@ fn spawn_grpc<H: IngressHandler>(
     }
 }
 
-/// Runs a serve future until it errors or a shutdown signal arrives.
-async fn serve_until_signal<F>(serve: F) -> Result<(), String>
-where
-    F: Future<Output = std::io::Result<()>>,
-{
-    tokio::select! {
-        result = serve => result.map_err(|e| format!("serving: {e}")),
-        _ = tokio::signal::ctrl_c() => {
-            println!("osproxy: shutdown signal received");
-            Ok(())
-        }
-    }
+/// Resolves on the first Ctrl-C (`SIGINT`). The transport takes this as the
+/// signal to stop accepting and drain in-flight requests (NFR-R5) before the
+/// serve future returns. A failed signal registration resolves immediately
+/// (shut down rather than ignore the operator's intent).
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+    println!("osproxy: shutdown signal received — draining in-flight requests");
 }
 
 /// The structured per-request logger: stdout JSON lines (each the shape-only

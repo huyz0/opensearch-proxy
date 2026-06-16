@@ -1,27 +1,39 @@
 //! The HTTP ingress loop (HTTP/1.1 and HTTP/2).
 //!
-//! Accepts connections, parses each request into an [`IngressRequest`], invokes
-//! the [`IngressHandler`], and writes the response. Each connection is served by
+//! Accepts connections, parses each request into an
+//! [`IngressRequest`](crate::IngressRequest), invokes the [`IngressHandler`], and
+//! writes the response. Each connection is served by
 //! hyper-util's protocol-auto builder, which negotiates HTTP/1.1 or HTTP/2 per
 //! connection — h2c by the HTTP/2 preface on cleartext, h2 by ALPN on TLS
 //! (`docs/07`). The handler contract is identical across protocols.
+//!
+//! **Graceful shutdown (NFR-R5).** The `*_with_shutdown` variants take a future;
+//! when it resolves the accept loop stops (new connections are no longer
+//! accepted) and every in-flight connection is told to finish its current
+//! request and close, bounded by [`DRAIN_DEADLINE`]. The plain `serve*` variants
+//! delegate with a never-resolving signal, so they run until the listener errors
+//! exactly as before.
 
 use std::convert::Infallible;
+use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
-use bytes::Bytes;
-use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Incoming;
 use hyper::service::service_fn;
-use hyper::{Method, Request, Response};
+use hyper::Request;
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use osproxy_spi::HttpMethod;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
 
-use crate::admission::{Admission, IngressLimits, Reservation};
-use crate::classify::classify;
+use crate::admission::{Admission, IngressLimits};
 use crate::handler::IngressHandler;
-use crate::request::{IngressRequest, IngressResponse};
+use crate::http_io::{serve_request, ConnInfo};
+
+/// How long graceful shutdown waits for in-flight requests to drain before
+/// giving up and dropping the remainder (NFR-R5).
+pub const DRAIN_DEADLINE: Duration = Duration::from_secs(30);
 
 /// Serves HTTP/1.1 requests on `listener` with the default [`IngressLimits`].
 ///
@@ -49,30 +61,29 @@ pub async fn serve_with_limits<H: IngressHandler>(
     handler: Arc<H>,
     limits: IngressLimits,
 ) -> std::io::Result<()> {
-    let admission = Arc::new(Admission::new(limits.inflight_ceiling));
-    loop {
-        let (stream, _peer) = listener.accept().await?;
-        let handler = Arc::clone(&handler);
-        let admission = Arc::clone(&admission);
-        tokio::spawn(async move {
-            serve_connection(
-                TokioIo::new(stream),
-                handler,
-                ConnInfo::default(),
-                limits,
-                admission,
-            )
-            .await;
-        });
-    }
+    run(listener, handler, limits, Mode::Plain, never()).await
 }
 
-/// Connection-level facts shared by every request on a connection. M1 carries
-/// the verified mTLS client identity; TLS suite/version for the trace's
-/// `ingress` span attach here in a later slice.
-#[derive(Clone, Debug, Default)]
-struct ConnInfo {
-    client_cert_subject: Option<String>,
+/// Like [`serve`], but stops accepting and **drains in-flight requests** when
+/// `shutdown` resolves (NFR-R5). In-flight connections finish their current
+/// request and close; the drain is bounded by [`DRAIN_DEADLINE`].
+///
+/// # Errors
+///
+/// Returns the I/O error if accepting a connection fails before shutdown.
+pub async fn serve_with_shutdown<H: IngressHandler>(
+    listener: TcpListener,
+    handler: Arc<H>,
+    shutdown: impl Future<Output = ()>,
+) -> std::io::Result<()> {
+    run(
+        listener,
+        handler,
+        IngressLimits::default(),
+        Mode::Plain,
+        shutdown,
+    )
+    .await
 }
 
 /// Serves HTTPS requests on `listener`, terminating TLS with `provider`'s
@@ -114,21 +125,160 @@ where
     P: crate::tls::CryptoProvider,
 {
     let acceptor = tokio_rustls::TlsAcceptor::from(provider.server_config());
+    run(listener, handler, limits, Mode::Tls(acceptor), never()).await
+}
+
+/// Like [`serve_tls`], but drains in-flight requests when `shutdown` resolves
+/// (NFR-R5), bounded by [`DRAIN_DEADLINE`].
+///
+/// # Errors
+///
+/// Returns the I/O error if accepting a connection fails before shutdown.
+pub async fn serve_tls_with_shutdown<H, P>(
+    listener: TcpListener,
+    provider: Arc<P>,
+    handler: Arc<H>,
+    shutdown: impl Future<Output = ()>,
+) -> std::io::Result<()>
+where
+    H: IngressHandler,
+    P: crate::tls::CryptoProvider,
+{
+    let acceptor = tokio_rustls::TlsAcceptor::from(provider.server_config());
+    run(
+        listener,
+        handler,
+        IngressLimits::default(),
+        Mode::Tls(acceptor),
+        shutdown,
+    )
+    .await
+}
+
+/// How a freshly accepted TCP stream becomes a served connection: directly, or
+/// through a TLS handshake first.
+enum Mode {
+    Plain,
+    Tls(tokio_rustls::TlsAcceptor),
+}
+
+/// A never-resolving shutdown signal — the plain `serve*` paths run until the
+/// listener errors, exactly as before graceful shutdown existed.
+fn never() -> impl Future<Output = ()> {
+    std::future::pending()
+}
+
+/// The shared accept loop. Spawns each accepted connection, tracking the live
+/// count so shutdown can wait for it to reach zero. When `shutdown` resolves it
+/// breaks out of accepting and drains (NFR-R5).
+async fn run<H: IngressHandler>(
+    listener: TcpListener,
+    handler: Arc<H>,
+    limits: IngressLimits,
+    mode: Mode,
+    shutdown: impl Future<Output = ()>,
+) -> std::io::Result<()> {
     let admission = Arc::new(Admission::new(limits.inflight_ceiling));
+    // `false` until shutdown begins; flipped to `true` to tell every live
+    // connection to finish its current request and close.
+    let (drain_tx, drain_rx) = watch::channel(false);
+    let active = Arc::new(AtomicUsize::new(0));
+    tokio::pin!(shutdown);
     loop {
-        let (stream, _peer) = listener.accept().await?;
-        let acceptor = acceptor.clone();
-        let handler = Arc::clone(&handler);
-        let admission = Arc::clone(&admission);
-        tokio::spawn(async move {
-            // Drop the connection on handshake failure; logged via observability
-            // in a later slice.
-            if let Ok(tls) = acceptor.accept(stream).await {
-                let conn_info = conn_info_from_tls(&tls);
-                serve_connection(TokioIo::new(tls), handler, conn_info, limits, admission).await;
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (stream, _peer) = accepted?;
+                spawn_conn(stream, &mode, &handler, &admission, limits, &active, &drain_rx);
             }
-        });
+            () = &mut shutdown => break,
+        }
     }
+    // Stop accepting (the loop has exited), signal in-flight connections to wind
+    // down, and wait for them to drain within the deadline.
+    let _ = drain_tx.send(true);
+    await_drain(&active, DRAIN_DEADLINE).await;
+    Ok(())
+}
+
+/// Spawns a task serving one accepted connection, bumping the live-connection
+/// count for the duration so shutdown can wait it out. TLS connections handshake
+/// inside the task so a slow handshake never stalls the accept loop.
+fn spawn_conn<H: IngressHandler>(
+    stream: TcpStream,
+    mode: &Mode,
+    handler: &Arc<H>,
+    admission: &Arc<Admission>,
+    limits: IngressLimits,
+    active: &Arc<AtomicUsize>,
+    drain_rx: &watch::Receiver<bool>,
+) {
+    // Relaxed is sufficient for the increment: it is published to the drain by
+    // control-flow happens-before (this runs on the accept loop, strictly before
+    // the loop can break and reach `await_drain`), not by the atomic itself. The
+    // load-bearing edge is the guard's Release `fetch_sub` paired with the
+    // Acquire load in `await_drain`.
+    active.fetch_add(1, Ordering::Relaxed);
+    let guard = ActiveGuard(Arc::clone(active));
+    let handler = Arc::clone(handler);
+    let admission = Arc::clone(admission);
+    let drain_rx = drain_rx.clone();
+    match mode {
+        Mode::Plain => {
+            tokio::spawn(async move {
+                let _guard = guard;
+                serve_connection(
+                    TokioIo::new(stream),
+                    handler,
+                    ConnInfo::default(),
+                    limits,
+                    admission,
+                    drain_rx,
+                )
+                .await;
+            });
+        }
+        Mode::Tls(acceptor) => {
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                let _guard = guard;
+                // Drop the connection on handshake failure (isolated to it).
+                if let Ok(tls) = acceptor.accept(stream).await {
+                    let conn_info = conn_info_from_tls(&tls);
+                    serve_connection(
+                        TokioIo::new(tls),
+                        handler,
+                        conn_info,
+                        limits,
+                        admission,
+                        drain_rx,
+                    )
+                    .await;
+                }
+            });
+        }
+    }
+}
+
+/// Decrements the live-connection count when a connection task ends (including on
+/// panic), so the shutdown drain can observe completion.
+struct ActiveGuard(Arc<AtomicUsize>);
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Release);
+    }
+}
+
+/// Waits until no connections remain, or `deadline` elapses (then the remaining
+/// connections are dropped). Polls rather than condvars — it runs once, at
+/// shutdown, off the request path.
+async fn await_drain(active: &AtomicUsize, deadline: Duration) {
+    let drained = async {
+        while active.load(Ordering::Acquire) > 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    let _ = tokio::time::timeout(deadline, drained).await;
 }
 
 /// Extracts connection-level facts (the verified mTLS client identity) from a
@@ -139,13 +289,17 @@ fn conn_info_from_tls(tls: &tokio_rustls::server::TlsStream<tokio::net::TcpStrea
     }
 }
 
-/// Serves HTTP/1.1 over one already-accepted byte stream (cleartext or TLS).
+/// Serves HTTP/1.1 or HTTP/2 over one already-accepted byte stream (cleartext or
+/// TLS). Races the connection against the `drain` signal: when it flips, the
+/// connection is told to finish its current request and close (no new requests),
+/// then awaited to completion — the per-connection half of graceful shutdown.
 async fn serve_connection<H, IO>(
     io: IO,
     handler: Arc<H>,
     conn_info: ConnInfo,
     limits: IngressLimits,
     admission: Arc<Admission>,
+    mut drain: watch::Receiver<bool>,
 ) where
     H: IngressHandler,
     IO: hyper::rt::Read + hyper::rt::Write + Unpin + 'static,
@@ -158,129 +312,15 @@ async fn serve_connection<H, IO>(
             Ok::<_, Infallible>(serve_request(&*handler, req, &conn_info, limits, &admission).await)
         }
     });
-    let _ = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
-        .serve_connection(io, service)
-        .await;
-}
-
-/// Parses one request, runs the handler, and renders the response. The body's
-/// in-flight reservation is held across the handler call and released when the
-/// response is rendered.
-async fn serve_request<H: IngressHandler>(
-    handler: &H,
-    req: Request<Incoming>,
-    conn_info: &ConnInfo,
-    limits: IngressLimits,
-    admission: &Arc<Admission>,
-) -> Response<Full<Bytes>> {
-    match parse(req, conn_info, limits, admission).await {
-        Ok((ingress, _reservation)) => render(handler.handle(ingress).await),
-        Err(early) => render(early),
+    let builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+    let conn = builder.serve_connection(io, service);
+    tokio::pin!(conn);
+    tokio::select! {
+        _ = conn.as_mut() => {}
+        // `changed()` resolves when shutdown flips the flag (it starts `false`).
+        _ = drain.changed() => {
+            conn.as_mut().graceful_shutdown();
+            let _ = conn.await;
+        }
     }
-}
-
-/// Parses a hyper request into an owned [`IngressRequest`] plus the in-flight
-/// [`Reservation`] covering its body, or an early [`IngressResponse`]: `405` for
-/// an unsupported method, `429` when the in-flight ceiling is reached, or `413`
-/// for a body over the per-request cap.
-async fn parse(
-    req: Request<Incoming>,
-    conn_info: &ConnInfo,
-    limits: IngressLimits,
-    admission: &Arc<Admission>,
-) -> Result<(IngressRequest, Reservation), IngressResponse> {
-    let Some(method) = map_method(req.method()) else {
-        return Err(IngressResponse::json(405, error_body("method not allowed")));
-    };
-    let path = req.uri().path().to_owned();
-    let headers: Vec<(String, String)> = req
-        .headers()
-        .iter()
-        .map(|(k, v)| (k.as_str().to_owned(), v.to_str().unwrap_or("").to_owned()))
-        .collect();
-
-    // A declared Content-Length over the per-request cap is too large outright.
-    let declared = content_length(&headers);
-    if declared.is_some_and(|n| n > limits.max_body_bytes) {
-        return Err(IngressResponse::json(
-            413,
-            error_body("request body too large"),
-        ));
-    }
-    // Reserve the (declared, else worst-case) size against the global budget
-    // before buffering; shed with 429 + retry guidance if the ceiling is reached.
-    let reserve = declared.unwrap_or(limits.max_body_bytes);
-    let reservation = admission
-        .try_reserve(reserve)
-        .ok_or_else(overloaded_response)?;
-
-    let body = Limited::new(req.into_body(), limits.max_body_bytes)
-        .collect()
-        .await
-        .map(|c| c.to_bytes().to_vec())
-        .map_err(|_| IngressResponse::json(413, error_body("request body too large")))?;
-
-    let c = classify(method, &path);
-    Ok((
-        IngressRequest {
-            method,
-            path,
-            endpoint: c.endpoint,
-            logical_index: c.logical_index,
-            doc_id: c.doc_id,
-            headers,
-            body,
-            client_cert_subject: conn_info.client_cert_subject.clone(),
-        },
-        reservation,
-    ))
-}
-
-/// The `Content-Length` header parsed to a byte count, if present and valid.
-fn content_length(headers: &[(String, String)]) -> Option<usize> {
-    headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, v)| v.trim().parse().ok())
-}
-
-/// The `429` shed response with retry guidance (NFR-R3): the proxy is at its
-/// in-flight memory budget; the client should back off and retry.
-fn overloaded_response() -> IngressResponse {
-    IngressResponse::json(429, error_body("ingress overloaded, retry later"))
-        .with_header("retry-after", "1")
-}
-
-/// Maps a hyper method to the SPI's method, or `None` if unsupported.
-fn map_method(method: &Method) -> Option<HttpMethod> {
-    match *method {
-        Method::GET => Some(HttpMethod::Get),
-        Method::PUT => Some(HttpMethod::Put),
-        Method::POST => Some(HttpMethod::Post),
-        Method::DELETE => Some(HttpMethod::Delete),
-        Method::HEAD => Some(HttpMethod::Head),
-        _ => None,
-    }
-}
-
-/// Renders an [`IngressResponse`] into a hyper response, never panicking.
-fn render(out: IngressResponse) -> Response<Full<Bytes>> {
-    let mut builder = Response::builder()
-        .status(out.status)
-        .header("content-type", "application/json");
-    for (name, value) in out.headers {
-        builder = builder.header(name, value);
-    }
-    builder
-        .body(Full::new(Bytes::from(out.body)))
-        .unwrap_or_else(|_| {
-            // A well-formed status + static body cannot fail to build; fall back
-            // to a minimal 500 rather than unwrapping (NFR-R1).
-            Response::new(Full::new(Bytes::from_static(b"{\"error\":\"internal\"}")))
-        })
-}
-
-/// A minimal JSON error body, value-free.
-fn error_body(message: &str) -> Vec<u8> {
-    format!(r#"{{"error":"{message}"}}"#).into_bytes()
 }

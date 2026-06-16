@@ -28,6 +28,7 @@ mod admission;
 mod classify;
 mod grpc;
 mod handler;
+mod http_io;
 mod request;
 mod server;
 mod tls;
@@ -37,7 +38,10 @@ pub use classify::{classify, Classified};
 pub use grpc::{serve_grpc, serve_grpc_tls};
 pub use handler::IngressHandler;
 pub use request::{IngressRequest, IngressResponse};
-pub use server::{serve, serve_tls, serve_tls_with_limits, serve_with_limits};
+pub use server::{
+    serve, serve_tls, serve_tls_with_limits, serve_tls_with_shutdown, serve_with_limits,
+    serve_with_shutdown, DRAIN_DEADLINE,
+};
 pub use tls::{CryptoProvider, TlsError, FIPS_APPROVED_SUITES};
 
 #[cfg(feature = "fips")]
