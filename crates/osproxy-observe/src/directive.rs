@@ -29,6 +29,20 @@ pub enum DiagLevel {
     ShapeRewriteDiff,
 }
 
+impl DiagLevel {
+    /// The level's stable wire name — the inverse of the publish/​header parser,
+    /// so an introspected directive's `level` re-publishes verbatim.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Shape => "Shape",
+            Self::ShapeTiming => "ShapeTiming",
+            Self::ShapeRewriteDiff => "ShapeRewriteDiff",
+        }
+    }
+}
+
 /// What a directive targets. A request matches when **every set field** equals
 /// the request's corresponding attribute; an unset field is a wildcard, so an
 /// all-unset match targets every request.
@@ -224,6 +238,46 @@ impl DirectiveSet {
         self.directives
             .iter()
             .any(|d| d.ring_buffer && d.applies(attrs, now, request))
+    }
+
+    /// A well-defined, shape-only introspection of the active settings: for each
+    /// directive, what it targets, at what verbosity and sample, whether it
+    /// captures to the ring buffer, and whether it has expired at `now`.
+    ///
+    /// This is the **read** side of the control-plane store — an agent fetches it
+    /// to see exactly what an instance is applying. The schema mirrors the publish
+    /// body ([`crate::DirectiveSet`] decoding), except the relative `ttl_secs` is
+    /// reported as a computed `expired` flag, since expiry is held as an absolute
+    /// monotonic instant that has no portable numeric form. Value-free throughout:
+    /// the only strings are operator-authored ids and targeting selectors.
+    #[must_use]
+    pub fn introspect(&self, now: Instant) -> serde_json::Value {
+        let directives: Vec<serde_json::Value> = self
+            .directives
+            .iter()
+            .map(|d| {
+                let mut obj = serde_json::Map::new();
+                obj.insert("id".into(), d.id.clone().into());
+                obj.insert("level".into(), d.level.as_str().into());
+                if let Some(t) = &d.match_.tenant {
+                    obj.insert("tenant".into(), t.as_str().into());
+                }
+                if let Some(i) = &d.match_.index {
+                    obj.insert("index".into(), i.as_str().into());
+                }
+                if let Some(p) = &d.match_.principal {
+                    obj.insert("principal".into(), p.as_str().into());
+                }
+                if let Some(e) = d.match_.endpoint {
+                    obj.insert("endpoint".into(), e.as_str().into());
+                }
+                obj.insert("sample_per_mille".into(), d.sample_per_mille.into());
+                obj.insert("ring_buffer".into(), d.ring_buffer.into());
+                obj.insert("expired".into(), (now >= d.expires_at).into());
+                serde_json::Value::Object(obj)
+            })
+            .collect();
+        serde_json::json!({ "directives": directives })
     }
 }
 

@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use osproxy_core::{Clock, IndexName, PartitionId, PrincipalId};
+use osproxy_core::{Clock, EndpointKind, IndexName, PartitionId, PrincipalId};
 use osproxy_observe::{DiagnosticsDirective, DirectiveMatch, DirectiveSet};
 use serde_json::Value;
 
@@ -48,6 +48,7 @@ const DIRECTIVE_KEYS: &[&str] = &[
     "tenant",
     "index",
     "principal",
+    "endpoint",
     "sample_per_mille",
     "ring_buffer",
 ];
@@ -107,6 +108,12 @@ fn decode_one(v: &Value, clock: &dyn Clock) -> Result<DiagnosticsDirective, &'st
     }
     if let Some(p) = v.get("principal").and_then(Value::as_str) {
         match_ = match_.for_principal(PrincipalId::from(p));
+    }
+    // A present `endpoint` must name a known class; an unknown one fails closed
+    // rather than silently widening the target (it round-trips with `as_str`).
+    if let Some(e) = v.get("endpoint") {
+        let name = e.as_str().ok_or("bad_endpoint")?;
+        match_ = match_.for_endpoint(EndpointKind::from_name(name).ok_or("unknown_endpoint")?);
     }
 
     Ok(DiagnosticsDirective {

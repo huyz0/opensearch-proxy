@@ -155,3 +155,33 @@ fn sampling_is_deterministic_and_bounded() {
         "≈half admitted, got {admitted}"
     );
 }
+
+#[test]
+fn introspect_renders_the_well_defined_settings_schema() {
+    let set = DirectiveSet::from_directives(vec![DiagnosticsDirective {
+        id: "raise-acme".to_owned(),
+        match_: DirectiveMatch::all()
+            .for_tenant(PartitionId::from("acme"))
+            .for_index(IndexName::from("orders")),
+        level: DiagLevel::ShapeTiming,
+        sample_per_mille: 250,
+        expires_at: at(100),
+        ring_buffer: true,
+    }]);
+    // Before expiry: the directive is live and fully described.
+    let v = set.introspect(at(10));
+    let d = &v["directives"][0];
+    assert_eq!(d["id"], "raise-acme");
+    assert_eq!(d["level"], "ShapeTiming");
+    assert_eq!(d["tenant"], "acme");
+    assert_eq!(d["index"], "orders");
+    assert_eq!(d["sample_per_mille"], 250);
+    assert_eq!(d["ring_buffer"], true);
+    assert_eq!(d["expired"], false);
+    // Unset targets are omitted (wildcards), not rendered null.
+    assert!(d.get("principal").is_none());
+    assert!(d.get("endpoint").is_none());
+    // After expiry: same shape, the `expired` flag flips — the live read.
+    let later = set.introspect(at(200));
+    assert_eq!(later["directives"][0]["expired"], true);
+}

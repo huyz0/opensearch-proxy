@@ -44,6 +44,47 @@ pub enum EndpointKind {
 }
 
 impl EndpointKind {
+    /// A stable, value-free name for this class — used in introspection readouts
+    /// (e.g. a control-plane directive's `endpoint` target). Matches the variant
+    /// name so it round-trips with a parser built from the same list.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::IngestDoc => "IngestDoc",
+            Self::IngestBulk => "IngestBulk",
+            Self::Search => "Search",
+            Self::MultiSearch => "MultiSearch",
+            Self::Count => "Count",
+            Self::GetById => "GetById",
+            Self::MultiGet => "MultiGet",
+            Self::DeleteById => "DeleteById",
+            Self::Cursor => "Cursor",
+            Self::Admin => "Admin",
+            Self::Unknown => "Unknown",
+        }
+    }
+
+    /// The inverse of [`EndpointKind::as_str`]: parses a class name back, or
+    /// `None` if it is not a known class. Lets a control-plane directive target an
+    /// endpoint over the wire (round-tripping with introspection).
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "IngestDoc" => Some(Self::IngestDoc),
+            "IngestBulk" => Some(Self::IngestBulk),
+            "Search" => Some(Self::Search),
+            "MultiSearch" => Some(Self::MultiSearch),
+            "Count" => Some(Self::Count),
+            "GetById" => Some(Self::GetById),
+            "MultiGet" => Some(Self::MultiGet),
+            "DeleteById" => Some(Self::DeleteById),
+            "Cursor" => Some(Self::Cursor),
+            "Admin" => Some(Self::Admin),
+            "Unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+
     /// Whether this class participates in tenancy rewriting (inject/filter/strip
     /// or id mapping). Used to decide whether a [`crate::ids::PartitionId`] must
     /// be resolvable for the request.
@@ -105,5 +146,27 @@ mod tests {
         assert!(EndpointKind::DeleteById.is_write());
         assert!(!EndpointKind::Search.is_write());
         assert!(!EndpointKind::GetById.is_write());
+    }
+
+    #[test]
+    fn every_kind_round_trips_through_its_name() {
+        // The introspection ↔ publish round-trip depends on as_str/from_name being
+        // exact inverses for every variant; a new variant with a missed arm fails.
+        for kind in [
+            EndpointKind::IngestDoc,
+            EndpointKind::IngestBulk,
+            EndpointKind::Search,
+            EndpointKind::MultiSearch,
+            EndpointKind::Count,
+            EndpointKind::GetById,
+            EndpointKind::MultiGet,
+            EndpointKind::DeleteById,
+            EndpointKind::Cursor,
+            EndpointKind::Admin,
+            EndpointKind::Unknown,
+        ] {
+            assert_eq!(EndpointKind::from_name(kind.as_str()), Some(kind));
+        }
+        assert_eq!(EndpointKind::from_name("nope"), None);
     }
 }

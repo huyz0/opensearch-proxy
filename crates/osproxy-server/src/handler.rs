@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use osproxy_core::{Clock, ErrorCode, RequestId};
 use osproxy_engine::{Pipeline, RequestError};
-use osproxy_observe::{InMemoryDirectiveStore, Metrics, PoolSnapshot};
+use osproxy_observe::{DirectiveStore, InMemoryDirectiveStore, Metrics, PoolSnapshot};
 use osproxy_sink::OpenSearchSink;
 use osproxy_spi::{
     AuthError, Authenticator, ClientCredentials, HeaderView, HttpMethod, Protocol, RequestCtx,
@@ -145,42 +145,71 @@ impl<A: Authenticator> AppHandler<A> {
             }
         }
     }
+
+    /// The pre-auth introspection and control-plane surfaces, in one place: the
+    /// shape-only `/debug/*` tools, the always-on `/metrics` snapshot, and the
+    /// token-gated `/admin/directives` (GET reads, POST publishes). Returns `Some`
+    /// when `req` targets one of them, else `None` (the request is data plane).
+    fn introspection_route(&self, req: &IngressRequest) -> Option<IngressResponse> {
+        // /debug/explain/{id}: the shape-only causal trace for one request.
+        if let Some(id) = req.path.strip_prefix("/debug/explain/") {
+            return Some(match self.pipeline.explain(&RequestId::from(id)) {
+                Some(doc) => IngressResponse::json(200, doc.to_string().into_bytes()),
+                None => IngressResponse::json(404, br#"{"error":"unknown_request_id"}"#.to_vec()),
+            });
+        }
+        // /debug/breakglass: the forensic tape captured under a ring_buffer
+        // directive (`docs/05` §5), oldest first. Shape-only like the explain doc.
+        if req.path == "/debug/breakglass" {
+            let tape = serde_json::Value::Array(self.pipeline.break_glass().snapshot());
+            return Some(IngressResponse::json(200, tape.to_string().into_bytes()));
+        }
+        // /metrics: the always-on, prod-safe operational snapshot (shape-only
+        // counts/rates/cluster ids, so no auth; see `metrics_snapshot`).
+        if req.path == "/metrics" {
+            return Some(IngressResponse::json(
+                200,
+                self.metrics_snapshot().into_bytes(),
+            ));
+        }
+        // /admin/directives: privileged control-plane settings — GET introspects
+        // what this instance applies, POST publishes a new set; both token-gated
+        // and fail-closed (a forged token reveals/changes nothing, `docs/05` §3).
+        if req.path == "/admin/directives" {
+            return Some(match req.method {
+                HttpMethod::Get => self.introspect_directives(req),
+                _ => self.publish_directives(req),
+            });
+        }
+        None
+    }
+
+    /// Handles `GET /admin/directives`: returns the control-plane settings this
+    /// instance is currently applying — the read side of the directive store, so
+    /// an agent can see what is in effect (per instance; the replicating store
+    /// keeps the fleet consistent). Token-gated like the publish path (the
+    /// targeting selectors are operator config) and fail-closed: disabled or a bad
+    /// token reveals nothing.
+    fn introspect_directives(&self, req: &IngressRequest) -> IngressResponse {
+        let Some(admin) = &self.directive_admin else {
+            return IngressResponse::json(404, br#"{"error":"not_enabled"}"#.to_vec());
+        };
+        if !crate::bearer::matches(&req.headers, &admin.token) {
+            return IngressResponse::json(401, br#"{"error":"unauthorized"}"#.to_vec());
+        }
+        let view = admin.store.load().introspect(admin.clock.now());
+        IngressResponse::json(200, view.to_string().into_bytes())
+    }
 }
 
 impl<A: Authenticator> IngressHandler for AppHandler<A> {
     async fn handle(&self, req: IngressRequest) -> IngressResponse {
         let request_id = self.next_request_id();
 
-        // Proxy admin endpoint: the LLM-facing /debug/explain/{request_id}.
-        // Returns only shape-level data (docs/05 §6); it would be auth-gated in
-        // a real deployment, which attaches with the TLS/mTLS slice.
-        if let Some(id) = req.path.strip_prefix("/debug/explain/") {
-            return match self.pipeline.explain(&RequestId::from(id)) {
-                Some(doc) => IngressResponse::json(200, doc.to_string().into_bytes()),
-                None => IngressResponse::json(404, br#"{"error":"unknown_request_id"}"#.to_vec()),
-            };
-        }
-
-        // Break-glass read: the forensic tape captured while a `ring_buffer`
-        // directive was in effect (`docs/05` §5), oldest first. Shape-only like
-        // every explain document; same auth-gating note as `/debug/explain`.
-        if req.path == "/debug/breakglass" {
-            let tape = serde_json::Value::Array(self.pipeline.break_glass().snapshot());
-            return IngressResponse::json(200, tape.to_string().into_bytes());
-        }
-
-        // Always-on operational snapshot — the one introspection surface meant to
-        // stay enabled in production, where `/debug/*` is off. Shape-only (counts,
-        // rates, cluster ids), so it needs no auth and leaks nothing. Per instance:
-        // an external aggregator rolls the fleet up.
-        if req.path == "/metrics" {
-            return IngressResponse::json(200, self.metrics_snapshot().into_bytes());
-        }
-
-        // Privileged: publish a fleet directive set. Token-gated and fail-closed —
-        // a forged token or a malformed body changes nothing (`docs/05` §3).
-        if req.path == "/admin/directives" {
-            return self.publish_directives(&req);
+        // Introspection + admin surfaces short-circuit before auth; the data plane
+        // continues below.
+        if let Some(resp) = self.introspection_route(&req) {
+            return resp;
         }
 
         // Authenticate before any routing. The bearer token is consumed here and

@@ -1,6 +1,7 @@
-//! The `POST /admin/directives` channel: token-gated, fail-closed, and — once a
-//! set is published — live on the same pipeline the requests flow through (the
-//! fleet flip with no restart).
+//! The `/admin/directives` control-plane channel: `POST` publishes a directive
+//! set (token-gated, fail-closed, live on the same pipeline the requests flow
+//! through — the fleet flip with no restart), and `GET` introspects the settings
+//! the instance is currently applying (the agent's read-back of fleet state).
 
 #![allow(clippy::unwrap_used)]
 
@@ -40,6 +41,23 @@ fn post(body: &str, token: Option<&str>) -> IngressRequest {
         doc_id: None,
         headers,
         body: body.as_bytes().to_vec(),
+        client_cert_subject: None,
+    }
+}
+
+/// A `GET /admin/directives` introspection request, optionally bearing a token.
+fn get(token: Option<&str>) -> IngressRequest {
+    let headers = token
+        .map(|t| vec![("authorization".to_owned(), format!("Bearer {t}"))])
+        .unwrap_or_default();
+    IngressRequest {
+        method: HttpMethod::Get,
+        path: "/admin/directives".to_owned(),
+        endpoint: EndpointKind::Unknown,
+        logical_index: String::new(),
+        doc_id: None,
+        headers,
+        body: Vec::new(),
         client_cert_subject: None,
     }
 }
@@ -140,5 +158,60 @@ async fn a_published_directive_takes_effect_on_the_live_pipeline() {
         tape.len(),
         1,
         "the published directive captured the request"
+    );
+}
+
+#[tokio::test]
+async fn introspecting_returns_the_settings_the_instance_is_applying() {
+    let store = Arc::new(InMemoryDirectiveStore::new());
+    let pipeline = Pipeline::new(TenancyRouter::new(tenancy()), sink());
+    let handler = admin_handler(store.clone(), pipeline);
+
+    // Publish a targeted directive, then read it back — the agent's observe loop.
+    let body = r#"{"directives":[{"id":"raise","level":"ShapeTiming","ttl_secs":60,"tenant":"acme","sample_per_mille":500,"ring_buffer":true}]}"#;
+    assert_eq!(handler.handle(post(body, Some(TOKEN))).await.status, 200);
+
+    // Fail-closed: a missing or wrong token reveals nothing.
+    assert_eq!(handler.handle(get(None)).await.status, 401);
+    assert_eq!(handler.handle(get(Some("wrong"))).await.status, 401);
+
+    // The read describes exactly what this instance is applying.
+    let resp = handler.handle(get(Some(TOKEN))).await;
+    assert_eq!(resp.status, 200);
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    let d = &v["directives"][0];
+    assert_eq!(d["id"], "raise");
+    assert_eq!(d["level"], "ShapeTiming");
+    assert_eq!(d["tenant"], "acme");
+    assert_eq!(d["sample_per_mille"], 500);
+    assert_eq!(d["ring_buffer"], true);
+    assert_eq!(d["expired"], false);
+}
+
+#[tokio::test]
+async fn an_introspected_directive_re_publishes_verbatim() {
+    // The observe→act loop closes only if what an agent reads back can be fed
+    // straight to POST. Publish an endpoint-targeted directive (the field that
+    // previously did not round-trip), read it, and re-publish that exact body.
+    let store = Arc::new(InMemoryDirectiveStore::new());
+    let pipeline = Pipeline::new(TenancyRouter::new(tenancy()), sink());
+    let handler = admin_handler(store.clone(), pipeline);
+
+    let body = r#"{"directives":[{"id":"r","level":"Shape","ttl_secs":60,"endpoint":"Search","sample_per_mille":1000}]}"#;
+    assert_eq!(handler.handle(post(body, Some(TOKEN))).await.status, 200);
+    let read = handler.handle(get(Some(TOKEN))).await;
+    let view: serde_json::Value = serde_json::from_slice(&read.body).unwrap();
+    assert_eq!(view["directives"][0]["endpoint"], "Search");
+
+    // Re-publish the *introspected* directive (restoring the relative ttl the read
+    // omits): the decoder accepts it — schema parity, no unknown_field rejection.
+    let mut directive = view["directives"][0].clone();
+    directive["ttl_secs"] = serde_json::json!(60);
+    directive.as_object_mut().unwrap().remove("expired");
+    let republish = serde_json::json!({ "directives": [directive] }).to_string();
+    assert_eq!(
+        handler.handle(post(&republish, Some(TOKEN))).await.status,
+        200,
+        "an introspected directive must re-publish without rejection"
     );
 }
