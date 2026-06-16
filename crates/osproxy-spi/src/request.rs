@@ -81,6 +81,7 @@ pub struct RequestCtx<'a> {
     headers: HeaderView<'a>,
     body: &'a [u8],
     query: Option<&'a str>,
+    path: &'a str,
 }
 
 impl<'a> RequestCtx<'a> {
@@ -113,7 +114,18 @@ impl<'a> RequestCtx<'a> {
             headers,
             body,
             query: None,
+            path: "",
         }
+    }
+
+    /// Sets the raw request path (e.g. `/_cat/indices`). Builder style. Used by
+    /// the admin pass-through, which forwards the path verbatim to the configured
+    /// admin cluster; the tenancy-aware paths derive their index/id at classify
+    /// time and do not consult it.
+    #[must_use]
+    pub fn with_path(mut self, path: &'a str) -> Self {
+        self.path = path;
+        self
     }
 
     /// Sets the document id from the request path (e.g. `_doc/{id}`), present on
@@ -189,6 +201,13 @@ impl<'a> RequestCtx<'a> {
     #[must_use]
     pub fn query(&self) -> Option<&'a str> {
         self.query
+    }
+
+    /// The raw request path, if set (`with_path`). Empty unless the consumer
+    /// attached it; the admin pass-through forwards it verbatim upstream.
+    #[must_use]
+    pub fn path(&self) -> &'a str {
+        self.path
     }
 
     /// The request headers.

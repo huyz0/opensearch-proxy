@@ -14,6 +14,7 @@
 //! document — the write→read round-trip symmetry the model rests on.
 #![deny(missing_docs)]
 
+mod admin;
 mod bulk;
 mod bulkprep;
 mod cursor;
@@ -28,6 +29,7 @@ mod plan;
 mod read;
 mod retry;
 
+pub use admin::AdminPolicy;
 pub use error::RequestError;
 pub use pipeline::{Pipeline, PipelineResponse};
 pub use plan::build_write_batch;

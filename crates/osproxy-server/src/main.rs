@@ -14,7 +14,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use osproxy_core::{ClusterId, IndexName, SystemClock};
-use osproxy_engine::Pipeline;
+use osproxy_engine::{AdminPolicy, Pipeline};
 use osproxy_observe::{DiagLevel, InMemoryDirectiveStore};
 use osproxy_otlp::OtlpHttpExporter;
 use osproxy_server::auth::ReferenceAuthenticator;
@@ -244,14 +244,44 @@ fn assemble_pipeline(
     sink: OpenSearchSink,
     directive_store: Arc<InMemoryDirectiveStore>,
 ) -> Result<Pipeline<ReferenceTenancy, OpenSearchSink>, String> {
-    let pipeline = with_cursor_affinity(
+    let pipeline = with_admin_passthrough(with_cursor_affinity(
         with_debug_directive(with_diag_baseline(with_otlp_export(Pipeline::new(
             TenancyRouter::new(tenancy),
             sink,
         )))?)
         .with_directive_store(directive_store),
-    );
+    ));
     Ok(pipeline)
+}
+
+/// Enables opt-in admin (`_cat`/`_cluster`/`_nodes`) pass-through when
+/// `OSPROXY_ADMIN_PASSTHROUGH_CLUSTER` names the cluster that answers admin
+/// requests; `OSPROXY_ADMIN_PASSTHROUGH_PREFIXES` is a comma-separated allow-list
+/// of path prefixes (default `/_cat/,/_cluster/,/_nodes/`). Unset ⇒ admin
+/// requests are rejected (the default; `docs/decisions/006`).
+fn with_admin_passthrough<T: TenancySpi, S: Sink + Reader>(
+    pipeline: Pipeline<T, S>,
+) -> Pipeline<T, S> {
+    let Some(cluster) = std::env::var("OSPROXY_ADMIN_PASSTHROUGH_CLUSTER")
+        .ok()
+        .filter(|v| !v.is_empty())
+    else {
+        return pipeline;
+    };
+    let prefixes: Vec<String> = env_or(
+        "OSPROXY_ADMIN_PASSTHROUGH_PREFIXES",
+        "/_cat/,/_cluster/,/_nodes/",
+    )
+    .split(',')
+    .map(str::trim)
+    .filter(|p| !p.is_empty())
+    .map(str::to_owned)
+    .collect();
+    println!("osproxy admin pass-through: on (cluster={cluster}, prefixes={prefixes:?})");
+    pipeline.with_admin_passthrough(AdminPolicy::new(
+        ClusterId::from(cluster.as_str()),
+        prefixes,
+    ))
 }
 
 /// Enables opt-in scroll/PIT cursor affinity when `OSPROXY_CURSOR_AFFINITY_KEY`

@@ -260,7 +260,8 @@ impl<A: Authenticator> IngressHandler for AppHandler<A> {
             &req.body,
         )
         .with_doc_id(req.doc_id.as_deref())
-        .with_query(req.query.as_deref());
+        .with_query(req.query.as_deref())
+        .with_path(&req.path);
 
         // Echo the request id so a client (or LLM) can fetch its
         // /debug/explain/{id} afterward.

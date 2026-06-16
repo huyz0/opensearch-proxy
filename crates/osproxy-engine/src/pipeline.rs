@@ -71,6 +71,10 @@ pub struct Pipeline<T, S> {
     /// affinity **off** (the opt-in default): cursor requests fail closed with a
     /// `CursorUnresolvable` error rather than route blindly.
     pub(crate) cursor_signer: Option<Arc<dyn CursorSigner>>,
+    /// The admin pass-through policy (`docs/03` §6): which cluster answers
+    /// allow-listed `_cat`/`_cluster`/`_nodes` requests, and which path prefixes
+    /// are permitted. `None` = reject all admin requests (the default).
+    pub(crate) admin_policy: Option<crate::admin::AdminPolicy>,
 }
 
 /// The diagnostics decision for one request: how much to record/export, and
@@ -112,7 +116,17 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             verifier: Arc::new(NoVerifier),
             break_glass: Arc::new(BreakGlassBuffer::new(BREAK_GLASS_CAPACITY)),
             cursor_signer: None,
+            admin_policy: None,
         }
+    }
+
+    /// Enables opt-in admin pass-through (`docs/03` §6): allow-listed
+    /// `_cat`/`_cluster`/`_nodes` requests are forwarded verbatim to `policy`'s
+    /// cluster. Without this, every admin request is rejected (the default).
+    #[must_use]
+    pub fn with_admin_passthrough(mut self, policy: crate::admin::AdminPolicy) -> Self {
+        self.admin_policy = Some(policy);
+        self
     }
 
     /// Enables opt-in scroll/PIT cursor affinity (`docs/03` §6) with `signer`
@@ -332,6 +346,7 @@ impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
             EndpointKind::MultiSearch => self.multi_search(ctx, trace).await,
             EndpointKind::Count => self.count(ctx, trace).await,
             EndpointKind::Cursor => self.cursor(ctx, trace).await,
+            EndpointKind::Admin => self.admin(ctx, trace).await,
             other => Err(RequestError::Spi(SpiError::UnsupportedEndpoint {
                 endpoint: other,
             })),

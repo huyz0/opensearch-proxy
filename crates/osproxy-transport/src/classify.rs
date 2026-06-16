@@ -71,6 +71,14 @@ pub fn classify(method: HttpMethod, path: &str) -> Classified {
             doc_id: None,
         },
         [index, "_bulk"] => classified(EndpointKind::IngestBulk, index),
+        // Administrative endpoints (`_cat/*`, `_cluster/*`, `_nodes/*`): no tenancy
+        // semantics, classified `Admin` so the engine can pass them through to an
+        // operator-allow-listed cluster, or reject (the default). The full path is
+        // forwarded verbatim, so no segment is captured (`docs/specs/
+        // opensearch-endpoints.md`). Placed last so it cannot shadow a tenancy path.
+        [first, ..] if matches!(*first, "_cat" | "_cluster" | "_nodes") => {
+            classified(EndpointKind::Admin, "")
+        }
         _ => Classified {
             endpoint: EndpointKind::Unknown,
             logical_index: segments
@@ -226,13 +234,32 @@ mod tests {
     }
 
     #[test]
+    fn admin_endpoints_classify_as_admin() {
+        for path in ["/_cat/indices", "/_cluster/health", "/_nodes/stats"] {
+            let c = classify(HttpMethod::Get, path);
+            assert_eq!(c.endpoint, EndpointKind::Admin, "{path}");
+            assert!(
+                c.logical_index.is_empty(),
+                "{path} carries no logical index"
+            );
+        }
+        // An index literally named `_catalog` is not an admin path (prefix-exact).
+        assert_eq!(
+            classify(HttpMethod::Post, "/_catalog/_search").endpoint,
+            EndpointKind::Search
+        );
+    }
+
+    #[test]
     fn unknown_paths_classify_as_unknown() {
         assert_eq!(
             classify(HttpMethod::Get, "/").endpoint,
             EndpointKind::Unknown
         );
+        // `_cluster/*` is now classified `Admin` (see `admin_endpoints_*`), so use
+        // a genuinely unmatched proxy path here.
         assert_eq!(
-            classify(HttpMethod::Get, "/_cluster/health").endpoint,
+            classify(HttpMethod::Get, "/_sql").endpoint,
             EndpointKind::Unknown
         );
     }
