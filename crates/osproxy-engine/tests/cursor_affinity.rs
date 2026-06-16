@@ -413,6 +413,40 @@ async fn a_pit_search_routes_to_the_pit_cluster_and_substitutes_the_real_id() {
 }
 
 #[tokio::test]
+async fn a_forged_pit_in_a_search_body_fails_closed_without_dispatch() {
+    // The PIT-search entry point is the isolation-critical one: a search whose
+    // body carries a `pit.id` signed with a foreign key must be rejected before
+    // any resolve or dispatch — never routed, never leaked.
+    let real = Arc::new(FnvSigner(1));
+    let foreign = FnvSigner(2);
+    let pit = cursor::wrap(&foreign, &ClusterId::from("us-9"), "RAWPIT");
+    let (p, seen) = pipeline(Some(real));
+    let principal = Principal::new(osproxy_core::PrincipalId::from("svc"));
+    let rid = RequestId::from("fp");
+    let headers: Vec<(String, String)> = vec![];
+    let body = format!(r#"{{"query":{{"match_all":{{}}}},"pit":{{"id":"{pit}"}}}}"#);
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::Search,
+        Protocol::Http1,
+        "",
+        HeaderView::new(&headers),
+        body.as_bytes(),
+    );
+    let err = p
+        .handle(&ctx)
+        .await
+        .expect_err("a forged pit must be rejected");
+    assert_eq!(err.code(), ErrorCode::CursorUnresolvable);
+    assert!(
+        seen.lock().unwrap().is_none(),
+        "a forged pit search is never dispatched"
+    );
+}
+
+#[tokio::test]
 async fn affinity_disabled_fails_closed() {
     let (p, seen) = pipeline(None); // no signer ⇒ affinity off
     let err = run(&p, HttpMethod::Post, br#"{"scroll_id":"anything"}"#, None)
