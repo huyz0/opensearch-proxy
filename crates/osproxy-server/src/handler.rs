@@ -37,6 +37,10 @@ pub struct AppHandler<A> {
     request_log: Box<dyn RequestLog>,
     directive_admin: Option<DirectiveAdmin>,
     metrics: Metrics,
+    /// When true (default), a body-mutating request over cleartext is refused
+    /// (NFR-S1) — the proxy must terminate TLS to rewrite the stream. An operator
+    /// on a trusted network can opt out.
+    require_tls_for_mutation: bool,
 }
 
 impl<A> std::fmt::Debug for AppHandler<A> {
@@ -59,7 +63,17 @@ impl<A: Authenticator> AppHandler<A> {
             request_log: Box::new(NoLog),
             directive_admin: None,
             metrics: Metrics::new(),
+            require_tls_for_mutation: true,
         }
+    }
+
+    /// Sets whether body-mutating requests are refused over cleartext (NFR-S1).
+    /// Builder style; default `true` (enforce). Pass `false` only on a trusted
+    /// network where the operator accepts mutating over cleartext.
+    #[must_use]
+    pub fn with_require_tls_for_mutation(mut self, require: bool) -> Self {
+        self.require_tls_for_mutation = require;
+        self
     }
 
     /// The pipeline this handler serves — a read-only accessor for introspection
@@ -210,6 +224,15 @@ impl<A: Authenticator> IngressHandler for AppHandler<A> {
         // continues below.
         if let Some(resp) = self.introspection_route(&req) {
             return resp;
+        }
+
+        // NFR-S1: the proxy mutates the body (inject/filter/strip) for every
+        // tenancy-aware endpoint; mutating an encrypted stream requires
+        // terminating TLS, so a mutating request over cleartext is refused before
+        // it is processed. Read-only admin/unknown pass-through is unaffected.
+        if self.require_tls_for_mutation && req.endpoint.is_tenancy_aware() && !req.secure {
+            return IngressResponse::json(403, br#"{"error":"tls_required"}"#.to_vec())
+                .with_header("x-request-id", request_id.as_str());
         }
 
         // Authenticate before any routing. The bearer token is consumed here and

@@ -103,10 +103,13 @@ async fn spawn_proxy(upstream: String) -> (String, Arc<Handler>) {
     let endpoints = std::iter::once((cluster.clone(), upstream)).collect();
     let sink = OpenSearchSink::new(endpoints);
     let tenancy = ReferenceTenancy::new(cluster, IndexName::from(INDEX));
-    let handler = Arc::new(AppHandler::new(
-        Pipeline::new(TenancyRouter::new(tenancy), sink),
-        ReferenceAuthenticator::dev(),
-    ));
+    let handler = Arc::new(
+        AppHandler::new(
+            Pipeline::new(TenancyRouter::new(tenancy), sink),
+            ReferenceAuthenticator::dev(),
+        )
+        .with_require_tls_for_mutation(false),
+    );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let serving = handler.clone();

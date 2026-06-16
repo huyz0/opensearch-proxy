@@ -80,10 +80,14 @@ async fn spawn_proxy(upstream: String) -> String {
     endpoints.insert(cluster.clone(), upstream);
     let sink = OpenSearchSink::new(endpoints);
     let tenancy = ReferenceTenancy::new(cluster, IndexName::from(INDEX));
-    let handler = Arc::new(AppHandler::new(
-        Pipeline::new(TenancyRouter::new(tenancy), sink),
-        ReferenceAuthenticator::dev(),
-    ));
+    let handler = Arc::new(
+        AppHandler::new(
+            Pipeline::new(TenancyRouter::new(tenancy), sink),
+            ReferenceAuthenticator::dev(),
+        )
+        // Cleartext test harness: allow mutating requests over h1 (NFR-S1 opt-out).
+        .with_require_tls_for_mutation(false),
+    );
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -103,7 +107,10 @@ async fn spawn_proxy_with_affinity(upstream: String) -> String {
     let tenancy = ReferenceTenancy::new(cluster, IndexName::from(INDEX));
     let pipeline = Pipeline::new(TenancyRouter::new(tenancy), sink)
         .with_cursor_signer(Arc::new(HmacCursorSigner::new(b"scroll-test-key")));
-    let handler = Arc::new(AppHandler::new(pipeline, ReferenceAuthenticator::dev()));
+    let handler = Arc::new(
+        AppHandler::new(pipeline, ReferenceAuthenticator::dev())
+            .with_require_tls_for_mutation(false),
+    );
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

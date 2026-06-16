@@ -65,9 +65,13 @@ async fn run() -> Result<(), String> {
     } else {
         "token"
     };
+    // NFR-S1 enforcement is on by default; an operator on a trusted network can
+    // opt out with OSPROXY_ALLOW_CLEARTEXT_MUTATION=1 (e.g. local/dev over h1).
+    let require_tls = !env_truthy("OSPROXY_ALLOW_CLEARTEXT_MUTATION");
     let handler = Arc::new(with_directive_admin(
         AppHandler::new(pipeline, ReferenceAuthenticator::new(tokens))
-            .with_request_log(request_log()),
+            .with_request_log(request_log())
+            .with_require_tls_for_mutation(require_tls),
         directive_store,
     ));
 
@@ -319,6 +323,13 @@ fn load_tls_provider() -> Result<Option<DefaultCryptoProvider>, String> {
     }
     .map_err(|e| format!("building TLS config: {e}"))?;
     Ok(Some(provider))
+}
+
+/// Whether an environment flag is set to a truthy value (`1`/`true`/`yes`,
+/// case-insensitive). Unset, empty, or anything else is false.
+fn env_truthy(key: &str) -> bool {
+    std::env::var(key)
+        .is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
 }
 
 /// Reads an environment variable, falling back to `default` if unset or empty.

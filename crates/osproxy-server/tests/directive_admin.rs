@@ -43,6 +43,7 @@ fn post(body: &str, token: Option<&str>) -> IngressRequest {
         body: body.as_bytes().to_vec(),
         query: None,
         client_cert_subject: None,
+        secure: false,
     }
 }
 
@@ -61,6 +62,7 @@ fn get(token: Option<&str>) -> IngressRequest {
         body: Vec::new(),
         query: None,
         client_cert_subject: None,
+        secure: false,
     }
 }
 
@@ -155,6 +157,7 @@ async fn a_published_directive_takes_effect_on_the_live_pipeline() {
         body: b"{}".to_vec(),
         query: None,
         client_cert_subject: None,
+        secure: true,
     };
     let _ = handler.handle(ingest).await;
     assert_eq!(

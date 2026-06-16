@@ -90,6 +90,7 @@ async fn spawn_proxy_process(upstream: &str) -> (ProxyChild, String, u32) {
         .env("OSPROXY_UPSTREAM", upstream)
         .env("OSPROXY_INDEX", INDEX)
         .env("OSPROXY_TOKENS", "") // dev (open) auth
+        .env("OSPROXY_ALLOW_CLEARTEXT_MUTATION", "1") // cleartext soak harness
         .spawn()
         .expect("spawn osproxy binary");
     let pid = child.id();

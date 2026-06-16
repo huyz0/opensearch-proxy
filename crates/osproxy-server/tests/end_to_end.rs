@@ -25,6 +25,7 @@ use osproxy_server::handler::AppHandler;
 use osproxy_server::tenancy::ReferenceTenancy;
 use osproxy_sink::OpenSearchSink;
 use osproxy_tenancy::TenancyRouter;
+use osproxy_transport::IngressHandler;
 use tokio::net::TcpListener;
 
 #[derive(Clone, Debug, Default)]
@@ -82,10 +83,13 @@ async fn put_doc_is_tenanted_and_forwarded_upstream() {
     // The exact wiring the binary builds.
     let sink = OpenSearchSink::new(endpoints);
     let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
-    let handler = Arc::new(AppHandler::new(
-        Pipeline::new(TenancyRouter::new(tenancy), sink),
-        ReferenceAuthenticator::dev(),
-    ));
+    let handler = Arc::new(
+        AppHandler::new(
+            Pipeline::new(TenancyRouter::new(tenancy), sink),
+            ReferenceAuthenticator::dev(),
+        )
+        .with_require_tls_for_mutation(false), // cleartext test harness (NFR-S1 opt-out)
+    );
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy_addr = listener.local_addr().unwrap();
@@ -180,10 +184,13 @@ async fn unresolved_partition_returns_client_error() {
     endpoints.insert(cluster.clone(), upstream);
     let sink = OpenSearchSink::new(endpoints);
     let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
-    let handler = Arc::new(AppHandler::new(
-        Pipeline::new(TenancyRouter::new(tenancy), sink),
-        ReferenceAuthenticator::dev(),
-    ));
+    let handler = Arc::new(
+        AppHandler::new(
+            Pipeline::new(TenancyRouter::new(tenancy), sink),
+            ReferenceAuthenticator::dev(),
+        )
+        .with_require_tls_for_mutation(false), // cleartext test harness (NFR-S1 opt-out)
+    );
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy_addr = listener.local_addr().unwrap();
@@ -216,10 +223,13 @@ async fn token_auth_rejects_missing_and_accepts_valid() {
 
     let mut tokens = HashMap::new();
     tokens.insert("s3cr3t".to_owned(), "svc-ingest".to_owned());
-    let handler = Arc::new(AppHandler::new(
-        Pipeline::new(TenancyRouter::new(tenancy), sink),
-        ReferenceAuthenticator::new(tokens),
-    ));
+    let handler = Arc::new(
+        AppHandler::new(
+            Pipeline::new(TenancyRouter::new(tenancy), sink),
+            ReferenceAuthenticator::new(tokens),
+        )
+        .with_require_tls_for_mutation(false), // cleartext test harness (NFR-S1 opt-out)
+    );
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy_addr = listener.local_addr().unwrap();
@@ -258,6 +268,56 @@ async fn token_auth_rejects_missing_and_accepts_valid() {
     assert_eq!(ok.status(), 201);
 }
 
+#[tokio::test]
+async fn a_mutating_request_over_cleartext_is_refused_when_tls_is_required() {
+    // NFR-S1: with enforcement on (the default), a body-mutating endpoint over a
+    // cleartext connection is refused with 403 before auth or any upstream call;
+    // the same request marked secure is processed. Driven through the handler
+    // directly so the `secure` bit can be set without standing up a TLS listener.
+    let (upstream, captured) = start_upstream().await;
+    let cluster = ClusterId::from("default");
+    let mut endpoints = HashMap::new();
+    endpoints.insert(cluster.clone(), upstream);
+    let sink = OpenSearchSink::new(endpoints);
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
+    // Default construction enforces NFR-S1 (no opt-out here).
+    let handler = AppHandler::new(
+        Pipeline::new(TenancyRouter::new(tenancy), sink),
+        ReferenceAuthenticator::dev(),
+    );
+
+    let ingest = |secure: bool| osproxy_transport::IngressRequest {
+        method: osproxy_spi::HttpMethod::Post,
+        path: "/orders/_doc".to_owned(),
+        endpoint: osproxy_core::EndpointKind::IngestDoc,
+        logical_index: "orders".to_owned(),
+        doc_id: None,
+        headers: vec![],
+        body: br#"{"tenant_id":"acme","id":7}"#.to_vec(),
+        query: None,
+        client_cert_subject: None,
+        secure,
+    };
+
+    // Cleartext: refused with 403, and nothing reached the upstream.
+    let refused = handler.handle(ingest(false)).await;
+    assert_eq!(refused.status, 403);
+    assert!(
+        String::from_utf8_lossy(&refused.body).contains("tls_required"),
+        "value-free tls_required body: {refused:?}"
+    );
+    assert_eq!(
+        captured.lock().unwrap().method,
+        "",
+        "a refused request never reaches the upstream"
+    );
+
+    // Same request over TLS: processed and forwarded (201 from the mock upstream).
+    let ok = handler.handle(ingest(true)).await;
+    assert_eq!(ok.status, 201);
+    assert_eq!(captured.lock().unwrap().method, "PUT");
+}
+
 /// A request log that records the structured records it is handed.
 #[derive(Clone, Default)]
 struct RecordingLog(Arc<Mutex<Vec<serde_json::Value>>>);
@@ -283,7 +343,8 @@ async fn a_handled_request_emits_a_structured_log_carrying_the_trace_id() {
             Pipeline::new(TenancyRouter::new(tenancy), sink),
             ReferenceAuthenticator::dev(),
         )
-        .with_request_log(Box::new(log.clone())),
+        .with_request_log(Box::new(log.clone()))
+        .with_require_tls_for_mutation(false), // cleartext test harness (NFR-S1 opt-out)
     );
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

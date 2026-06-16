@@ -35,6 +35,10 @@ pub struct IngressRequest {
     /// authenticated (mTLS). A stable id derived from the cert, never the raw
     /// certificate material.
     pub client_cert_subject: Option<String>,
+    /// Whether the request arrived over a TLS-terminated connection. The handler
+    /// refuses to mutate a request body over cleartext, since the proxy must
+    /// terminate TLS to rewrite the stream (NFR-S1).
+    pub secure: bool,
 }
 
 /// The response a handler returns for the transport to write back.

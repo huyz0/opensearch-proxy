@@ -31,6 +31,7 @@ fn get(path: &str) -> IngressRequest {
         body: vec![],
         query: None,
         client_cert_subject: None,
+        secure: false,
     }
 }
 

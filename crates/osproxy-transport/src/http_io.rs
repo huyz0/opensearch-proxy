@@ -24,6 +24,9 @@ use crate::request::{IngressRequest, IngressResponse};
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ConnInfo {
     pub(crate) client_cert_subject: Option<String>,
+    /// Whether the connection was terminated over TLS. The handler refuses to
+    /// mutate a request body over cleartext (NFR-S1).
+    pub(crate) secure: bool,
 }
 
 /// Parses one request, runs the handler, and renders the response. The body's
@@ -96,6 +99,7 @@ async fn parse(
             body,
             query,
             client_cert_subject: conn_info.client_cert_subject.clone(),
+            secure: conn_info.secure,
         },
         reservation,
     ))

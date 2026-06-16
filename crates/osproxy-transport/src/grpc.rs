@@ -59,10 +59,10 @@ impl<H: IngressHandler> DocumentService for GrpcIngress<H> {
         let headers = bearer_header(&request);
         // The verified mTLS identity, if this RPC arrived on a TLS listener that
         // required a client certificate (None for the cleartext listener).
-        let client_cert_subject = request
-            .extensions()
-            .get::<GrpcConnInfo>()
-            .and_then(|i| i.client_cert_subject.clone());
+        let conn = request.extensions().get::<GrpcConnInfo>();
+        let client_cert_subject = conn.and_then(|i| i.client_cert_subject.clone());
+        // Present only on the TLS listener; a cleartext RPC has no conn info.
+        let secure = conn.is_some_and(|i| i.secure);
         let msg = request.into_inner();
 
         // Synthesize the REST request this RPC stands for, then classify it the
@@ -85,6 +85,7 @@ impl<H: IngressHandler> DocumentService for GrpcIngress<H> {
             // gRPC has no URL query string; cursor params do not apply here.
             query: None,
             client_cert_subject,
+            secure,
         };
 
         let resp = self.handler.handle(ingress).await;
@@ -137,6 +138,9 @@ pub async fn serve_grpc<H: IngressHandler>(
 #[derive(Clone, Default)]
 struct GrpcConnInfo {
     client_cert_subject: Option<String>,
+    /// True on the TLS listener — gRPC ingest mutates the document, so it is
+    /// refused over cleartext (NFR-S1), same as the HTTP path.
+    secure: bool,
 }
 
 /// A TLS-terminated gRPC connection carrying its verified client identity.
@@ -213,6 +217,7 @@ where
                 if let Ok(tls) = acceptor.accept(tcp).await {
                     let info = GrpcConnInfo {
                         client_cert_subject: crate::tls::client_subject_from_tls(&tls),
+                        secure: true,
                     };
                     let _ = tx.send(TlsConn { inner: tls, info }).await;
                 }

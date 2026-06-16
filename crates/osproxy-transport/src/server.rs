@@ -286,6 +286,7 @@ async fn await_drain(active: &AtomicUsize, deadline: Duration) {
 fn conn_info_from_tls(tls: &tokio_rustls::server::TlsStream<tokio::net::TcpStream>) -> ConnInfo {
     ConnInfo {
         client_cert_subject: crate::tls::client_subject_from_tls(tls),
+        secure: true,
     }
 }
 
