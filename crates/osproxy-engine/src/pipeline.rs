@@ -17,8 +17,8 @@ use osproxy_observe::{
     RequestAttrs, RequestTrace, SpanExporter,
 };
 use osproxy_sink::{Reader, Sink};
-use osproxy_spi::{RequestCtx, SpiError, TenancySpi};
-use osproxy_tenancy::TenancyRouter;
+use osproxy_spi::{RequestCtx, SpiError};
+use osproxy_tenancy::Router;
 use serde_json::Value;
 
 use crate::error::RequestError;
@@ -45,11 +45,11 @@ pub struct PipelineResponse {
 
 /// Orchestrates requests through a tenancy router and a sink.
 ///
-/// Generic over the [`TenancySpi`] implementation and the [`Sink`], so the hot
-/// path is monomorphized (no dyn dispatch) and tests can swap in an in-memory
-/// sink.
-pub struct Pipeline<T, S> {
-    pub(crate) router: TenancyRouter<T>,
+/// Generic over the [`Router`] implementation and the [`Sink`], so the hot path
+/// is monomorphized (no dyn dispatch), a deployment can supply its own router,
+/// and tests can swap in an in-memory sink.
+pub struct Pipeline<R, S> {
+    pub(crate) router: R,
     pub(crate) sink: S,
     pub(crate) retry: crate::RetryPolicy,
     explain: Arc<ExplainStore>,
@@ -85,7 +85,7 @@ struct Diagnostics {
     capture: bool,
 }
 
-impl<T, S> std::fmt::Debug for Pipeline<T, S> {
+impl<R, S> std::fmt::Debug for Pipeline<R, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The injected exporter/clock are not `Debug`; show the rest of the shape.
         f.debug_struct("Pipeline")
@@ -96,10 +96,10 @@ impl<T, S> std::fmt::Debug for Pipeline<T, S> {
     }
 }
 
-impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
+impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     /// Builds a pipeline from a router and a sink (default backend-retry policy,
     /// no span export).
-    pub fn new(router: TenancyRouter<T>, sink: S) -> Self {
+    pub fn new(router: R, sink: S) -> Self {
         Self {
             router,
             sink,

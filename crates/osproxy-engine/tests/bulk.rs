@@ -58,7 +58,7 @@ impl TenancySpi for SharedTenancy {
 
 /// Two partitions on two **different** physical indices, so a mixed bulk demuxes
 /// into two targets.
-fn pipeline() -> Pipeline<SharedTenancy, MemorySink> {
+fn pipeline() -> Pipeline<TenancyRouter<SharedTenancy>, MemorySink> {
     let table = Arc::new(PlacementTable::new());
     for (partition, index) in [("acme", "acme-idx"), ("globex", "globex-idx")] {
         table.set(
@@ -79,7 +79,10 @@ fn pipeline() -> Pipeline<SharedTenancy, MemorySink> {
     )
 }
 
-async fn bulk(p: &Pipeline<SharedTenancy, MemorySink>, body: &[u8]) -> PipelineResponse {
+async fn bulk(
+    p: &Pipeline<TenancyRouter<SharedTenancy>, MemorySink>,
+    body: &[u8],
+) -> PipelineResponse {
     let principal = Principal::new(PrincipalId::from("svc"));
     let rid = RequestId::from("b");
     let headers = vec![];

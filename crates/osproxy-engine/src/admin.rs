@@ -10,7 +10,8 @@
 use osproxy_core::ClusterId;
 use osproxy_observe::{DispatchInfo, RequestTrace};
 use osproxy_sink::{CursorOp, Reader, Sink};
-use osproxy_spi::{RequestCtx, SpiError, TenancySpi};
+use osproxy_spi::{RequestCtx, SpiError};
+use osproxy_tenancy::Router;
 
 use crate::endpoints::wire_trace;
 use crate::error::RequestError;
@@ -51,7 +52,7 @@ impl AdminPolicy {
     }
 }
 
-impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
+impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     /// Forwards an allow-listed admin request verbatim to the policy's cluster,
     /// or rejects it (the default when no policy is configured, and for any path
     /// not on the allow-list). Admin output is not tenancy-filtered, so the full

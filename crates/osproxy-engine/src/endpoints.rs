@@ -9,8 +9,8 @@
 use osproxy_core::{ClusterId, TraceContext};
 use osproxy_observe::DispatchInfo;
 use osproxy_sink::{CursorOp, Reader, Sink, WriteAck, WriteBatch};
-use osproxy_spi::{RequestCtx, TenancySpi};
-use osproxy_tenancy::Resolved;
+use osproxy_spi::RequestCtx;
+use osproxy_tenancy::{Resolved, Router};
 
 use crate::cursor::{
     cursor_request, forwardable_query, has_scroll_id, pit_id_in_body, rewrite_cursor_body,
@@ -27,7 +27,7 @@ use crate::read::{
 use crate::retry::with_retry;
 use osproxy_observe::RequestTrace;
 
-impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
+impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     /// The single-document ingest path (`docs/04` §2).
     pub(crate) async fn ingest_doc(
         &self,

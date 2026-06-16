@@ -9,10 +9,13 @@ use osproxy_engine::{Pipeline, RequestError};
 use osproxy_observe::{DirectiveStore, InMemoryDirectiveStore, Metrics, PoolSnapshot};
 use osproxy_sink::OpenSearchSink;
 use osproxy_spi::{
-    AuthError, Authenticator, ClientCredentials, HeaderView, HttpMethod, RequestCtx,
+    Action, AuthError, Authenticator, Authorizer, ClientCredentials, HeaderView, HttpMethod,
+    RequestCtx,
 };
+use osproxy_tenancy::TenancyRouter;
 use osproxy_transport::{IngressHandler, IngressRequest, IngressResponse};
 
+use crate::auth::AllowAllAuthorizer;
 use crate::directives_api::decode_directive_set;
 use crate::log::{NoLog, RequestLog};
 use crate::tenancy::ReferenceTenancy;
@@ -26,13 +29,16 @@ struct DirectiveAdmin {
 }
 
 /// The concrete pipeline this binary serves.
-pub type AppPipeline = Pipeline<ReferenceTenancy, OpenSearchSink>;
+pub type AppPipeline = Pipeline<TenancyRouter<ReferenceTenancy>, OpenSearchSink>;
 
 /// Adapts the engine pipeline to the transport's [`IngressHandler`] contract,
-/// authenticating each request with the configured [`Authenticator`].
-pub struct AppHandler<A> {
+/// authenticating each request with the configured [`Authenticator`] and, after
+/// authentication, authorizing it with the configured [`Authorizer`] (default
+/// [`AllowAllAuthorizer`] — no second policy layer until one is supplied).
+pub struct AppHandler<A, Z = AllowAllAuthorizer> {
     pipeline: AppPipeline,
     authenticator: A,
+    authorizer: Z,
     request_seq: AtomicU64,
     request_log: Box<dyn RequestLog>,
     directive_admin: Option<DirectiveAdmin>,
@@ -43,7 +49,7 @@ pub struct AppHandler<A> {
     require_tls_for_mutation: bool,
 }
 
-impl<A> std::fmt::Debug for AppHandler<A> {
+impl<A, Z> std::fmt::Debug for AppHandler<A, Z> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The injected logger is not `Debug`; show whether it is enabled.
         f.debug_struct("AppHandler")
@@ -52,18 +58,39 @@ impl<A> std::fmt::Debug for AppHandler<A> {
     }
 }
 
-impl<A: Authenticator> AppHandler<A> {
-    /// Wraps a pipeline and an authenticator (no request logging by default).
+impl<A: Authenticator> AppHandler<A, AllowAllAuthorizer> {
+    /// Wraps a pipeline and an authenticator (no request logging by default, and
+    /// the allow-all authorizer until [`Self::with_authorizer`] supplies one).
     #[must_use]
     pub fn new(pipeline: AppPipeline, authenticator: A) -> Self {
         Self {
             pipeline,
             authenticator,
+            authorizer: AllowAllAuthorizer,
             request_seq: AtomicU64::new(0),
             request_log: Box::new(NoLog),
             directive_admin: None,
             metrics: Metrics::new(),
             require_tls_for_mutation: true,
+        }
+    }
+}
+
+impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
+    /// Sets the post-authentication [`Authorizer`] (builder style). Replaces the
+    /// default allow-all policy; the principal is already resolved, so the
+    /// authorizer decides only whether that principal may perform the action.
+    #[must_use]
+    pub fn with_authorizer<Z2: Authorizer>(self, authorizer: Z2) -> AppHandler<A, Z2> {
+        AppHandler {
+            pipeline: self.pipeline,
+            authenticator: self.authenticator,
+            authorizer,
+            request_seq: self.request_seq,
+            request_log: self.request_log,
+            directive_admin: self.directive_admin,
+            metrics: self.metrics,
+            require_tls_for_mutation: self.require_tls_for_mutation,
         }
     }
 
@@ -223,7 +250,7 @@ impl<A: Authenticator> AppHandler<A> {
     }
 }
 
-impl<A: Authenticator> IngressHandler for AppHandler<A> {
+impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
     async fn handle(&self, req: IngressRequest) -> IngressResponse {
         let request_id = self.next_request_id();
 
@@ -255,6 +282,18 @@ impl<A: Authenticator> IngressHandler for AppHandler<A> {
                     .with_header("x-request-id", request_id.as_str());
             }
         };
+
+        // Authorize the resolved principal against the action. The default
+        // allow-all authorizer makes this a no-op; a supplied policy can decline
+        // (403) without ever seeing the credentials, which were consumed above.
+        let action = Action {
+            endpoint: req.endpoint,
+            logical_index: req.logical_index.clone(),
+        };
+        if let Err(err) = self.authorizer.authorize(&principal, &action).await {
+            return IngressResponse::json(err.http_status(), auth_error_body(&err))
+                .with_header("x-request-id", request_id.as_str());
+        }
 
         let ctx = RequestCtx::new(
             &principal,

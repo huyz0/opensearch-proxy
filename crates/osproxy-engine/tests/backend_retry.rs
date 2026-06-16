@@ -62,7 +62,7 @@ impl TenancySpi for FlakyTenancy {
     }
 }
 
-fn pipeline(fail_first: u32) -> Pipeline<FlakyTenancy, MemorySink> {
+fn pipeline(fail_first: u32) -> Pipeline<TenancyRouter<FlakyTenancy>, MemorySink> {
     let table = Arc::new(PlacementTable::new());
     table.set(
         PartitionId::from("acme"),
@@ -91,7 +91,9 @@ fn pipeline(fail_first: u32) -> Pipeline<FlakyTenancy, MemorySink> {
     })
 }
 
-async fn ingest(p: &Pipeline<FlakyTenancy, MemorySink>) -> Result<PipelineResponse, RequestError> {
+async fn ingest(
+    p: &Pipeline<TenancyRouter<FlakyTenancy>, MemorySink>,
+) -> Result<PipelineResponse, RequestError> {
     let principal = Principal::new(PrincipalId::from("svc"));
     let rid = RequestId::from("r");
     let headers: Vec<(String, String)> = vec![];

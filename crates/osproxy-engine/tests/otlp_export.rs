@@ -63,7 +63,7 @@ impl TenancySpi for SharedTenancy {
     }
 }
 
-fn pipeline() -> Pipeline<SharedTenancy, MemorySink> {
+fn pipeline() -> Pipeline<TenancyRouter<SharedTenancy>, MemorySink> {
     let table = Arc::new(PlacementTable::new());
     table.set(
         PartitionId::from("acme"),
@@ -82,7 +82,7 @@ fn pipeline() -> Pipeline<SharedTenancy, MemorySink> {
     )
 }
 
-async fn ingest(p: &Pipeline<SharedTenancy, MemorySink>, rid: &RequestId) {
+async fn ingest(p: &Pipeline<TenancyRouter<SharedTenancy>, MemorySink>, rid: &RequestId) {
     let principal = Principal::new(PrincipalId::from("svc"));
     let headers: Vec<(String, String)> = vec![];
     let body = br#"{"tenant_id":"acme","id":7}"#;
@@ -305,7 +305,10 @@ impl DirectiveVerifier for FakeVerifier {
     }
 }
 
-async fn ingest_with_directive(p: &Pipeline<SharedTenancy, MemorySink>, header: Option<&str>) {
+async fn ingest_with_directive(
+    p: &Pipeline<TenancyRouter<SharedTenancy>, MemorySink>,
+    header: Option<&str>,
+) {
     let principal = Principal::new(PrincipalId::from("svc"));
     let headers: Vec<(String, String)> = header
         .into_iter()

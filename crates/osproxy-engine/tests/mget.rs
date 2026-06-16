@@ -52,7 +52,7 @@ impl TenancySpi for SharedTenancy {
     }
 }
 
-fn pipeline() -> Pipeline<SharedTenancy, MemorySink> {
+fn pipeline() -> Pipeline<TenancyRouter<SharedTenancy>, MemorySink> {
     let table = Arc::new(PlacementTable::new());
     table.set(
         PartitionId::from("acme"),
@@ -71,7 +71,7 @@ fn pipeline() -> Pipeline<SharedTenancy, MemorySink> {
     )
 }
 
-async fn write(p: &Pipeline<SharedTenancy, MemorySink>, body: &[u8]) {
+async fn write(p: &Pipeline<TenancyRouter<SharedTenancy>, MemorySink>, body: &[u8]) {
     let principal = Principal::new(PrincipalId::from("svc"));
     let rid = RequestId::from("w");
     let headers = vec![];
@@ -88,7 +88,10 @@ async fn write(p: &Pipeline<SharedTenancy, MemorySink>, body: &[u8]) {
     assert_eq!(p.handle(&ctx).await.unwrap().status, 201);
 }
 
-async fn mget(p: &Pipeline<SharedTenancy, MemorySink>, body: &[u8]) -> PipelineResponse {
+async fn mget(
+    p: &Pipeline<TenancyRouter<SharedTenancy>, MemorySink>,
+    body: &[u8],
+) -> PipelineResponse {
     let principal = Principal::new(PrincipalId::from("svc"));
     let rid = RequestId::from("mg");
     let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];

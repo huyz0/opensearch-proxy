@@ -50,7 +50,7 @@ impl TenancySpi for SharedTenancy {
     }
 }
 
-fn pipeline() -> Pipeline<SharedTenancy, MemorySink> {
+fn pipeline() -> Pipeline<TenancyRouter<SharedTenancy>, MemorySink> {
     let table = Arc::new(PlacementTable::new());
     table.set(
         PartitionId::from("acme"),
@@ -69,7 +69,7 @@ fn pipeline() -> Pipeline<SharedTenancy, MemorySink> {
     )
 }
 
-async fn write(p: &Pipeline<SharedTenancy, MemorySink>, body: &[u8]) {
+async fn write(p: &Pipeline<TenancyRouter<SharedTenancy>, MemorySink>, body: &[u8]) {
     let principal = Principal::new(PrincipalId::from("svc"));
     let rid = RequestId::from("w");
     let headers = vec![];
@@ -87,7 +87,7 @@ async fn write(p: &Pipeline<SharedTenancy, MemorySink>, body: &[u8]) {
 }
 
 async fn read(
-    p: &Pipeline<SharedTenancy, MemorySink>,
+    p: &Pipeline<TenancyRouter<SharedTenancy>, MemorySink>,
     rid: &str,
     logical_id: &str,
 ) -> PipelineResponse {
@@ -108,7 +108,10 @@ async fn read(
     p.handle(&ctx).await.unwrap()
 }
 
-async fn delete(p: &Pipeline<SharedTenancy, MemorySink>, logical_id: &str) -> PipelineResponse {
+async fn delete(
+    p: &Pipeline<TenancyRouter<SharedTenancy>, MemorySink>,
+    logical_id: &str,
+) -> PipelineResponse {
     let principal = Principal::new(PrincipalId::from("svc"));
     let rid = RequestId::from("d");
     let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
@@ -126,7 +129,10 @@ async fn delete(p: &Pipeline<SharedTenancy, MemorySink>, logical_id: &str) -> Pi
     p.handle(&ctx).await.unwrap()
 }
 
-async fn search(p: &Pipeline<SharedTenancy, MemorySink>, body: &[u8]) -> PipelineResponse {
+async fn search(
+    p: &Pipeline<TenancyRouter<SharedTenancy>, MemorySink>,
+    body: &[u8],
+) -> PipelineResponse {
     let principal = Principal::new(PrincipalId::from("svc"));
     let rid = RequestId::from("s");
     let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
@@ -143,7 +149,10 @@ async fn search(p: &Pipeline<SharedTenancy, MemorySink>, body: &[u8]) -> Pipelin
     p.handle(&ctx).await.unwrap()
 }
 
-async fn count(p: &Pipeline<SharedTenancy, MemorySink>, body: &[u8]) -> PipelineResponse {
+async fn count(
+    p: &Pipeline<TenancyRouter<SharedTenancy>, MemorySink>,
+    body: &[u8],
+) -> PipelineResponse {
     let principal = Principal::new(PrincipalId::from("svc"));
     let rid = RequestId::from("c");
     let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];

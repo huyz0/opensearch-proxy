@@ -9,7 +9,20 @@
 use std::collections::HashMap;
 
 use osproxy_core::PrincipalId;
-use osproxy_spi::{AuthError, Authenticator, ClientCredentials, Principal};
+use osproxy_spi::{Action, AuthError, Authenticator, Authorizer, ClientCredentials, Principal};
+
+/// The default [`Authorizer`]: permits every authenticated principal every
+/// action. Authentication still applies; this only declines to add a second
+/// policy layer, so a deployment that wants none pays nothing. Swap in a real
+/// [`Authorizer`] via [`crate::handler::AppHandler::with_authorizer`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AllowAllAuthorizer;
+
+impl Authorizer for AllowAllAuthorizer {
+    async fn authorize(&self, _principal: &Principal, _action: &Action) -> Result<(), AuthError> {
+        Ok(())
+    }
+}
 
 /// A bearer-token authenticator over a static `token -> principal id` map.
 #[derive(Debug, Default)]

@@ -5,9 +5,9 @@ use osproxy_core::{ClusterId, FieldName, IndexName, PartitionId, PrincipalId, Re
 use osproxy_sink::MemorySink;
 use osproxy_spi::{
     DocIdRule, HeaderView, HttpMethod, IdTemplate, InjectedField, InjectedValue, JsonPath,
-    PartitionKeySpec, Placement, PlacementAt, Principal, Protocol, SensitivitySpec,
+    PartitionKeySpec, Placement, PlacementAt, Principal, Protocol, SensitivitySpec, TenancySpi,
 };
-use osproxy_tenancy::PlacementTable;
+use osproxy_tenancy::{PlacementTable, TenancyRouter};
 
 struct Tenancy {
     table: Arc<PlacementTable>,
@@ -40,7 +40,7 @@ impl TenancySpi for Tenancy {
     }
 }
 
-fn pipeline() -> Pipeline<Tenancy, MemorySink> {
+fn pipeline() -> Pipeline<TenancyRouter<Tenancy>, MemorySink> {
     let table = Arc::new(PlacementTable::new());
     table.set(
         PartitionId::from("acme"),

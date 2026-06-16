@@ -8,7 +8,8 @@
 
 use osproxy_observe::{DispatchInfo, RequestTrace};
 use osproxy_sink::{CursorOp, Reader, Sink};
-use osproxy_spi::{RequestCtx, TenancySpi};
+use osproxy_spi::RequestCtx;
+use osproxy_tenancy::Router;
 
 use crate::cursor::{forwardable_query, rewrite_pit_id, wrap_pit_id_in_response};
 use crate::endpoints::wire_trace;
@@ -17,7 +18,7 @@ use crate::observe::resolve_info;
 use crate::pipeline::{Pipeline, PipelineResponse};
 use crate::read::{build_search_op, shape_hits};
 
-impl<T: TenancySpi, S: Sink + Reader> Pipeline<T, S> {
+impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     /// A point-in-time search: route to the PIT's pinned cluster (recovered from
     /// the body's signed `pit.id`), but **still resolve the partition to apply the
     /// mandatory filter and strip the injected fields** (isolation, NFR-S4). Fails

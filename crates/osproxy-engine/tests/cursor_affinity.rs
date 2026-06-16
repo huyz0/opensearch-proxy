@@ -27,6 +27,10 @@ use osproxy_spi::{
 };
 use osproxy_tenancy::TenancyRouter;
 
+/// The concrete pipeline these tests drive, aliased so the nested router type
+/// stays readable in signatures.
+type StubPipeline = Pipeline<TenancyRouter<StubTenancy>, RecordingSink>;
+
 /// A deterministic stand-in for the HMAC signer (keyed FNV-1a fold) — same key on
 /// every instance, so a token wrapped on one verifies on another.
 struct FnvSigner(u64);
@@ -137,12 +141,7 @@ impl TenancySpi for StubTenancy {
     }
 }
 
-fn pipeline(
-    signer: Option<Arc<dyn CursorSigner>>,
-) -> (
-    Pipeline<StubTenancy, RecordingSink>,
-    Arc<Mutex<Option<CursorOp>>>,
-) {
+fn pipeline(signer: Option<Arc<dyn CursorSigner>>) -> (StubPipeline, Arc<Mutex<Option<CursorOp>>>) {
     let (sink, seen) = RecordingSink::new();
     let mut p = Pipeline::new(TenancyRouter::new(StubTenancy), sink);
     if let Some(s) = signer {
@@ -154,7 +153,7 @@ fn pipeline(
 /// Drives one cursor request (method, body, optional path-form id) through the
 /// pipeline and returns the result.
 async fn run(
-    p: &Pipeline<StubTenancy, RecordingSink>,
+    p: &StubPipeline,
     method: HttpMethod,
     body: &[u8],
     path_form_id: Option<&str>,

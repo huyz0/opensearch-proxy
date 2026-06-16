@@ -71,7 +71,7 @@ fn get(token: Option<&str>) -> IngressRequest {
 /// A handler with the admin channel enabled against `store`.
 fn admin_handler(
     store: Arc<InMemoryDirectiveStore>,
-    pipeline: Pipeline<ReferenceTenancy, OpenSearchSink>,
+    pipeline: Pipeline<TenancyRouter<ReferenceTenancy>, OpenSearchSink>,
 ) -> AppHandler<ReferenceAuthenticator> {
     AppHandler::new(pipeline, ReferenceAuthenticator::dev())
         .with_directive_admin(store, TOKEN.to_owned(), Arc::new(ManualClock::new()))

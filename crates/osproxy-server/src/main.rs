@@ -27,8 +27,7 @@ use osproxy_server::handler::AppHandler;
 use osproxy_server::log::{NoLog, RequestLog, StdoutJsonLog};
 use osproxy_server::tenancy::ReferenceTenancy;
 use osproxy_sink::{OpenSearchSink, Reader, Sink};
-use osproxy_spi::TenancySpi;
-use osproxy_tenancy::TenancyRouter;
+use osproxy_tenancy::{Router, TenancyRouter};
 use osproxy_transport::{DefaultCryptoProvider, IngressHandler};
 use tokio::net::TcpListener;
 
@@ -166,10 +165,10 @@ fn request_log(enabled: bool) -> Box<dyn RequestLog> {
 /// (the collector base URL, e.g. `http://otel-collector:4318`); otherwise export
 /// stays off (no telemetry cost). `OSPROXY_SERVICE_NAME` sets the reported
 /// `service.name` (default `osproxy`).
-fn with_otlp_export<T: TenancySpi, S: Sink + Reader>(
-    pipeline: Pipeline<T, S>,
+fn with_otlp_export<R: Router, S: Sink + Reader>(
+    pipeline: Pipeline<R, S>,
     obs: &ObservabilityConfig,
-) -> Pipeline<T, S> {
+) -> Pipeline<R, S> {
     let Some(endpoint) = obs.otlp_endpoint.as_deref() else {
         return pipeline;
     };
@@ -184,10 +183,10 @@ fn with_otlp_export<T: TenancySpi, S: Sink + Reader>(
 /// (`diag_baseline`, default `shape`). Set it to `off` so nothing is exported
 /// until a directive — fleet store or signed `X-Debug-Directive` header — selects
 /// a request. The value was already validated at load, so this cannot fail.
-fn with_diag_baseline<T: TenancySpi, S: Sink + Reader>(
-    pipeline: Pipeline<T, S>,
+fn with_diag_baseline<R: Router, S: Sink + Reader>(
+    pipeline: Pipeline<R, S>,
     baseline: DiagBaseline,
-) -> Pipeline<T, S> {
+) -> Pipeline<R, S> {
     let level = match baseline {
         DiagBaseline::Off => DiagLevel::Off,
         DiagBaseline::Shape => DiagLevel::Shape,
@@ -204,10 +203,10 @@ fn with_diag_baseline<T: TenancySpi, S: Sink + Reader>(
 /// runs on the build's validated crypto module. Pair with a baseline of `Off` for
 /// a deployment where verbose diagnostics are off until an operator-signed token
 /// turns them on for a single request.
-fn with_debug_directive<T: TenancySpi, S: Sink + Reader>(
-    pipeline: Pipeline<T, S>,
+fn with_debug_directive<R: Router, S: Sink + Reader>(
+    pipeline: Pipeline<R, S>,
     key: Option<&str>,
-) -> Pipeline<T, S> {
+) -> Pipeline<R, S> {
     let Some(key) = key else {
         return pipeline;
     };
@@ -225,7 +224,7 @@ fn assemble_pipeline(
     sink: OpenSearchSink,
     directive_store: Arc<InMemoryDirectiveStore>,
     cfg: &Config,
-) -> Pipeline<ReferenceTenancy, OpenSearchSink> {
+) -> Pipeline<TenancyRouter<ReferenceTenancy>, OpenSearchSink> {
     let base = Pipeline::new(TenancyRouter::new(tenancy), sink);
     let observed = with_debug_directive(
         with_diag_baseline(
@@ -246,10 +245,10 @@ fn assemble_pipeline(
 /// requests; `OSPROXY_ADMIN_PASSTHROUGH_PREFIXES` is a comma-separated allow-list
 /// of path prefixes (default `/_cat/,/_cluster/,/_nodes/`). Unset ⇒ admin
 /// requests are rejected (the default; `docs/decisions/006`).
-fn with_admin_passthrough<T: TenancySpi, S: Sink + Reader>(
-    pipeline: Pipeline<T, S>,
+fn with_admin_passthrough<R: Router, S: Sink + Reader>(
+    pipeline: Pipeline<R, S>,
     admin: Option<&AdminPassthroughConfig>,
-) -> Pipeline<T, S> {
+) -> Pipeline<R, S> {
     let Some(admin) = admin else {
         return pipeline;
     };
@@ -268,10 +267,10 @@ fn with_admin_passthrough<T: TenancySpi, S: Sink + Reader>(
 /// key, so a continued scroll routes to its pinned cluster across the fleet with
 /// no shared store (`docs/03` §6). The **same key must be set on every instance**.
 /// Unset ⇒ affinity off and cursor requests fail closed (`CursorUnresolvable`).
-fn with_cursor_affinity<T: TenancySpi, S: Sink + Reader>(
-    pipeline: Pipeline<T, S>,
+fn with_cursor_affinity<R: Router, S: Sink + Reader>(
+    pipeline: Pipeline<R, S>,
     key: Option<&str>,
-) -> Pipeline<T, S> {
+) -> Pipeline<R, S> {
     let Some(key) = key else {
         return pipeline;
     };

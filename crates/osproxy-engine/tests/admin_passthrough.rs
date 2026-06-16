@@ -21,6 +21,10 @@ use osproxy_spi::{
 };
 use osproxy_tenancy::TenancyRouter;
 
+/// The concrete pipeline these tests drive (the stub tenancy over a recording
+/// sink), aliased so the nested router type stays readable in signatures.
+type StubPipeline = Pipeline<TenancyRouter<StubTenancy>, RecordingSink>;
+
 /// Records the passthrough op and returns a fixed admin-looking response.
 struct RecordingSink {
     seen: Arc<Mutex<Option<CursorOp>>>,
@@ -89,12 +93,7 @@ impl TenancySpi for StubTenancy {
     }
 }
 
-fn pipeline(
-    policy: Option<AdminPolicy>,
-) -> (
-    Pipeline<StubTenancy, RecordingSink>,
-    Arc<Mutex<Option<CursorOp>>>,
-) {
+fn pipeline(policy: Option<AdminPolicy>) -> (StubPipeline, Arc<Mutex<Option<CursorOp>>>) {
     let (sink, seen) = RecordingSink::new();
     let mut p = Pipeline::new(TenancyRouter::new(StubTenancy), sink);
     if let Some(policy) = policy {
@@ -104,7 +103,7 @@ fn pipeline(
 }
 
 async fn run(
-    p: &Pipeline<StubTenancy, RecordingSink>,
+    p: &StubPipeline,
     path: &str,
     query: Option<&str>,
 ) -> Result<(u16, Vec<u8>), RequestError> {

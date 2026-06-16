@@ -15,8 +15,8 @@ use osproxy_rewrite::{
     BulkAction, BulkItem,
 };
 use osproxy_sink::{DocOp, WriteOp};
-use osproxy_spi::{BodyTransform, InjectedField, InjectedValue, RequestCtx, TenancySpi};
-use osproxy_tenancy::{Resolved, TenancyRouter};
+use osproxy_spi::{BodyTransform, InjectedField, InjectedValue, RequestCtx};
+use osproxy_tenancy::{Resolved, Router};
 use serde_json::Value;
 
 /// A prepared operation: the write op plus what the response line needs and the
@@ -53,8 +53,8 @@ impl ItemFailure {
 
 /// Prepares one bulk operation: resolve its partition, cache the placement per
 /// partition, and build the epoch-stamped write op.
-pub(crate) async fn prepare<T: TenancySpi>(
-    router: &TenancyRouter<T>,
+pub(crate) async fn prepare<R: Router>(
+    router: &R,
     ctx: &RequestCtx<'_>,
     cache: &mut HashMap<(PartitionId, String), Resolved>,
     item: BulkItem,

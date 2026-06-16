@@ -7,6 +7,10 @@
 // Test scaffolding (mock server + helpers, not `#[test]` fns) needs the unwrap
 // allowance the test-only config does not reach.
 #![allow(clippy::unwrap_used)]
+// JUSTIFY(file-length): one cohesive full-stack suite — every scenario (tenanted
+// forward, metrics, unresolved partition, token auth, authorizer decline, TLS
+// gate, structured log) shares the mock-upstream + handler scaffolding; splitting
+// would duplicate it across files for no real separation.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -317,6 +321,63 @@ async fn a_mutating_request_over_cleartext_is_refused_when_tls_is_required() {
     let ok = handler.handle(ingest(true)).await;
     assert_eq!(ok.status, 201);
     assert_eq!(captured.lock().unwrap().method, "PUT");
+}
+
+/// An authorizer that denies one endpoint class and permits the rest, to prove
+/// the post-authentication policy layer is consulted and can decline.
+struct DenyIngest;
+
+impl osproxy_spi::Authorizer for DenyIngest {
+    async fn authorize(
+        &self,
+        _principal: &osproxy_spi::Principal,
+        action: &osproxy_spi::Action,
+    ) -> Result<(), osproxy_spi::AuthError> {
+        if action.endpoint == osproxy_core::EndpointKind::IngestDoc {
+            return Err(osproxy_spi::AuthError::Unauthorized);
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_supplied_authorizer_can_decline_an_authenticated_request() {
+    // Authentication succeeds (dev mode), then the supplied authorizer declines
+    // the ingest action: 403 Unauthorized, and the write never reaches upstream.
+    let (upstream, captured) = start_upstream().await;
+    let cluster = ClusterId::from("default");
+    let mut endpoints = HashMap::new();
+    endpoints.insert(cluster.clone(), upstream);
+    let sink = OpenSearchSink::new(endpoints);
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
+    let handler = AppHandler::new(
+        Pipeline::new(TenancyRouter::new(tenancy), sink),
+        ReferenceAuthenticator::dev(),
+    )
+    .with_require_tls_for_mutation(false)
+    .with_authorizer(DenyIngest);
+
+    let ingest = osproxy_transport::IngressRequest {
+        method: osproxy_spi::HttpMethod::Post,
+        protocol: osproxy_spi::Protocol::Http1,
+        path: "/orders/_doc".to_owned(),
+        endpoint: osproxy_core::EndpointKind::IngestDoc,
+        logical_index: "orders".to_owned(),
+        doc_id: None,
+        headers: vec![],
+        body: br#"{"tenant_id":"acme","id":7}"#.to_vec(),
+        query: None,
+        client_cert_subject: None,
+        secure: true,
+    };
+
+    let denied = handler.handle(ingest).await;
+    assert_eq!(denied.status, 403, "authorizer declined the action");
+    assert_eq!(
+        captured.lock().unwrap().method,
+        "",
+        "a request the authorizer declined never reaches the upstream"
+    );
 }
 
 /// A request log that records the structured records it is handed.

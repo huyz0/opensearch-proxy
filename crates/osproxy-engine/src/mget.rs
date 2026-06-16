@@ -15,8 +15,8 @@ use std::collections::HashMap;
 use futures_util::stream::StreamExt as _;
 use osproxy_rewrite::{parse_mget, MgetItem};
 use osproxy_sink::{ReadOp, ReadOutcome, Reader, SinkError};
-use osproxy_spi::{RequestCtx, TenancySpi};
-use osproxy_tenancy::{Resolved, TenancyRouter};
+use osproxy_spi::RequestCtx;
+use osproxy_tenancy::{Resolved, Router};
 use serde_json::{json, Value};
 
 use crate::error::RequestError;
@@ -35,8 +35,8 @@ const MAX_FETCH_CONCURRENCY: usize = 8;
 /// [`RequestError::Spi`] if the caller's partition cannot be resolved (a
 /// request-level failure). Per-document failures are reported positionally in
 /// `docs[]`, not as a request error.
-pub(crate) async fn multi_get<T: TenancySpi, S: Reader>(
-    router: &TenancyRouter<T>,
+pub(crate) async fn multi_get<R: Router, S: Reader>(
+    router: &R,
     sink: &S,
     ctx: &RequestCtx<'_>,
 ) -> Result<PipelineResponse, RequestError> {
@@ -79,8 +79,8 @@ struct Prepared {
 
 /// Prepares one requested document: resolve its placement (cached per logical
 /// index), then build the read op mapping the logical id to the physical id.
-async fn prepare<T: TenancySpi>(
-    router: &TenancyRouter<T>,
+async fn prepare<R: Router>(
+    router: &R,
     ctx: &RequestCtx<'_>,
     partition: &osproxy_core::PartitionId,
     cache: &mut HashMap<String, Resolved>,

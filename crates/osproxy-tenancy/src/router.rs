@@ -170,6 +170,85 @@ impl<T: TenancySpi> RoutingSpi for TenancyRouter<T> {
     }
 }
 
+/// The partition-aware routing seam the engine pipeline drives.
+///
+/// [`RoutingSpi`] yields only a [`RouteDecision`]; the engine needs more — the
+/// resolved partition (to construct `_id`/`_routing` and to demux bulk per
+/// document), the epoch and migration phase (the write gate), and a split
+/// resolve so a bulk request can resolve the partition per document but cache the
+/// placement per partition. This trait captures exactly that contract, so the
+/// pipeline is generic over *any* router that can provide it, not nailed to the
+/// concrete [`TenancyRouter`]. [`TenancyRouter`] is the in-tree implementation.
+#[allow(
+    async_fn_in_trait,
+    reason = "consumed through generics in the engine, where Send is verified at \
+              the spawn site, mirroring TenancySpi/RoutingSpi (docs/02 §2)"
+)]
+pub trait Router: Send + Sync + 'static {
+    /// Resolves the full routing plan for a single-document request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SpiError`] if the endpoint is not tenancy-aware, the partition
+    /// cannot be resolved, no placement exists, or the transforms are invalid.
+    async fn resolve(&self, ctx: &RequestCtx<'_>) -> Result<Resolved, SpiError>;
+
+    /// Resolves just the partition id for a request and document (the bulk demux
+    /// entry point).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SpiError::PartitionUnresolved`] if no source yields a partition.
+    fn resolve_partition(
+        &self,
+        ctx: &RequestCtx<'_>,
+        doc: Option<&Value>,
+    ) -> Result<PartitionId, SpiError>;
+
+    /// Resolves a known partition to its placement and routing plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SpiError`] if no placement exists or the transforms are invalid.
+    async fn resolve_placement(
+        &self,
+        ctx: &RequestCtx<'_>,
+        partition: PartitionId,
+        logical_index: &str,
+    ) -> Result<Resolved, SpiError>;
+
+    /// The migration write gate: may a write that resolved at `epoch` for
+    /// `partition` still commit? `false` ⇒ reject as a retryable stale-epoch error.
+    async fn admit_write(&self, partition: &PartitionId, epoch: Epoch) -> bool;
+}
+
+impl<T: TenancySpi> Router for TenancyRouter<T> {
+    async fn resolve(&self, ctx: &RequestCtx<'_>) -> Result<Resolved, SpiError> {
+        TenancyRouter::resolve(self, ctx).await
+    }
+
+    fn resolve_partition(
+        &self,
+        ctx: &RequestCtx<'_>,
+        doc: Option<&Value>,
+    ) -> Result<PartitionId, SpiError> {
+        TenancyRouter::resolve_partition(self, ctx, doc)
+    }
+
+    async fn resolve_placement(
+        &self,
+        ctx: &RequestCtx<'_>,
+        partition: PartitionId,
+        logical_index: &str,
+    ) -> Result<Resolved, SpiError> {
+        TenancyRouter::resolve_placement(self, ctx, partition, logical_index).await
+    }
+
+    async fn admit_write(&self, partition: &PartitionId, epoch: Epoch) -> bool {
+        TenancyRouter::admit_write(self, partition, epoch).await
+    }
+}
+
 /// Derives the physical [`Target`] from a placement and the request's logical
 /// index. A dedicated cluster carries the logical index name unchanged; the
 /// other modes pin a concrete physical index.

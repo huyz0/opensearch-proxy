@@ -62,7 +62,10 @@ fn shared_on(cluster: &str, index: &str) -> Placement {
     }
 }
 
-async fn bulk(p: &Pipeline<MigratingTenancy, MemorySink>, body: &[u8]) -> PipelineResponse {
+async fn bulk(
+    p: &Pipeline<TenancyRouter<MigratingTenancy>, MemorySink>,
+    body: &[u8],
+) -> PipelineResponse {
     let principal = Principal::new(PrincipalId::from("svc"));
     let rid = RequestId::from("b");
     let headers = vec![];

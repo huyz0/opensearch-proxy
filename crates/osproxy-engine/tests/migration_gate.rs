@@ -68,7 +68,7 @@ fn shared_on(cluster: &str) -> Placement {
 }
 
 async fn ingest(
-    pipeline: &Pipeline<MigratingTenancy, MemorySink>,
+    pipeline: &Pipeline<TenancyRouter<MigratingTenancy>, MemorySink>,
     rid: &str,
 ) -> Result<PipelineResponse, RequestError> {
     let principal = Principal::new(PrincipalId::from("svc"));

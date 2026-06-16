@@ -222,7 +222,7 @@ async fn ingest(
 ) -> (
     Result<(), RequestError>,
     RequestId,
-    Pipeline<FaultTenancy, FaultSink>,
+    Pipeline<TenancyRouter<FaultTenancy>, FaultSink>,
 ) {
     let pipeline = Pipeline::new(
         TenancyRouter::new(FaultTenancy { placed }),
@@ -246,7 +246,10 @@ async fn ingest(
 }
 
 /// Asserts the explain chain for a failed request carries the NFR-T5 quartet.
-fn assert_explain_complete(pipeline: &Pipeline<FaultTenancy, FaultSink>, rid: &RequestId) {
+fn assert_explain_complete(
+    pipeline: &Pipeline<TenancyRouter<FaultTenancy>, FaultSink>,
+    rid: &RequestId,
+) {
     let explain = pipeline.explain(rid).expect("explain retained");
     assert_eq!(explain["outcome"], "error");
     let err = &explain["error"];

@@ -20,8 +20,8 @@ use futures_util::stream::StreamExt as _;
 use osproxy_core::{PartitionId, Target};
 use osproxy_rewrite::parse_bulk;
 use osproxy_sink::{OpResult, Sink, SinkError, WriteAck, WriteBatch};
-use osproxy_spi::{RequestCtx, TenancySpi};
-use osproxy_tenancy::{Resolved, TenancyRouter};
+use osproxy_spi::RequestCtx;
+use osproxy_tenancy::{Resolved, Router};
 use serde_json::{json, Value};
 
 use crate::bulkprep::{prepare, Prepared};
@@ -46,8 +46,8 @@ type Entries = Vec<(usize, Prepared)>;
 /// Returns [`RequestError::Rewrite`] only if the whole body is unparseable;
 /// per-operation failures are reported positionally in the response, not as a
 /// request error.
-pub(crate) async fn ingest_bulk<T: TenancySpi, S: Sink>(
-    router: &TenancyRouter<T>,
+pub(crate) async fn ingest_bulk<R: Router, S: Sink>(
+    router: &R,
     sink: &S,
     ctx: &RequestCtx<'_>,
     retry: crate::RetryPolicy,
@@ -93,12 +93,7 @@ pub(crate) async fn ingest_bulk<T: TenancySpi, S: Sink>(
 /// per item, dispatch the admitted ops, and apply each result to `lines` by its
 /// original ordinal. Awaited inline, so the transformed bytes are freed before
 /// parsing resumes (the mid-stream backpressure that bounds memory).
-async fn flush<T: TenancySpi, S: Sink>(
-    router: &TenancyRouter<T>,
-    sink: &S,
-    entries: Entries,
-    lines: &mut [Value],
-) {
+async fn flush<R: Router, S: Sink>(router: &R, sink: &S, entries: Entries, lines: &mut [Value]) {
     let (admitted, rejected) = gate(router, entries).await;
     for (ordinal, p) in &rejected {
         lines[*ordinal] = stale_epoch_line(p);
@@ -110,8 +105,8 @@ async fn flush<T: TenancySpi, S: Sink>(
 /// task gates its entries (no `lines` access, so the tasks stay independent) and
 /// dispatches the admitted ops; results are applied by ordinal afterward, so
 /// completion order cannot disturb re-interleave.
-async fn flush_remaining<T: TenancySpi, S: Sink>(
-    router: &TenancyRouter<T>,
+async fn flush_remaining<R: Router, S: Sink>(
+    router: &R,
     sink: &S,
     buffers: HashMap<Target, Entries>,
     lines: &mut [Value],
@@ -140,7 +135,7 @@ async fn flush_remaining<T: TenancySpi, S: Sink>(
 /// re-checked here at dispatch: `(admitted, rejected)`. A rejected item resolved
 /// against a placement that has since advanced or entered cutover — it is held,
 /// never dispatched.
-async fn gate<T: TenancySpi>(router: &TenancyRouter<T>, entries: Entries) -> (Entries, Entries) {
+async fn gate<R: Router>(router: &R, entries: Entries) -> (Entries, Entries) {
     let mut admitted = Entries::new();
     let mut rejected = Entries::new();
     for (ordinal, p) in entries {

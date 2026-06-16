@@ -6,9 +6,16 @@ use crate::request::RequestCtx;
 
 /// Decides where and how a single request is routed.
 ///
-/// This is the low-level contract: full control over the destination and the
-/// transforms. Most implementers instead provide a [`crate::TenancySpi`], which
-/// `osproxy-tenancy` adapts into a `RoutingSpi`.
+/// This is the low-level contract for a single routing *decision*: full control
+/// over the destination and the transforms. Most implementers instead provide a
+/// [`crate::TenancySpi`], which `osproxy-tenancy` adapts into a `RoutingSpi`.
+///
+/// Note this yields only a [`RouteDecision`]. The engine pipeline needs more than
+/// a decision (the resolved partition, epoch, and migration phase — to construct
+/// ids, demux bulk, and gate writes), so it is generic over the richer
+/// `osproxy_tenancy::Router` seam rather than this trait. Implement `Router` to
+/// drive the engine with custom routing; implement `RoutingSpi` where only a
+/// `RouteDecision` is required.
 ///
 /// # Invariants
 ///

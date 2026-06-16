@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use futures_util::stream::StreamExt as _;
 use osproxy_rewrite::{parse_msearch, MsearchItem};
 use osproxy_sink::{Reader, SearchOp, SearchOutcome, SinkError};
-use osproxy_spi::{RequestCtx, TenancySpi};
-use osproxy_tenancy::{Resolved, TenancyRouter};
+use osproxy_spi::RequestCtx;
+use osproxy_tenancy::{Resolved, Router};
 use serde_json::{json, Value};
 
 use crate::error::RequestError;
@@ -36,8 +36,8 @@ const MAX_SEARCH_CONCURRENCY: usize = 8;
 /// [`RequestError::Spi`] if the caller's partition cannot be resolved (a
 /// request-level failure). Per-search failures are reported positionally in
 /// `responses[]`, not as a request error.
-pub(crate) async fn multi_search<T: TenancySpi, S: Reader>(
-    router: &TenancyRouter<T>,
+pub(crate) async fn multi_search<R: Router, S: Reader>(
+    router: &R,
     sink: &S,
     ctx: &RequestCtx<'_>,
 ) -> Result<PipelineResponse, RequestError> {
@@ -80,8 +80,8 @@ struct Prepared {
 
 /// Prepares one search: resolve its placement (cached per logical index), then
 /// wrap the client query in the mandatory partition filter.
-async fn prepare<T: TenancySpi>(
-    router: &TenancyRouter<T>,
+async fn prepare<R: Router>(
+    router: &R,
     ctx: &RequestCtx<'_>,
     partition: &osproxy_core::PartitionId,
     cache: &mut HashMap<String, Resolved>,
