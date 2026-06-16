@@ -6,6 +6,14 @@ use crate::request::Protocol;
 use crate::rules::{DocIdRule, InjectedField};
 
 /// A mutation to apply to the request headers before forwarding upstream.
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_spi::HeaderOp;
+/// let op = HeaderOp::Add { name: "x-tenant".into(), value: "acme".into() };
+/// assert!(matches!(op, HeaderOp::Add { .. }));
+/// ```
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum HeaderOp {
@@ -36,6 +44,14 @@ pub enum HeaderOp {
 /// the document `_id`. `osproxy-rewrite` performs the transform; this enum is
 /// the instruction. Not `#[non_exhaustive]`: the engine must apply every
 /// transform kind, so a new kind should force the plan builder to be updated.
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_spi::BodyTransform;
+/// assert!(BodyTransform::None.is_none());
+/// assert!(!BodyTransform::Inject(vec![]).is_none());
+/// ```
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BodyTransform {
     /// Forward the body unchanged.
@@ -70,6 +86,18 @@ impl BodyTransform {
 ///
 /// Read-path concerns (query filter, response strip, cursor affinity) arrive in
 /// M2/M5 and will extend this struct additively (`docs/11`).
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_spi::{RouteDecision, BodyTransform, Protocol};
+/// use osproxy_spi::core::{Target, ClusterId, IndexName, Epoch};
+///
+/// let target = Target::new(ClusterId::from("eu-1"), IndexName::from("orders"));
+/// let decision = RouteDecision::passthrough(target, Protocol::Http1, Epoch::new(1));
+/// assert!(decision.body_transform.is_none());
+/// assert_eq!(decision.epoch, Epoch::new(1));
+/// ```
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RouteDecision {
     /// The single physical destination.

@@ -14,6 +14,17 @@ use crate::rules::PartitionKeySpecKind;
 ///
 /// [`RoutingSpi`]: crate::RoutingSpi
 /// [`TenancySpi`]: crate::TenancySpi
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_spi::SpiError;
+/// use osproxy_spi::core::ErrorCode;
+///
+/// let err = SpiError::PlacementBackend { retryable: true };
+/// assert_eq!(err.code(), ErrorCode::PlacementBackendUnavailable);
+/// assert!(err.retryable());
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum SpiError {

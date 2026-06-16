@@ -8,6 +8,14 @@ use crate::principal::Principal;
 ///
 /// `#[non_exhaustive]` so additional protocols are additive. M1 implements
 /// [`Protocol::Http1`] only; HTTP/2 and gRPC arrive in M4 (`docs/11`).
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_spi::Protocol;
+/// let ingress = Protocol::Http2;
+/// assert!(matches!(ingress, Protocol::Http2));
+/// ```
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Protocol {
@@ -20,6 +28,13 @@ pub enum Protocol {
 }
 
 /// The HTTP method of a request.
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_spi::HttpMethod;
+/// assert_ne!(HttpMethod::Get, HttpMethod::Put);
+/// ```
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HttpMethod {
@@ -40,6 +55,16 @@ pub enum HttpMethod {
 /// Backed by the transport's parsed headers; the SPI may read a header (e.g. to
 /// find a partition key) but cannot mutate it here — mutations are expressed as
 /// [`crate::HeaderOp`]s in the returned decision.
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_spi::HeaderView;
+/// let raw = vec![("X-Tenant".to_owned(), "acme".to_owned())];
+/// let view = HeaderView::new(&raw);
+/// assert_eq!(view.get("x-tenant"), Some("acme")); // case-insensitive
+/// assert_eq!(view.get("absent"), None);
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct HeaderView<'a> {
     headers: &'a [(String, String)],
@@ -69,6 +94,29 @@ impl<'a> HeaderView<'a> {
 /// one document fits comfortably in memory. Streaming body access for bulk
 /// arrives with the demux work in M3 (`docs/04` §3); the field is intentionally
 /// accessed only through [`RequestCtx::body`] so that change stays internal.
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_spi::{RequestCtx, HttpMethod, Protocol, HeaderView, Principal};
+/// use osproxy_spi::core::{PrincipalId, RequestId, EndpointKind};
+///
+/// let principal = Principal::new(PrincipalId::from("svc"));
+/// let rid = RequestId::from("req-1");
+/// let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
+/// let ctx = RequestCtx::new(
+///     &principal,
+///     &rid,
+///     HttpMethod::Put,
+///     EndpointKind::IngestDoc,
+///     Protocol::Http1,
+///     "orders",
+///     HeaderView::new(&headers),
+///     b"{}",
+/// );
+/// assert_eq!(ctx.logical_index(), "orders");
+/// assert_eq!(ctx.headers().get("x-tenant"), Some("acme"));
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct RequestCtx<'a> {
     principal: &'a Principal,

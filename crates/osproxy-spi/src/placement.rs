@@ -21,6 +21,20 @@ use crate::rules::InjectedField;
 /// Deliberately *not* `#[non_exhaustive]`: the proxy core must interpret every
 /// placement mode to route correctly, so adding a mode should force every match
 /// in the workspace to be updated rather than silently fall through (`docs/03`).
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_spi::Placement;
+/// use osproxy_spi::core::{ClusterId, IndexName};
+///
+/// let p = Placement::SharedIndex {
+///     cluster: ClusterId::from("eu-1"),
+///     index: IndexName::from("shared"),
+///     inject: vec![],
+/// };
+/// assert_eq!(p.cluster().as_str(), "eu-1");
+/// ```
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Placement {
     /// The partition has a dedicated cluster.
@@ -61,6 +75,14 @@ impl Placement {
 
 /// The partition's migration phase at read time — a shape-only label (never
 /// tenant data) so observability can show where a migration is (`docs/06` §5).
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_spi::MigrationPhase;
+/// assert_eq!(MigrationPhase::default(), MigrationPhase::Settled);
+/// assert_eq!(MigrationPhase::Cutover.as_str(), "cutover");
+/// ```
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum MigrationPhase {
     /// Not migrating; the placement is settled.
@@ -90,6 +112,21 @@ impl MigrationPhase {
 /// The epoch flows into the routing decision and onto the write so migration
 /// cutover can detect a write resolved against a superseded placement
 /// (`docs/06` §2); the phase is shape-only context for observability.
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_spi::{Placement, PlacementAt, MigrationPhase};
+/// use osproxy_spi::core::{ClusterId, Epoch};
+///
+/// let at = PlacementAt::new(
+///     Placement::DedicatedCluster { cluster: ClusterId::from("eu-1") },
+///     Epoch::new(7),
+/// )
+/// .with_phase(MigrationPhase::Draining);
+/// assert_eq!(at.epoch, Epoch::new(7));
+/// assert_eq!(at.phase, MigrationPhase::Draining);
+/// ```
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PlacementAt {
     /// The resolved placement.
