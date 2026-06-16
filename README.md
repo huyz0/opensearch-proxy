@@ -11,6 +11,8 @@ It is designed to be consumed **as a library**: implementers depend on the
 logic statically into the proxy. No dynamic plugin loading (no WASM, no
 dylibs).
 
+📖 **Documentation site: https://huyz0.github.io/opensearch-proxy/**
+
 ## What it does
 
 - **Routes** every request to exactly one physical placement (dedicated
@@ -107,10 +109,17 @@ cargo test --workspace -- --ignored
 
 ## Documentation
 
-Read the docs in order; they are the source of truth for the design.
+**New to osproxy?** Read the **[User Guide](https://huyz0.github.io/opensearch-proxy/)**
+(rendered site, or the [source in `docs/guide/`](docs/guide/README.md)). It walks
+through the intent, requirements, architecture with diagrams, the SPI, a full wiring
+example, configuration, and observability.
+
+The numbered docs below are the design source of truth; read them in order for the
+deeper rationale.
 
 | Doc | Purpose |
 |-----|---------|
+| **[docs/guide/](docs/guide/README.md)** | **User Guide** — overview, NFRs, architecture, components, SPI, wiring, configuration, observability |
 | [docs/00-goals.md](docs/00-goals.md) | Project goal, scope, non-goals, success criteria |
 | [docs/01-architecture.md](docs/01-architecture.md) | Architecture, crate layout, **non-functional requirements** |
 | [docs/02-spi.md](docs/02-spi.md) | **SPI reference** — the public traits, heavily documented |
