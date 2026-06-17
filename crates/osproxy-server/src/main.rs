@@ -31,6 +31,8 @@ use osproxy_tenancy::{Router, TenancyRouter};
 use osproxy_transport::{DefaultCryptoProvider, IngressHandler};
 use tokio::net::TcpListener;
 
+mod capture;
+
 /// Entry point. Returns a process exit code rather than panicking, consistent
 /// with the no-panic reliability requirement (NFR-R1).
 #[tokio::main]
@@ -70,11 +72,13 @@ async fn run() -> Result<(), String> {
     } else {
         "token"
     };
+    let app = AppHandler::new(pipeline, ReferenceAuthenticator::new(tokens))
+        .with_request_log(request_log(cfg.observability.log_requests))
+        .with_require_tls_for_mutation(cfg.require_tls_for_mutation)
+        .with_debug_endpoints(debug_endpoints(cfg.observability.debug_endpoints));
+    let app = capture::attach(app, &cfg).await?;
     let handler = Arc::new(with_directive_admin(
-        AppHandler::new(pipeline, ReferenceAuthenticator::new(tokens))
-            .with_request_log(request_log(cfg.observability.log_requests))
-            .with_require_tls_for_mutation(cfg.require_tls_for_mutation)
-            .with_debug_endpoints(debug_endpoints(cfg.observability.debug_endpoints)),
+        app,
         directive_store,
         cfg.observability.directive_admin_token.as_deref(),
     ));

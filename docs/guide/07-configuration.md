@@ -69,6 +69,25 @@ The canonical key is `snake_case`; the env var is `OSPROXY_` + the upper-cased k
 | `passthrough_cluster` | *(unset → tenancy mode)* | Tenant-agnostic mode: forward every request verbatim to this cluster id with no tenancy rewrite (a transparent / capture proxy). Requires `passthrough_endpoint`. |
 | `passthrough_endpoint` | *(unset)* | The passthrough cluster's base URL. Both-or-neither with `passthrough_cluster`. |
 
+### Traffic capture (Kafka)
+
+Full-fidelity capture tees every request and response to a Kafka topic for replay
+or audit. The captured stream carries bodies and values verbatim, so it is
+privileged: it stays off until configured, and the `Authorization` header is
+stripped unless you opt out. These keys need a binary built with the
+`capture-kafka` feature (`cargo build -p osproxy-server --features capture-kafka`);
+setting them on a binary built without it is a loud startup error, not a silent
+no-op.
+
+| Key (`OSPROXY_…`) | Default | Description |
+|-------------------|---------|-------------|
+| `capture_kafka_brokers` | *(unset → capture off)* | Comma-separated Kafka bootstrap brokers (`host:port`). Both-or-neither with `capture_topic`. |
+| `capture_topic` | *(unset)* | The topic each captured exchange envelope is produced to. |
+| `capture_redact` | `true` | Strip the `Authorization` header from the captured stream. Set `false` only when the stream consumer needs credentials and is itself secured. |
+| `capture_kafka_ca` | *(unset → plaintext)* | Path to the CA PEM the broker certificate must chain to. Present ⇒ TLS to the brokers with that CA pinned; absent ⇒ a plaintext broker connection. |
+| `capture_kafka_client_cert` | *(unset)* | Client certificate chain PEM for broker mTLS. Both-or-neither with `capture_kafka_client_key`, and requires `capture_kafka_ca`. |
+| `capture_kafka_client_key` | *(unset)* | Client private key PEM for broker mTLS. |
+
 ## Worked examples
 
 ### Local development (cleartext, open auth, full debug)

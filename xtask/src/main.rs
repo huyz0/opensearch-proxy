@@ -110,6 +110,10 @@ fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'static str]> {
             "osproxy-tenancy",
             "osproxy-sink",
             "osproxy-otlp",
+            // optional (feature `capture-kafka`): the queue-writer seam and the
+            // portable krafka producer it composes for traffic capture.
+            "osproxy-kafka",
+            "osproxy-kafka-krafka",
             // dev-only: the #[ignore]'d perf harness reads NFR-P profile types.
             "osproxy-bench",
         ],

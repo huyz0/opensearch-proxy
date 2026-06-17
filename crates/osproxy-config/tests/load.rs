@@ -158,3 +158,81 @@ fn an_unknown_flag_is_rejected() {
     let err = Config::load(vec!["--nope".to_owned(), "x".to_owned()]).unwrap_err();
     assert_eq!(err.field(), "nope");
 }
+
+#[test]
+fn capture_is_off_by_default() {
+    assert!(resolve(&[]).unwrap().capture.is_none());
+}
+
+#[test]
+fn capture_needs_both_brokers_and_topic() {
+    let err = resolve(&[("capture_kafka_brokers", "broker:9092")]).unwrap_err();
+    assert_eq!(err.field(), "capture_kafka_brokers");
+}
+
+#[test]
+fn capture_parses_brokers_and_defaults_to_redacting_plaintext() {
+    let cap = resolve(&[
+        ("capture_kafka_brokers", "b1:9092, b2:9092"),
+        ("capture_topic", "osproxy.capture"),
+    ])
+    .unwrap()
+    .capture
+    .expect("capture configured");
+    assert_eq!(cap.brokers, vec!["b1:9092", "b2:9092"]);
+    assert_eq!(cap.topic, "osproxy.capture");
+    assert!(
+        cap.redact,
+        "redaction defaults on for the privileged stream"
+    );
+    assert!(
+        cap.tls.is_none(),
+        "no CA configured means a plaintext broker link"
+    );
+}
+
+#[test]
+fn capture_ca_enables_tls_and_redact_opts_out() {
+    let cap = resolve(&[
+        ("capture_kafka_brokers", "b1:9092"),
+        ("capture_topic", "t"),
+        ("capture_kafka_ca", "/etc/osproxy/kafka-ca.pem"),
+        ("capture_redact", "false"),
+    ])
+    .unwrap()
+    .capture
+    .unwrap();
+    assert!(!cap.redact);
+    let tls = cap.tls.expect("CA configured means TLS");
+    assert_eq!(tls.ca_path, "/etc/osproxy/kafka-ca.pem");
+    assert!(tls.client_cert_path.is_none());
+}
+
+#[test]
+fn capture_client_cert_requires_its_key_and_a_ca() {
+    // cert without key is rejected.
+    let err = resolve(&[
+        ("capture_kafka_brokers", "b:9092"),
+        ("capture_topic", "t"),
+        ("capture_kafka_ca", "/ca.pem"),
+        ("capture_kafka_client_cert", "/c.pem"),
+    ])
+    .unwrap_err();
+    assert_eq!(err.field(), "capture_kafka_client_cert");
+
+    // client cert/key without a CA is rejected (mTLS needs server trust pinned).
+    let err = resolve(&[
+        ("capture_kafka_brokers", "b:9092"),
+        ("capture_topic", "t"),
+        ("capture_kafka_client_cert", "/c.pem"),
+        ("capture_kafka_client_key", "/k.pem"),
+    ])
+    .unwrap_err();
+    assert_eq!(err.field(), "capture_kafka_ca");
+}
+
+#[test]
+fn capture_tls_keys_without_brokers_are_rejected() {
+    let err = resolve(&[("capture_kafka_ca", "/ca.pem")]).unwrap_err();
+    assert_eq!(err.field(), "capture_kafka_ca");
+}

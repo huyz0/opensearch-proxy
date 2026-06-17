@@ -36,6 +36,12 @@ pub(crate) const KEYS: &[&str] = &[
     "cursor_affinity_key",
     "passthrough_cluster",
     "passthrough_endpoint",
+    "capture_kafka_brokers",
+    "capture_topic",
+    "capture_redact",
+    "capture_kafka_ca",
+    "capture_kafka_client_cert",
+    "capture_kafka_client_key",
 ];
 
 /// The environment variable name for a canonical key: `OSPROXY_` + the

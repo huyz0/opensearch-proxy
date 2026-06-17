@@ -18,9 +18,16 @@ path = "src/main.rs"
 # `cargo build -p osproxy-server --bin osproxy --no-default-features --features fips`.
 default = ["non-fips"]
 # The crypto feature also selects the HMAC module the X-Debug-Directive verifier
-# authenticates with, so a FIPS binary never links a non-validated primitive.
-non-fips = ["osproxy-transport/non-fips", "dep:ring"]
-fips = ["osproxy-transport/fips", "dep:aws-lc-rs"]
+# authenticates with, so a FIPS binary never links a non-validated primitive. The
+# weak `osproxy-kafka-krafka?/...` edge forwards the same provider to the capture
+# producer *only when* `capture-kafka` pulled it in, so a FIPS capture build keeps
+# the ring-absent boundary and a default binary never links krafka at all.
+non-fips = ["osproxy-transport/non-fips", "dep:ring", "osproxy-kafka-krafka?/non-fips"]
+fips = ["osproxy-transport/fips", "dep:aws-lc-rs", "osproxy-kafka-krafka?/fips"]
+# Opt-in Kafka traffic capture: composes the portable krafka producer behind the
+# `Capture` seam. Off by default so the standard binary carries no broker client.
+# Build with `cargo build -p osproxy-server --features capture-kafka`.
+capture-kafka = ["dep:osproxy-kafka", "dep:osproxy-kafka-krafka"]
 
 [dependencies]
 osproxy-core.workspace = true
@@ -33,6 +40,8 @@ osproxy-otlp.workspace = true
 osproxy-spi.workspace = true
 osproxy-tenancy.workspace = true
 osproxy-sink.workspace = true
+osproxy-kafka = { workspace = true, optional = true }
+osproxy-kafka-krafka = { workspace = true, optional = true }
 serde_json.workspace = true
 ring = { workspace = true, optional = true }
 aws-lc-rs = { workspace = true, optional = true }

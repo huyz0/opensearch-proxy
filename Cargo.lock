@@ -1753,6 +1753,8 @@ dependencies = [
  "osproxy-config",
  "osproxy-core",
  "osproxy-engine",
+ "osproxy-kafka",
+ "osproxy-kafka-krafka",
  "osproxy-observe",
  "osproxy-otlp",
  "osproxy-sink",

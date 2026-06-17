@@ -56,6 +56,40 @@ pub struct Config {
     /// `(cluster, base URL)`, with no tenancy rewrite. `None` = tenancy mode (the
     /// default). Used for a transparent or capture/migration proxy.
     pub passthrough: Option<(String, String)>,
+    /// Full-fidelity traffic capture to a Kafka topic, or `None` (off). Requires
+    /// the binary be built with the `capture-kafka` feature; a configured capture
+    /// on a binary without it is a loud startup error rather than a silent no-op.
+    pub capture: Option<CaptureConfig>,
+}
+
+/// Full-fidelity traffic capture settings: where to send the captured exchange
+/// stream. This is plain data (no broker types), so the config crate stays
+/// independent of any Kafka client; the binary builds the producer from it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaptureConfig {
+    /// The Kafka bootstrap brokers (`host:port`), at least one.
+    pub brokers: Vec<String>,
+    /// The topic each captured exchange envelope is produced to.
+    pub topic: String,
+    /// Whether to redact the `Authorization` header from the captured stream
+    /// (default `true`). The capture stream is privileged and carries bodies and
+    /// values verbatim, so credentials are stripped unless explicitly kept.
+    pub redact: bool,
+    /// TLS to the brokers, or `None` for a plaintext broker connection.
+    pub tls: Option<CaptureTlsConfig>,
+}
+
+/// TLS settings for the capture broker connection: PEM file **paths** (the binary
+/// reads them). Presence of `ca_path` pins that CA; a client cert/key pair adds
+/// mTLS.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaptureTlsConfig {
+    /// Path to the CA PEM the broker certificate must chain to (pinned trust).
+    pub ca_path: String,
+    /// Path to the client certificate chain PEM for mTLS, or `None`.
+    pub client_cert_path: Option<String>,
+    /// Path to the client private key PEM for mTLS, or `None`.
+    pub client_key_path: Option<String>,
 }
 
 /// TLS termination settings: PEM file **paths** (the binary reads them — config

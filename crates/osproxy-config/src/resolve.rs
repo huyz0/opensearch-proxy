@@ -8,7 +8,8 @@ use std::net::SocketAddr;
 
 use crate::raw::Raw;
 use crate::{
-    AdminPassthroughConfig, Config, ConfigError, DiagBaseline, ObservabilityConfig, TlsConfig,
+    AdminPassthroughConfig, CaptureConfig, CaptureTlsConfig, Config, ConfigError, DiagBaseline,
+    ObservabilityConfig, TlsConfig,
 };
 
 /// The default admin pass-through allow-list when a cluster is configured but no
@@ -29,7 +30,85 @@ pub(crate) fn resolve(raw: &Raw) -> Result<Config, ConfigError> {
         admin_passthrough: admin_passthrough(raw),
         cursor_affinity_key: opt(raw, "cursor_affinity_key"),
         passthrough: passthrough(raw)?,
+        capture: capture(raw)?,
     })
+}
+
+/// Full-fidelity capture: requires both the brokers and the topic, or neither.
+/// Set, the binary builds a Kafka producer and tees every exchange to it.
+fn capture(raw: &Raw) -> Result<Option<CaptureConfig>, ConfigError> {
+    match (opt(raw, "capture_kafka_brokers"), opt(raw, "capture_topic")) {
+        (None, None) => {
+            // Guard: TLS-only capture keys without brokers/topic is a misconfig.
+            if raw.get("capture_kafka_ca").is_some() {
+                return Err(ConfigError::invalid(
+                    "capture_kafka_ca",
+                    "set capture_kafka_brokers and capture_topic to enable capture",
+                ));
+            }
+            Ok(None)
+        }
+        (Some(brokers), Some(topic)) => {
+            let brokers: Vec<String> = brokers
+                .split(',')
+                .map(str::trim)
+                .filter(|b| !b.is_empty())
+                .map(str::to_owned)
+                .collect();
+            if brokers.is_empty() {
+                return Err(ConfigError::invalid(
+                    "capture_kafka_brokers",
+                    "expected at least one `host:port` broker",
+                ));
+            }
+            Ok(Some(CaptureConfig {
+                brokers,
+                topic,
+                redact: bool_or(raw, "capture_redact", true)?,
+                tls: capture_tls(raw)?,
+            }))
+        }
+        _ => Err(ConfigError::invalid(
+            "capture_kafka_brokers",
+            "set both capture_kafka_brokers and capture_topic, or neither",
+        )),
+    }
+}
+
+/// Capture broker TLS: enabled by the presence of a pinned CA. A client cert/key
+/// pair (both-or-neither) adds mTLS and requires the CA.
+fn capture_tls(raw: &Raw) -> Result<Option<CaptureTlsConfig>, ConfigError> {
+    let client = match (
+        opt(raw, "capture_kafka_client_cert"),
+        opt(raw, "capture_kafka_client_key"),
+    ) {
+        (None, None) => None,
+        (Some(cert), Some(key)) => Some((cert, key)),
+        _ => {
+            return Err(ConfigError::invalid(
+                "capture_kafka_client_cert",
+                "set both capture_kafka_client_cert and capture_kafka_client_key, or neither",
+            ))
+        }
+    };
+    let Some(ca_path) = opt(raw, "capture_kafka_ca") else {
+        if client.is_some() {
+            return Err(ConfigError::invalid(
+                "capture_kafka_ca",
+                "client-cert mTLS to the brokers requires capture_kafka_ca",
+            ));
+        }
+        return Ok(None);
+    };
+    let (client_cert_path, client_key_path) = match client {
+        Some((cert, key)) => (Some(cert), Some(key)),
+        None => (None, None),
+    };
+    Ok(Some(CaptureTlsConfig {
+        ca_path,
+        client_cert_path,
+        client_key_path,
+    }))
 }
 
 /// Transparent passthrough: requires both the cluster and its endpoint, or

@@ -52,6 +52,9 @@ osproxy-engine = { path = "crates/osproxy-engine" }
 osproxy-config = { path = "crates/osproxy-config" }
 osproxy-capture = { path = "crates/osproxy-capture" }
 osproxy-kafka = { path = "crates/osproxy-kafka" }
+# default-features off so the binary picks the crypto provider feature
+# (`non-fips`/`fips`) per build; never force-union the default `non-fips`.
+osproxy-kafka-krafka = { path = "crates/osproxy-kafka-krafka", default-features = false }
 osproxy-bench = { path = "crates/osproxy-bench" }
 
 # Third-party (pinned conservatively; add as milestones need them).
