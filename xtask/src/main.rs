@@ -287,7 +287,25 @@ fn test() -> Result<(), String> {
     // `--lib --bins --tests` excludes `--benches`: iai-callgrind benches need
     // valgrind to run and would fail outside CI. clippy still lints them via its
     // own `--all-targets`.
-    cargo(&["test", "--workspace", "--lib", "--bins", "--tests"], &[])
+    //
+    // `--test-threads=1`: the dhat allocation-budget tests measure the
+    // *process-global* heap-block counter around a tight operation. Under libtest's
+    // default parallelism a concurrent test's allocation lands in that window and
+    // inflates the count, which flakes the exact budgets on a busy CI runner (a
+    // `&'static`-returning fn "allocating"). Serial execution keeps each window
+    // quiet, so the budgets stay exact and deterministic everywhere.
+    cargo(
+        &[
+            "test",
+            "--workspace",
+            "--lib",
+            "--bins",
+            "--tests",
+            "--",
+            "--test-threads=1",
+        ],
+        &[],
+    )
 }
 
 fn doc() -> Result<(), String> {
