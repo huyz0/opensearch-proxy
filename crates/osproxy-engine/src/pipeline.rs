@@ -75,6 +75,10 @@ pub struct Pipeline<R, S> {
     /// allow-listed `_cat`/`_cluster`/`_nodes` requests, and which path prefixes
     /// are permitted. `None` = reject all admin requests (the default).
     pub(crate) admin_policy: Option<crate::admin::AdminPolicy>,
+    /// Tenant-agnostic passthrough (`None` = tenancy mode, the default). When set,
+    /// every request is forwarded verbatim to this cluster with no rewrite; the
+    /// router is unused. This is the transparent/capture-proxy mode.
+    pub(crate) passthrough: Option<crate::passthrough::PassthroughPolicy>,
 }
 
 /// The diagnostics decision for one request: how much to record/export, and
@@ -117,7 +121,18 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             break_glass: Arc::new(BreakGlassBuffer::new(BREAK_GLASS_CAPACITY)),
             cursor_signer: None,
             admin_policy: None,
+            passthrough: None,
         }
+    }
+
+    /// Enables tenant-agnostic passthrough: every request is forwarded verbatim to
+    /// `policy`'s cluster with no tenancy rewrite. Use this for a transparent or
+    /// capture/migration proxy. Without it, the pipeline routes by tenancy (the
+    /// default).
+    #[must_use]
+    pub fn with_passthrough(mut self, policy: crate::passthrough::PassthroughPolicy) -> Self {
+        self.passthrough = Some(policy);
+        self
     }
 
     /// Enables opt-in admin pass-through (`docs/03` §6): allow-listed
@@ -336,6 +351,10 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         ctx: &RequestCtx<'_>,
         trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
+        // Tenant-agnostic passthrough short-circuits tenancy dispatch entirely.
+        if let Some(policy) = &self.passthrough {
+            return self.forward(ctx, policy, trace).await;
+        }
         match ctx.endpoint() {
             EndpointKind::IngestDoc => self.ingest_doc(ctx, trace).await,
             EndpointKind::IngestBulk => self.ingest_bulk(ctx, trace).await,

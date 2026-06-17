@@ -52,6 +52,10 @@ pub struct Config {
     pub admin_passthrough: Option<AdminPassthroughConfig>,
     /// The shared HMAC key enabling scroll/PIT cursor affinity, or `None` (off).
     pub cursor_affinity_key: Option<String>,
+    /// Tenant-agnostic passthrough: forward every request verbatim to this
+    /// `(cluster, base URL)`, with no tenancy rewrite. `None` = tenancy mode (the
+    /// default). Used for a transparent or capture/migration proxy.
+    pub passthrough: Option<(String, String)>,
 }
 
 /// TLS termination settings: PEM file **paths** (the binary reads them — config

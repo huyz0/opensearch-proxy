@@ -34,6 +34,8 @@ pub(crate) const KEYS: &[&str] = &[
     "admin_passthrough_prefixes",
     "admin_passthrough_endpoint",
     "cursor_affinity_key",
+    "passthrough_cluster",
+    "passthrough_endpoint",
 ];
 
 /// The environment variable name for a canonical key: `OSPROXY_` + the

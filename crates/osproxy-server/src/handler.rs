@@ -21,6 +21,7 @@ use osproxy_tenancy::TenancyRouter;
 use osproxy_transport::{IngressHandler, IngressRequest, IngressResponse};
 
 use crate::auth::AllowAllAuthorizer;
+use crate::capture::{Capture, CaptureRecord, NoCapture};
 use crate::directives_api::decode_directive_set;
 use crate::log::{NoLog, RequestLog};
 use crate::tenancy::ReferenceTenancy;
@@ -57,6 +58,11 @@ pub struct AppHandler<A, Z = AllowAllAuthorizer> {
     /// metadata to anyone who can reach the port, so production deployments turn
     /// them off; disabled, both report `not_enabled` (`/metrics` stays on).
     debug_endpoints: bool,
+    /// Full-fidelity traffic capture (off by default). When enabled, each
+    /// forwarded data-plane exchange is teed to this sink for replay/audit. Unlike
+    /// the shape-only telemetry, the records carry bodies and values, so capture
+    /// is deliberate and the stream is privileged (`capture` module).
+    capture: Box<dyn Capture>,
 }
 
 impl<A, Z> std::fmt::Debug for AppHandler<A, Z> {
@@ -83,6 +89,7 @@ impl<A: Authenticator> AppHandler<A, AllowAllAuthorizer> {
             metrics: Metrics::new(),
             require_tls_for_mutation: true,
             debug_endpoints: true,
+            capture: Box::new(NoCapture),
         }
     }
 }
@@ -103,7 +110,17 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
             metrics: self.metrics,
             require_tls_for_mutation: self.require_tls_for_mutation,
             debug_endpoints: self.debug_endpoints,
+            capture: self.capture,
         }
+    }
+
+    /// Sets the full-fidelity traffic capture (builder style). Off by default.
+    /// Compose redaction with `capture::RedactingCapture`; the stream carries
+    /// bodies and values, so treat it as privileged.
+    #[must_use]
+    pub fn with_capture(mut self, capture: Box<dyn Capture>) -> Self {
+        self.capture = capture;
+        self
     }
 
     /// Sets whether the pre-auth `/debug/explain` and `/debug/breakglass`
@@ -361,18 +378,54 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
                 false,
             ),
         };
-        // Tally the data-plane outcome for the /metrics snapshot (shape-only).
-        self.metrics.record(ok);
+        self.after_response(&req, &response, &request_id, ok);
+        response.with_header("x-request-id", request_id.as_str())
+    }
+}
 
-        // Structured request log (opt-in): emit the shape-only explain document,
-        // which carries the request's trace_id, so logs join the trace/spans.
+impl<A, Z> AppHandler<A, Z> {
+    /// Post-response side effects: tally metrics (shape-only), emit the structured
+    /// log (opt-in), and tee the full-fidelity capture (opt-in).
+    fn after_response(
+        &self,
+        req: &IngressRequest,
+        response: &IngressResponse,
+        request_id: &RequestId,
+        ok: bool,
+    ) {
+        self.metrics.record(ok);
+        // The structured log is the shape-only explain document, which carries the
+        // request's trace_id, so logs join the trace/spans.
         if self.request_log.enabled() {
-            if let Some(record) = self.pipeline.explain(&request_id) {
+            if let Some(record) = self.pipeline.explain(request_id) {
                 self.request_log.emit(&record);
             }
         }
+        self.tee_capture(req, response, request_id);
+    }
 
-        response.with_header("x-request-id", request_id.as_str())
+    /// Full-fidelity capture (opt-in): tee the raw exchange for replay/audit. The
+    /// original request headers pass through; redaction (e.g. dropping
+    /// `Authorization`) is composed via `RedactingCapture`.
+    fn tee_capture(
+        &self,
+        req: &IngressRequest,
+        response: &IngressResponse,
+        request_id: &RequestId,
+    ) {
+        if !self.capture.enabled() {
+            return;
+        }
+        self.capture.capture(&CaptureRecord {
+            request_id: request_id.as_str(),
+            method: req.method,
+            path: &req.path,
+            query: req.query.as_deref(),
+            headers: &req.headers,
+            body: &req.body,
+            response_status: response.status,
+            response_body: &response.body,
+        });
     }
 }
 

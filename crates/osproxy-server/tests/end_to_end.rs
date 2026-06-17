@@ -23,8 +23,9 @@ use hyper::{Method, Request, Response};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use osproxy_core::{ClusterId, IndexName};
-use osproxy_engine::Pipeline;
+use osproxy_engine::{PassthroughPolicy, Pipeline};
 use osproxy_server::auth::ReferenceAuthenticator;
+use osproxy_server::capture::{MemoryCapture, RedactingCapture};
 use osproxy_server::handler::AppHandler;
 use osproxy_server::tenancy::ReferenceTenancy;
 use osproxy_sink::OpenSearchSink;
@@ -366,6 +367,72 @@ async fn a_supplied_authorizer_can_decline_an_authenticated_request() {
         captured.lock().unwrap().method,
         "",
         "a request the authorizer declined never reaches the upstream"
+    );
+}
+
+#[tokio::test]
+async fn passthrough_forwards_verbatim_and_capture_records_the_exchange() {
+    // Tenant-agnostic mode: no tenant_id in the body (tenancy would reject it),
+    // yet passthrough forwards it verbatim to the source and returns the raw
+    // response. The capture tees the exchange, with the credential redacted.
+    let (upstream, captured) = start_upstream().await;
+    let cluster = ClusterId::from("source");
+
+    let sink = OpenSearchSink::new();
+    // The router is unused in passthrough mode, but the pipeline is generic over
+    // one, so wire the reference tenancy (never consulted here).
+    let tenancy = ReferenceTenancy::new(cluster.clone(), IndexName::from("ignored"), &upstream);
+    let pipeline = Pipeline::new(TenancyRouter::new(tenancy), sink)
+        .with_passthrough(PassthroughPolicy::new(cluster, upstream));
+
+    let capture = MemoryCapture::new();
+    let handler = Arc::new(
+        AppHandler::new(pipeline, ReferenceAuthenticator::dev())
+            .with_require_tls_for_mutation(false)
+            .with_capture(Box::new(RedactingCapture::new(capture.clone()))),
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = osproxy_transport::serve(listener, handler).await;
+    });
+
+    let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("http://{proxy_addr}/orders/_doc/raw-1"))
+        .header("authorization", "Bearer s3cret")
+        .body(Full::new(Bytes::from_static(br#"{"id":7,"msg":"hi"}"#)))
+        .unwrap();
+    let resp = client.request(req).await.unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // The upstream saw the request verbatim: same method, same path, same body,
+    // with nothing injected (no _tenant, no constructed id).
+    let got = captured.lock().unwrap().clone();
+    assert_eq!(got.method, "POST");
+    assert_eq!(got.uri, "/orders/_doc/raw-1");
+    assert_eq!(got.body, r#"{"id":7,"msg":"hi"}"#);
+    assert!(
+        !got.body.contains("_tenant"),
+        "no tenancy injection: {}",
+        got.body
+    );
+
+    // The capture recorded the exchange, full-fidelity body, credential redacted.
+    let records = capture.records();
+    assert_eq!(records.len(), 1, "one captured exchange");
+    assert_eq!(records[0].path, "/orders/_doc/raw-1");
+    assert_eq!(records[0].body, br#"{"id":7,"msg":"hi"}"#);
+    assert_eq!(records[0].response_status, 201);
+    assert!(
+        !records[0]
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("authorization")),
+        "the captured stream must not carry the credential: {:?}",
+        records[0].headers
     );
 }
 

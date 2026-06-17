@@ -6,6 +6,12 @@
 //! connection), while a write-only `QueueSink` implements only [`Sink`].
 //!
 //! [`Sink`]: crate::Sink
+//
+// JUSTIFY(file-length): one cohesive family of read-path value types — the
+// `Reader` trait plus the op (`ReadOp`/`SearchOp`/`CursorOp`) and outcome
+// (`ReadOutcome`/`SearchOutcome`/`CountOutcome`/`CursorOutcome`) structs they
+// exchange. They share the same builders and conventions; splitting them would
+// scatter one small vocabulary across files for no real separation.
 
 use osproxy_core::{ClusterId, Target, TraceContext};
 use osproxy_spi::{HttpMethod, Protocol};
@@ -279,6 +285,13 @@ impl CursorOp {
     #[must_use]
     pub fn with_endpoint(mut self, endpoint: Option<String>) -> Self {
         self.endpoint = endpoint;
+        self
+    }
+
+    /// Sets the upstream wire protocol (builder style).
+    #[must_use]
+    pub fn with_protocol(mut self, protocol: Protocol) -> Self {
+        self.protocol = protocol;
         self
     }
 

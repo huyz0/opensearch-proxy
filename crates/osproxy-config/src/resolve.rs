@@ -28,7 +28,24 @@ pub(crate) fn resolve(raw: &Raw) -> Result<Config, ConfigError> {
         observability: observability(raw)?,
         admin_passthrough: admin_passthrough(raw),
         cursor_affinity_key: opt(raw, "cursor_affinity_key"),
+        passthrough: passthrough(raw)?,
     })
+}
+
+/// Transparent passthrough: requires both the cluster and its endpoint, or
+/// neither. Set, both, the proxy forwards every request verbatim there.
+fn passthrough(raw: &Raw) -> Result<Option<(String, String)>, ConfigError> {
+    match (
+        opt(raw, "passthrough_cluster"),
+        opt(raw, "passthrough_endpoint"),
+    ) {
+        (None, None) => Ok(None),
+        (Some(cluster), Some(endpoint)) => Ok(Some((cluster, endpoint))),
+        _ => Err(ConfigError::invalid(
+            "passthrough_cluster",
+            "set both passthrough_cluster and passthrough_endpoint, or neither",
+        )),
+    }
 }
 
 /// An optional string value (`None` when unset/empty).

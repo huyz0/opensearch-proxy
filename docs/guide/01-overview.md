@@ -85,4 +85,19 @@ optionally an `Authenticator`, `Authorizer`, custom `Sink`, or `Router`), and
 assembling the pipeline, handler, and ingress. See [The SPI](05-spi-guide.md) and
 [Wiring It Together](06-wiring-example.md).
 
+## Tenant-agnostic mode
+
+osproxy also runs without tenancy. Set `passthrough_cluster` and the proxy forwards
+every request verbatim to one cluster with no partition resolution, no body rewrite,
+and no isolation. On its own that is a plain reverse proxy with osproxy's auth, TLS,
+pooling, and observability.
+
+Pair it with the `Capture` seam and you get a capture proxy in the style of the
+[OpenSearch Migration Assistant](https://docs.opensearch.org/latest/migration-assistant/architecture/):
+forward to the source cluster while teeing the raw request and response to a durable
+stream (a queue) for later replay against a target. Capture is off by default and
+records full-fidelity bodies, so the stream is privileged and you enable it
+deliberately; redaction (dropping `Authorization`) composes in via `RedactingCapture`.
+The queue writer itself is a separate `Capture` implementation.
+
 → [Requirements & NFRs](02-requirements-and-nfrs.md)

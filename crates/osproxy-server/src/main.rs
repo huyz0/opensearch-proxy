@@ -17,7 +17,7 @@ use osproxy_config::{
     AdminPassthroughConfig, Config, DiagBaseline, ObservabilityConfig, TlsConfig,
 };
 use osproxy_core::{ClusterId, IndexName, SystemClock};
-use osproxy_engine::{AdminPolicy, Pipeline};
+use osproxy_engine::{AdminPolicy, PassthroughPolicy, Pipeline};
 use osproxy_observe::{DiagLevel, InMemoryDirectiveStore};
 use osproxy_otlp::OtlpHttpExporter;
 use osproxy_server::auth::ReferenceAuthenticator;
@@ -252,10 +252,29 @@ fn assemble_pipeline(
         cfg.observability.debug_directive_key.as_deref(),
     )
     .with_directive_store(directive_store);
-    with_admin_passthrough(
+    let routed = with_admin_passthrough(
         with_cursor_affinity(observed, cfg.cursor_affinity_key.as_deref()),
         cfg.admin_passthrough.as_ref(),
-    )
+    );
+    with_passthrough(routed, cfg.passthrough.as_ref())
+}
+
+/// Enables tenant-agnostic passthrough when `OSPROXY_PASSTHROUGH_CLUSTER` and
+/// `OSPROXY_PASSTHROUGH_ENDPOINT` are set: every request is forwarded verbatim to
+/// that cluster with no tenancy rewrite (a transparent / capture proxy). Unset ⇒
+/// tenancy mode (the default).
+fn with_passthrough(
+    pipeline: Pipeline<TenancyRouter<ReferenceTenancy>, OpenSearchSink>,
+    passthrough: Option<&(String, String)>,
+) -> Pipeline<TenancyRouter<ReferenceTenancy>, OpenSearchSink> {
+    let Some((cluster, endpoint)) = passthrough else {
+        return pipeline;
+    };
+    println!("osproxy passthrough: on (forwarding verbatim to cluster={cluster} at {endpoint})");
+    pipeline.with_passthrough(PassthroughPolicy::new(
+        ClusterId::from(cluster.as_str()),
+        endpoint.clone(),
+    ))
 }
 
 /// Enables opt-in admin (`_cat`/`_cluster`/`_nodes`) pass-through when

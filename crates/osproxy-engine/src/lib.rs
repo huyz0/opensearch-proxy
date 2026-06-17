@@ -23,6 +23,7 @@ mod error;
 mod mget;
 mod msearch;
 mod observe;
+mod passthrough;
 mod pipeline;
 mod pit;
 mod plan;
@@ -31,6 +32,7 @@ mod retry;
 
 pub use admin::AdminPolicy;
 pub use error::RequestError;
+pub use passthrough::PassthroughPolicy;
 pub use pipeline::{Pipeline, PipelineResponse};
 pub use plan::build_write_batch;
 pub use retry::RetryPolicy;
