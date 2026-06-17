@@ -14,7 +14,7 @@ members = [
     "crates/osproxy-config",
     "crates/osproxy-capture",
     "crates/osproxy-kafka",
-    "crates/osproxy-kafka-rskafka",
+    "crates/osproxy-kafka-krafka",
     "crates/osproxy-server",
     "crates/osproxy-bench",
     "xtask",

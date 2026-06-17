@@ -1,0 +1,33 @@
+[package]
+name = "osproxy-kafka-krafka"
+description = "Portable, pure-Rust Kafka Producer for osproxy-kafka over krafka + rustls. The TLS crypto provider is build-selected (ring for non-fips, the validated aws-lc-rs FIPS module for fips) and ring is never linked into a FIPS build, so one client serves both deployment targets cleanly."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+osproxy-kafka.workspace = true
+# Pure-Rust Kafka client; default features off so we choose the crypto provider
+# (and skip compression, which we do not use). krafka's rustls is itself
+# default-features-off, so the provider is purely feature-gated: a FIPS build
+# enables only `rustls-aws-lc-rs` and never links ring.
+krafka = { version = "0.12", default-features = false }
+# Pulled in directly so this crate can install the process-default CryptoProvider
+# that krafka's `ClientConfig::builder()` resolves. The feature mirrors the
+# krafka provider feature below so exactly one provider is linked.
+rustls = { version = "0.23", default-features = false, features = ["std"] }
+tokio = { workspace = true, features = ["rt"] }
+
+[features]
+# One client, both targets: the rustls crypto provider is chosen at build time,
+# mirroring osproxy-transport. A FIPS artifact links only the validated aws-lc-rs
+# module (no ring); a dev build links only ring.
+default = ["non-fips"]
+non-fips = ["krafka/ring", "rustls/ring"]
+fips = ["krafka/rustls-aws-lc-rs", "rustls/fips"]
+
+[lints]
+workspace = true
