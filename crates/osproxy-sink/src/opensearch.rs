@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -117,7 +117,12 @@ const DEFAULT_COOLDOWN: Duration = Duration::from_secs(5);
 /// is bounded by a per-request timeout so a stuck upstream fails fast (NFR-R7),
 /// and a per-cluster circuit breaker sheds a cluster that keeps failing.
 pub struct OpenSearchSink {
-    clusters: HashMap<ClusterId, ClusterPool>,
+    /// Per-cluster pools, built lazily the first time a placement routes to a
+    /// cluster (the endpoint comes from the routing target, sourced from the
+    /// tenancy's placement result). Behind a lock because that first dispatch
+    /// inserts; afterwards every dispatch is a read-lock + `Arc` clone. With far
+    /// fewer than ~1k clusters, creating a pool on first use is cheap.
+    clusters: RwLock<HashMap<ClusterId, Arc<ClusterPool>>>,
     timeout: Duration,
     failure_threshold: u32,
     cooldown: Duration,
@@ -136,17 +141,21 @@ impl std::fmt::Debug for OpenSearchSink {
     }
 }
 
+impl Default for OpenSearchSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OpenSearchSink {
-    /// Builds a sink that routes each cluster to its configured base URL, giving
-    /// each cluster its own pooled clients (sharded pools, `docs/01` §7).
+    /// Builds an empty sink. Cluster pools are created on demand from the
+    /// endpoint each routing target carries (the tenancy's placement result is
+    /// the source of truth for where every cluster lives); there is no static
+    /// endpoint catalog.
     #[must_use]
-    pub fn new(endpoints: HashMap<ClusterId, String>) -> Self {
-        let clusters = endpoints
-            .into_iter()
-            .map(|(cluster, base)| (cluster, ClusterPool::new(base)))
-            .collect();
+    pub fn new() -> Self {
         Self {
-            clusters,
+            clusters: RwLock::new(HashMap::new()),
             timeout: DEFAULT_TIMEOUT,
             failure_threshold: DEFAULT_FAILURE_THRESHOLD,
             cooldown: DEFAULT_COOLDOWN,
@@ -177,31 +186,61 @@ impl OpenSearchSink {
         self
     }
 
-    /// A snapshot of a cluster's connection-reuse counters, or `None` if the
-    /// cluster is unconfigured. Lets operators (and tests) verify the pool is
+    /// A snapshot of a cluster's connection-reuse counters, or `None` if no pool
+    /// has been built for it yet. Lets operators (and tests) verify the pool is
     /// amortizing handshakes — connections opened far below requests dispatched
     /// (NFR-P; the `docs/11` M4 "pool reuse rates verified" exit gate).
     #[must_use]
     pub fn pool_stats(&self, cluster: &ClusterId) -> Option<PoolStats> {
-        self.clusters.get(cluster).map(ClusterPool::stats)
+        self.read_clusters().get(cluster).map(|p| p.stats())
     }
 
-    /// Pool-reuse counters for **every** configured cluster, paired with its id —
-    /// the fleet-/agent-facing readout behind the `/metrics` snapshot. Order is
+    /// Pool-reuse counters for **every** pooled cluster, paired with its id — the
+    /// fleet-/agent-facing readout behind the `/metrics` snapshot. Order is
     /// unspecified (a `HashMap` walk); callers that need stability sort by id.
     #[must_use]
     pub fn pool_stats_all(&self) -> Vec<(ClusterId, PoolStats)> {
-        self.clusters
+        self.read_clusters()
             .iter()
             .map(|(id, pool)| (id.clone(), pool.stats()))
             .collect()
     }
 
-    /// Resolves a cluster's pool, or a transport error if it is unconfigured.
-    fn pool_for(&self, cluster: &ClusterId) -> Result<&ClusterPool, SinkError> {
-        self.clusters.get(cluster).ok_or(SinkError::Transport {
-            kind: "no endpoint configured for target cluster",
-        })
+    /// Reads the cluster map, recovering the guard if a writer panicked (a poison
+    /// only means a pool insert panicked; the entries are still valid to read).
+    fn read_clusters(
+        &self,
+    ) -> std::sync::RwLockReadGuard<'_, HashMap<ClusterId, Arc<ClusterPool>>> {
+        self.clusters
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Resolves a cluster's pool, creating it from `endpoint` on first use. Errors
+    /// only when the cluster has no pool yet *and* no endpoint was supplied to
+    /// build one (a cursor/admin op routed to a cluster the data plane never hit).
+    fn pool_for(
+        &self,
+        cluster: &ClusterId,
+        endpoint: Option<&str>,
+    ) -> Result<Arc<ClusterPool>, SinkError> {
+        if let Some(pool) = self.read_clusters().get(cluster) {
+            return Ok(Arc::clone(pool));
+        }
+        let Some(base) = endpoint else {
+            return Err(SinkError::Transport {
+                kind: "no endpoint for target cluster",
+            });
+        };
+        let mut clusters = self
+            .clusters
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Another writer may have inserted between the read and the write lock.
+        let pool = clusters
+            .entry(cluster.clone())
+            .or_insert_with(|| Arc::new(ClusterPool::new(base.to_owned())));
+        Ok(Arc::clone(pool))
     }
 
     /// Sends a request to a cluster's pool, bounded by the per-request timeout
@@ -260,7 +299,7 @@ impl OpenSearchSink {
         verb: &str,
         op: &SearchOp,
     ) -> Result<(u16, Vec<u8>, bool), SinkError> {
-        let pool = self.pool_for(&op.target.cluster)?;
+        let pool = self.pool_for(&op.target.cluster, op.target.endpoint.as_deref())?;
         let base = format!("{}/{}/{verb}", pool.base, op.target.index.as_str());
         // Append the engine's allow-listed query (e.g. `scroll=1m`); never the
         // client's raw query, so no param can bypass the body partition filter.
@@ -279,7 +318,7 @@ impl OpenSearchSink {
 
         let (resp, reused) = self
             .send(
-                pool,
+                &pool,
                 op.protocol,
                 req,
                 op.trace.as_ref(),
@@ -303,12 +342,12 @@ impl OpenSearchSink {
     /// Sends a single operation and parses its result, with whether the dispatch
     /// reused a pooled connection.
     async fn dispatch(&self, op: &WriteOp) -> Result<(OpResult, bool), SinkError> {
-        let pool = self.pool_for(&op.target.cluster)?;
+        let pool = self.pool_for(&op.target.cluster, op.target.endpoint.as_deref())?;
         let (req, fallback_id) = build_request(&pool.base, &op.target.index, &op.doc)?;
 
         let (resp, reused) = self
             .send(
-                pool,
+                &pool,
                 op.protocol,
                 req,
                 op.trace.as_ref(),
@@ -332,7 +371,7 @@ impl OpenSearchSink {
 
 impl Reader for OpenSearchSink {
     async fn get(&self, op: ReadOp) -> Result<ReadOutcome, SinkError> {
-        let pool = self.pool_for(&op.target.cluster)?;
+        let pool = self.pool_for(&op.target.cluster, op.target.endpoint.as_deref())?;
         let uri = doc_uri(
             &pool.base,
             &op.target.index,
@@ -349,7 +388,7 @@ impl Reader for OpenSearchSink {
 
         let (resp, reused) = self
             .send(
-                pool,
+                &pool,
                 op.protocol,
                 req,
                 op.trace.as_ref(),
@@ -401,7 +440,7 @@ impl Reader for OpenSearchSink {
         // allow-listed prefix upstream — the engine already guards the admin path,
         // and cursor paths are engine-built, so this should never fire.
         reject_path_traversal(&op.path)?;
-        let pool = self.pool_for(&op.cluster)?;
+        let pool = self.pool_for(&op.cluster, op.endpoint.as_deref())?;
         let uri = match &op.query {
             Some(q) if !q.is_empty() => format!("{}{}?{q}", pool.base, op.path),
             _ => format!("{}{}", pool.base, op.path),
@@ -416,7 +455,7 @@ impl Reader for OpenSearchSink {
             })?;
         let (resp, reused) = self
             .send(
-                pool,
+                &pool,
                 op.protocol,
                 req,
                 op.trace.as_ref(),

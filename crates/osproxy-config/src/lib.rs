@@ -96,6 +96,9 @@ pub struct AdminPassthroughConfig {
     pub cluster: String,
     /// The allow-listed path prefixes (e.g. `/_cat/`).
     pub prefixes: Vec<String>,
+    /// The admin cluster's base URL, or `None` to resolve it via the tenancy's
+    /// `cluster_endpoint` lookup.
+    pub endpoint: Option<String>,
 }
 
 /// The baseline diagnostics verbosity. A config-local enum so this crate stays

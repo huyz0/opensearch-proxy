@@ -25,6 +25,7 @@ use crate::pipeline::{Pipeline, PipelineResponse};
 pub struct AdminPolicy {
     cluster: ClusterId,
     allowed_prefixes: Vec<String>,
+    endpoint: Option<String>,
 }
 
 impl AdminPolicy {
@@ -36,7 +37,17 @@ impl AdminPolicy {
         Self {
             cluster,
             allowed_prefixes,
+            endpoint: None,
         }
+    }
+
+    /// Sets the admin cluster's base URL (builder style). The admin cluster is
+    /// operator infrastructure, not a tenancy placement, so its endpoint is given
+    /// here; without it the sink falls back to the tenancy's `cluster_endpoint`.
+    #[must_use]
+    pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = Some(endpoint.into());
+        self
     }
 
     /// Whether `path` is allow-listed for pass-through. A path containing a `..`
@@ -69,12 +80,19 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
                 endpoint: ctx.endpoint(),
             }));
         };
+        // The admin cluster's endpoint: the operator-supplied one, else the
+        // tenancy's lookup for that cluster id.
+        let endpoint = policy
+            .endpoint
+            .clone()
+            .or_else(|| self.router.cluster_endpoint(&policy.cluster));
         let op = CursorOp::new(
             policy.cluster.clone(),
             ctx.method(),
             ctx.path().to_owned(),
             ctx.body().to_vec(),
         )
+        .with_endpoint(endpoint)
         .with_query(ctx.query().map(str::to_owned))
         .with_trace(Some(wire_trace(ctx)));
         let outcome = self.sink.cursor(op).await?;

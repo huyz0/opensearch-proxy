@@ -64,6 +64,7 @@ The canonical key is `snake_case`; the env var is `OSPROXY_` + the upper-cased k
 |-------------------|---------|-------------|
 | `admin_passthrough_cluster` | *(unset → admin rejected)* | The cluster that answers allow-listed admin (`_cat`/`_cluster`/`_nodes`) requests. Unset ⇒ all admin requests are rejected (fail-closed). |
 | `admin_passthrough_prefixes` | `/_cat/,/_cluster/,/_nodes/` | Comma-separated allow-list of admin path prefixes (only meaningful with `admin_passthrough_cluster`). |
+| `admin_passthrough_endpoint` | *(unset → tenancy lookup)* | Base URL of the admin cluster. The admin cluster is operator infrastructure, not a tenancy placement, so its endpoint is set here; unset falls back to the tenancy's `cluster_endpoint` for that cluster id. |
 | `cursor_affinity_key` | *(unset → affinity off)* | Shared HMAC key that signs the cluster-in-cursor envelope so a continued scroll/PIT routes to its pinned cluster across the fleet with no shared store. **The same key must be set on every instance.** Unset ⇒ cursor requests fail closed. |
 
 ## Worked examples

@@ -1,9 +1,10 @@
 //! The high-level tenancy contract — what most implementers provide.
 
-use osproxy_core::{Epoch, PartitionId};
+use osproxy_core::{ClusterId, Epoch, PartitionId};
 
 use crate::error::SpiError;
 use crate::placement::PlacementAt;
+use crate::request::RequestCtx;
 use crate::rules::{DocIdRule, InjectedField, PartitionKeySpec, SensitivitySpec};
 
 /// The tenancy-focused contract most implementers provide.
@@ -66,6 +67,24 @@ pub trait TenancySpi: Send + Sync + 'static {
     /// Which field (or source) carries the partition id.
     fn partition_key(&self) -> PartitionKeySpec;
 
+    /// Derive the partition id by running your own code over the request, for
+    /// cases the declarative [`TenancySpi::partition_key`] sources cannot express:
+    /// decoding an encoded or signed header and extracting a claim, parsing a
+    /// structured token, combining several inputs, and so on. The context gives
+    /// you the headers, principal, path, query, and body.
+    ///
+    /// This is tried **before** [`TenancySpi::partition_key`]. Return `Some` to
+    /// use the extracted id; return `None` to fall through to the declarative
+    /// sources. The default returns `None`, so a tenancy that only needs the
+    /// declarative sources ignores this entirely.
+    ///
+    /// The no-value-leak rule still holds (NFR-S2): whatever you decode here, the
+    /// decoded value must not be logged. The id you return is treated as a
+    /// partition id (an opaque routing key), never as a tenant *value* to capture.
+    fn extract_partition(&self, _ctx: &RequestCtx<'_>) -> Option<PartitionId> {
+        None
+    }
+
     /// Optional rule to construct the document `_id` (and `_routing`).
     fn doc_id_rule(&self) -> Option<DocIdRule>;
 
@@ -97,5 +116,18 @@ pub trait TenancySpi: Send + Sync + 'static {
     /// constant placement) never needs to hold a write.
     async fn admit_write(&self, _partition: &PartitionId, _epoch: Epoch) -> bool {
         true
+    }
+
+    /// The base URL of a cluster, by id. The data plane carries each cluster's
+    /// endpoint on the placement result, but the cursor-affinity and admin
+    /// pass-through paths route to a cluster by id with no placement to consult,
+    /// so they resolve the endpoint through this lookup. Return `None` for an
+    /// unknown cluster; the request then fails closed rather than route blind.
+    ///
+    /// Default `None`. A tenancy that runs cursor affinity or admin pass-through
+    /// against `OpenSearchSink` must implement it for the clusters those paths
+    /// reach (which is just its own cluster catalog by id).
+    fn cluster_endpoint(&self, _cluster: &ClusterId) -> Option<String> {
+        None
     }
 }

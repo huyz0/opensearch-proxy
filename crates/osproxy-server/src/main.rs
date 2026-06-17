@@ -52,11 +52,14 @@ async fn run() -> Result<(), String> {
     let cfg = Config::load(std::env::args().skip(1)).map_err(|e| e.to_string())?;
     let cluster = ClusterId::from("default");
 
-    let mut endpoints = HashMap::new();
-    endpoints.insert(cluster.clone(), cfg.upstream.clone());
-    let sink = OpenSearchSink::new(endpoints);
-
-    let tenancy = ReferenceTenancy::new(cluster, IndexName::from(cfg.index.as_str()));
+    // The sink has no static endpoint catalog; the tenancy reports each cluster's
+    // base URL as part of its placement result (here, the configured upstream).
+    let sink = OpenSearchSink::new();
+    let tenancy = ReferenceTenancy::new(
+        cluster,
+        IndexName::from(cfg.index.as_str()),
+        cfg.upstream.clone(),
+    );
     // The fleet directive store the pipeline reads and the admin endpoint writes.
     let directive_store = Arc::new(InMemoryDirectiveStore::new());
     let pipeline = assemble_pipeline(tenancy, sink, directive_store.clone(), &cfg);
@@ -271,10 +274,14 @@ fn with_admin_passthrough<R: Router, S: Sink + Reader>(
         "osproxy admin pass-through: on (cluster={}, prefixes={:?})",
         admin.cluster, admin.prefixes
     );
-    pipeline.with_admin_passthrough(AdminPolicy::new(
+    let mut policy = AdminPolicy::new(
         ClusterId::from(admin.cluster.as_str()),
         admin.prefixes.clone(),
-    ))
+    );
+    if let Some(endpoint) = &admin.endpoint {
+        policy = policy.with_endpoint(endpoint.clone());
+    }
+    pipeline.with_admin_passthrough(policy)
 }
 
 /// Enables opt-in scroll/PIT cursor affinity when `OSPROXY_CURSOR_AFFINITY_KEY`

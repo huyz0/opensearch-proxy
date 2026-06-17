@@ -241,6 +241,11 @@ pub struct CursorOp {
     /// An already-allow-listed query string (without the `?`) to append to the
     /// upstream URL — e.g. `keep_alive=1m` on PIT create. Filtered by the engine.
     pub query: Option<String>,
+    /// The pinned cluster's base URL, when the engine knows it (the placement that
+    /// opened the cursor supplied it). `None` for an affinity continue recovered
+    /// from the envelope alone: the sink then reuses the pool the opening request
+    /// already built for this cluster, erroring only if none exists.
+    pub endpoint: Option<String>,
     /// The upstream wire protocol. Defaults to [`Protocol::Http1`].
     pub protocol: Protocol,
     /// The W3C trace context to forward downstream.
@@ -262,9 +267,19 @@ impl CursorOp {
             path: path.into(),
             body,
             query: None,
+            endpoint: None,
             protocol: Protocol::Http1,
             trace: None,
         }
+    }
+
+    /// Sets the pinned cluster's base URL (builder style), when the engine knows
+    /// it. Lets the sink build the pool for an affinity request even on an
+    /// instance that did not serve the opening call.
+    #[must_use]
+    pub fn with_endpoint(mut self, endpoint: Option<String>) -> Self {
+        self.endpoint = endpoint;
+        self
     }
 
     /// Sets the (already allow-listed) upstream query string (builder style).

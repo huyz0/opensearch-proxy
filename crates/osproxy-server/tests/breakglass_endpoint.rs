@@ -5,7 +5,6 @@
 
 #![allow(clippy::unwrap_used)]
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use osproxy_core::{ClusterId, EndpointKind, IndexName};
@@ -43,9 +42,12 @@ async fn the_breakglass_endpoint_returns_the_captured_tape() {
     tape.capture(json!({"request_id": "r1", "outcome": "error"}));
     tape.capture(json!({"request_id": "r2", "outcome": "ok"}));
 
-    let endpoints: HashMap<ClusterId, String> = HashMap::new();
-    let sink = OpenSearchSink::new(endpoints);
-    let tenancy = ReferenceTenancy::new(ClusterId::from("c"), IndexName::from("shared"));
+    let sink = OpenSearchSink::new();
+    let tenancy = ReferenceTenancy::new(
+        ClusterId::from("c"),
+        IndexName::from("shared"),
+        "http://unused",
+    );
     let pipeline = Pipeline::new(TenancyRouter::new(tenancy), sink).with_break_glass(tape.clone());
     let handler = AppHandler::new(pipeline, ReferenceAuthenticator::dev());
 
@@ -65,9 +67,12 @@ async fn debug_endpoints_are_refused_when_disabled() {
     let tape = Arc::new(BreakGlassBuffer::new(8));
     tape.capture(json!({"request_id": "r1", "outcome": "ok"}));
 
-    let endpoints: HashMap<ClusterId, String> = HashMap::new();
-    let sink = OpenSearchSink::new(endpoints);
-    let tenancy = ReferenceTenancy::new(ClusterId::from("c"), IndexName::from("shared"));
+    let sink = OpenSearchSink::new();
+    let tenancy = ReferenceTenancy::new(
+        ClusterId::from("c"),
+        IndexName::from("shared"),
+        "http://unused",
+    );
     let pipeline = Pipeline::new(TenancyRouter::new(tenancy), sink).with_break_glass(tape);
     let handler =
         AppHandler::new(pipeline, ReferenceAuthenticator::dev()).with_debug_endpoints(false);
@@ -87,9 +92,12 @@ async fn debug_endpoints_are_refused_when_disabled() {
 
 #[tokio::test]
 async fn an_empty_tape_is_an_empty_array() {
-    let endpoints: HashMap<ClusterId, String> = HashMap::new();
-    let sink = OpenSearchSink::new(endpoints);
-    let tenancy = ReferenceTenancy::new(ClusterId::from("c"), IndexName::from("shared"));
+    let sink = OpenSearchSink::new();
+    let tenancy = ReferenceTenancy::new(
+        ClusterId::from("c"),
+        IndexName::from("shared"),
+        "http://unused",
+    );
     let handler = AppHandler::new(
         Pipeline::new(TenancyRouter::new(tenancy), sink),
         ReferenceAuthenticator::dev(),

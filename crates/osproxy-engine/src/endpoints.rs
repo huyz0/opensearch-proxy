@@ -315,6 +315,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         // cursor id never rides in a URL path (`docs/03` §6).
         let body = rewrite_cursor_body(ctx.body(), req.id_field, &real_id);
         let op = CursorOp::new(cluster.clone(), ctx.method(), req.upstream_path, body)
+            .with_endpoint(self.router.cluster_endpoint(&cluster))
             .with_trace(Some(wire_trace(ctx)));
         let outcome = self.sink.cursor(op).await?;
         // A scroll continue's response carries the *next* page's `_scroll_id`;

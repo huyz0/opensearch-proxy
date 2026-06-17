@@ -1,0 +1,144 @@
+use super::*;
+use osproxy_core::{ClusterId, EndpointKind, PrincipalId, RequestId};
+use osproxy_spi::{
+    DocIdRule, HeaderView, HttpMethod, IdTemplate, PartitionKeySpec, PlacementAt, Principal,
+    Protocol, SensitivitySpec,
+};
+
+/// A `SharedIndex` tenancy whose `doc_id_rule` is configurable, to prove the
+/// by-id isolation invariant is enforced regardless of the rule's presence.
+struct SharedTenancy {
+    id_rule: Option<DocIdRule>,
+}
+
+impl TenancySpi for SharedTenancy {
+    fn partition_key(&self) -> PartitionKeySpec {
+        PartitionKeySpec::Header("x-tenant".to_owned())
+    }
+    fn doc_id_rule(&self) -> Option<DocIdRule> {
+        self.id_rule.clone()
+    }
+    fn injected_fields(&self) -> Vec<InjectedField> {
+        vec![InjectedField::new(
+            osproxy_core::FieldName::from("_tenant"),
+            InjectedValue::PartitionId,
+        )]
+    }
+    fn sensitive_fields(&self) -> SensitivitySpec {
+        SensitivitySpec::none()
+    }
+    async fn placement_for(&self, _partition: &PartitionId) -> Result<PlacementAt, SpiError> {
+        Ok(PlacementAt::new(
+            Placement::SharedIndex {
+                cluster: ClusterId::from("c"),
+                index: IndexName::from("shared"),
+                inject: self.injected_fields(),
+            },
+            Epoch::new(1),
+        ))
+    }
+}
+
+async fn resolve_shared(id_rule: Option<DocIdRule>) -> Result<Resolved, SpiError> {
+    let router = TenancyRouter::new(SharedTenancy { id_rule });
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r1");
+    let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Get,
+        EndpointKind::GetById,
+        Protocol::Http1,
+        "shared",
+        HeaderView::new(&headers),
+        b"",
+    );
+    router
+        .resolve_placement(&ctx, PartitionId::from("acme"), "shared")
+        .await
+}
+
+#[tokio::test]
+async fn shared_index_without_an_id_rule_is_rejected() {
+    // No id rule ⇒ by-id paths would use the raw client id, colliding across
+    // tenants. Must fail closed (docs/03 §4), not silently route.
+    let err = resolve_shared(None).await.unwrap_err();
+    assert!(matches!(err, SpiError::IdRuleMissingPartition));
+}
+
+#[tokio::test]
+async fn shared_index_with_a_partition_free_id_rule_is_rejected() {
+    let rule = DocIdRule::new(IdTemplate::new("{body.id}"));
+    let err = resolve_shared(Some(rule)).await.unwrap_err();
+    assert!(matches!(err, SpiError::IdRuleMissingPartition));
+}
+
+#[tokio::test]
+async fn shared_index_with_a_partition_scoped_id_rule_is_accepted() {
+    let rule = DocIdRule::new(IdTemplate::new("{partition}:{body.id}"));
+    let resolved = resolve_shared(Some(rule)).await.expect("accepted");
+    assert!(matches!(
+        resolved.decision.body_transform,
+        BodyTransform::Both { .. }
+    ));
+}
+
+/// A tenancy that derives the partition by running code over an encoded
+/// header (here, splitting `"<tenant>.<sig>"` and taking the claim) rather
+/// than naming a header for the proxy to read verbatim.
+struct EncodedHeaderTenancy;
+
+impl TenancySpi for EncodedHeaderTenancy {
+    fn extract_partition(&self, ctx: &RequestCtx<'_>) -> Option<PartitionId> {
+        let raw = ctx.headers().get("x-tenant-token")?;
+        // Decode: take the claim before the signature separator.
+        let claim = raw.split_once('.').map_or(raw, |(c, _sig)| c);
+        (!claim.is_empty()).then(|| PartitionId::from(claim))
+    }
+    // The declarative source would resolve a *different*, wrong id, proving
+    // the code extractor takes precedence when it returns `Some`.
+    fn partition_key(&self) -> PartitionKeySpec {
+        PartitionKeySpec::Header("x-wrong".to_owned())
+    }
+    fn doc_id_rule(&self) -> Option<DocIdRule> {
+        None
+    }
+    fn injected_fields(&self) -> Vec<InjectedField> {
+        vec![]
+    }
+    fn sensitive_fields(&self) -> SensitivitySpec {
+        SensitivitySpec::none()
+    }
+    async fn placement_for(&self, _partition: &PartitionId) -> Result<PlacementAt, SpiError> {
+        Ok(PlacementAt::new(
+            Placement::DedicatedCluster {
+                cluster: ClusterId::from("c"),
+            },
+            Epoch::new(1),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn a_code_extractor_decodes_the_partition_and_wins_over_the_declarative_source() {
+    let router = TenancyRouter::new(EncodedHeaderTenancy);
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r1");
+    let headers = vec![
+        ("x-tenant-token".to_owned(), "acme.deadbeefsig".to_owned()),
+        ("x-wrong".to_owned(), "intruder".to_owned()),
+    ];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Get,
+        EndpointKind::GetById,
+        Protocol::Http1,
+        "logical",
+        HeaderView::new(&headers),
+        b"",
+    );
+    let partition = router.resolve_partition(&ctx, None).expect("extracted");
+    assert_eq!(partition, PartitionId::from("acme"));
+}

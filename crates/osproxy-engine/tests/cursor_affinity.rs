@@ -123,6 +123,11 @@ impl TenancySpi for StubTenancy {
     fn sensitive_fields(&self) -> SensitivitySpec {
         SensitivitySpec::none()
     }
+    fn cluster_endpoint(&self, cluster: &ClusterId) -> Option<String> {
+        // The affinity path resolves the pinned cluster's endpoint here, since a
+        // bare continue has no placement to carry it.
+        (cluster.as_str() == "eu-1").then(|| "http://eu-1.internal:9200".to_owned())
+    }
     async fn placement_for(&self, _partition: &PartitionId) -> Result<PlacementAt, SpiError> {
         // Resolve every partition to one shared cluster, injecting `_tenant` so the
         // search path applies a real partition filter (isolation). The cursor
@@ -197,6 +202,11 @@ async fn a_continued_scroll_routes_to_its_pinned_cluster_with_the_real_id() {
         op.cluster,
         ClusterId::from("eu-1"),
         "routed to the pinned cluster"
+    );
+    assert_eq!(
+        op.endpoint.as_deref(),
+        Some("http://eu-1.internal:9200"),
+        "the pinned cluster's endpoint was resolved for the affinity continue",
     );
     let forwarded = String::from_utf8(op.body).unwrap();
     assert!(

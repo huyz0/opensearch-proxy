@@ -44,6 +44,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         // one, then route to the PIT's cluster (not the resolved target).
         let body = rewrite_pit_id(search_op.body, &real_pit);
         let op = CursorOp::new(cluster.clone(), ctx.method(), "/_search", body)
+            .with_endpoint(self.router.cluster_endpoint(&cluster))
             .with_trace(Some(wire_trace(ctx)));
         let outcome = self.sink.cursor(op).await?;
         trace.record_dispatch(DispatchInfo {
@@ -81,6 +82,8 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             format!("/{}/_pit", target.index.as_str()),
             ctx.body().to_vec(),
         )
+        // PIT create resolved a placement, so the endpoint rides on its target.
+        .with_endpoint(target.endpoint.clone())
         // Forward `keep_alive` (allow-listed) so the PIT gets the requested TTL.
         .with_query(forwardable_query(ctx.query()))
         .with_trace(Some(wire_trace(ctx)));

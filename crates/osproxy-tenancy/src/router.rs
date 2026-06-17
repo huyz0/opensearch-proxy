@@ -6,7 +6,7 @@
 //! to constants, so downstream stages stay pure). The `SharedIndex`
 //! partition-in-id invariant (`docs/03`) is enforced here.
 
-use osproxy_core::{Epoch, IndexName, PartitionId, Target};
+use osproxy_core::{ClusterId, Epoch, IndexName, PartitionId, Target};
 use osproxy_spi::{
     BodyTransform, InjectedField, InjectedValue, MigrationPhase, Placement, RequestCtx,
     RouteDecision, RoutingSpi, SpiError, TenancySpi,
@@ -90,6 +90,11 @@ impl<T: TenancySpi> TenancyRouter<T> {
         ctx: &RequestCtx<'_>,
         doc: Option<&Value>,
     ) -> Result<PartitionId, SpiError> {
+        // A code-based extractor (e.g. decoding an encoded header) wins over the
+        // declarative sources when it resolves; otherwise fall through to them.
+        if let Some(id) = self.spi.extract_partition(ctx) {
+            return Ok(id);
+        }
         resolve_partition(&self.spi.partition_key(), ctx, doc)
     }
 
@@ -109,7 +114,10 @@ impl<T: TenancySpi> TenancyRouter<T> {
         logical_index: &str,
     ) -> Result<Resolved, SpiError> {
         let at = self.spi.placement_for(&partition).await?;
-        let target = target_for(&at.placement, logical_index);
+        // Carry the cluster's endpoint (from the placement result) onto the
+        // target so the sink can pool it — the tenancy is the source of truth for
+        // where each cluster lives.
+        let target = target_for(&at.placement, logical_index).with_endpoint(at.endpoint.clone());
         let body_transform = self.build_transform(&at.placement, &partition, ctx)?;
         let decision = RouteDecision {
             target,
@@ -220,6 +228,12 @@ pub trait Router: Send + Sync + 'static {
     /// The migration write gate: may a write that resolved at `epoch` for
     /// `partition` still commit? `false` ⇒ reject as a retryable stale-epoch error.
     async fn admit_write(&self, partition: &PartitionId, epoch: Epoch) -> bool;
+
+    /// The base URL of a cluster by id, for the cursor-affinity and admin paths
+    /// that route by cluster without a placement. Default `None`.
+    fn cluster_endpoint(&self, _cluster: &ClusterId) -> Option<String> {
+        None
+    }
 }
 
 impl<T: TenancySpi> Router for TenancyRouter<T> {
@@ -246,6 +260,10 @@ impl<T: TenancySpi> Router for TenancyRouter<T> {
 
     async fn admit_write(&self, partition: &PartitionId, epoch: Epoch) -> bool {
         TenancyRouter::admit_write(self, partition, epoch).await
+    }
+
+    fn cluster_endpoint(&self, cluster: &ClusterId) -> Option<String> {
+        self.spi.cluster_endpoint(cluster)
     }
 }
 
@@ -292,90 +310,5 @@ fn resolve_inject(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use osproxy_core::{ClusterId, EndpointKind, PrincipalId, RequestId};
-    use osproxy_spi::{
-        DocIdRule, HeaderView, HttpMethod, IdTemplate, PartitionKeySpec, PlacementAt, Principal,
-        Protocol, SensitivitySpec,
-    };
-
-    /// A `SharedIndex` tenancy whose `doc_id_rule` is configurable, to prove the
-    /// by-id isolation invariant is enforced regardless of the rule's presence.
-    struct SharedTenancy {
-        id_rule: Option<DocIdRule>,
-    }
-
-    impl TenancySpi for SharedTenancy {
-        fn partition_key(&self) -> PartitionKeySpec {
-            PartitionKeySpec::Header("x-tenant".to_owned())
-        }
-        fn doc_id_rule(&self) -> Option<DocIdRule> {
-            self.id_rule.clone()
-        }
-        fn injected_fields(&self) -> Vec<InjectedField> {
-            vec![InjectedField::new(
-                osproxy_core::FieldName::from("_tenant"),
-                InjectedValue::PartitionId,
-            )]
-        }
-        fn sensitive_fields(&self) -> SensitivitySpec {
-            SensitivitySpec::none()
-        }
-        async fn placement_for(&self, _partition: &PartitionId) -> Result<PlacementAt, SpiError> {
-            Ok(PlacementAt::new(
-                Placement::SharedIndex {
-                    cluster: ClusterId::from("c"),
-                    index: IndexName::from("shared"),
-                    inject: self.injected_fields(),
-                },
-                Epoch::new(1),
-            ))
-        }
-    }
-
-    async fn resolve_shared(id_rule: Option<DocIdRule>) -> Result<Resolved, SpiError> {
-        let router = TenancyRouter::new(SharedTenancy { id_rule });
-        let principal = Principal::new(PrincipalId::from("svc"));
-        let rid = RequestId::from("r1");
-        let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
-        let ctx = RequestCtx::new(
-            &principal,
-            &rid,
-            HttpMethod::Get,
-            EndpointKind::GetById,
-            Protocol::Http1,
-            "shared",
-            HeaderView::new(&headers),
-            b"",
-        );
-        router
-            .resolve_placement(&ctx, PartitionId::from("acme"), "shared")
-            .await
-    }
-
-    #[tokio::test]
-    async fn shared_index_without_an_id_rule_is_rejected() {
-        // No id rule ⇒ by-id paths would use the raw client id, colliding across
-        // tenants. Must fail closed (docs/03 §4), not silently route.
-        let err = resolve_shared(None).await.unwrap_err();
-        assert!(matches!(err, SpiError::IdRuleMissingPartition));
-    }
-
-    #[tokio::test]
-    async fn shared_index_with_a_partition_free_id_rule_is_rejected() {
-        let rule = DocIdRule::new(IdTemplate::new("{body.id}"));
-        let err = resolve_shared(Some(rule)).await.unwrap_err();
-        assert!(matches!(err, SpiError::IdRuleMissingPartition));
-    }
-
-    #[tokio::test]
-    async fn shared_index_with_a_partition_scoped_id_rule_is_accepted() {
-        let rule = DocIdRule::new(IdTemplate::new("{partition}:{body.id}"));
-        let resolved = resolve_shared(Some(rule)).await.expect("accepted");
-        assert!(matches!(
-            resolved.decision.body_transform,
-            BodyTransform::Both { .. }
-        ));
-    }
-}
+#[path = "router_tests.rs"]
+mod tests;

@@ -81,12 +81,9 @@ async fn start_upstream() -> (String, Arc<Mutex<Captured>>) {
 async fn put_doc_is_tenanted_and_forwarded_upstream() {
     let (upstream, captured) = start_upstream().await;
     let cluster = ClusterId::from("default");
-    let mut endpoints = HashMap::new();
-    endpoints.insert(cluster.clone(), upstream);
-
     // The exact wiring the binary builds.
-    let sink = OpenSearchSink::new(endpoints);
-    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
+    let sink = OpenSearchSink::new();
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"), upstream);
     let handler = Arc::new(
         AppHandler::new(
             Pipeline::new(TenancyRouter::new(tenancy), sink),
@@ -184,10 +181,8 @@ async fn assert_metrics_snapshot(
 async fn unresolved_partition_returns_client_error() {
     let (upstream, _captured) = start_upstream().await;
     let cluster = ClusterId::from("default");
-    let mut endpoints = HashMap::new();
-    endpoints.insert(cluster.clone(), upstream);
-    let sink = OpenSearchSink::new(endpoints);
-    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
+    let sink = OpenSearchSink::new();
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"), upstream);
     let handler = Arc::new(
         AppHandler::new(
             Pipeline::new(TenancyRouter::new(tenancy), sink),
@@ -220,10 +215,8 @@ async fn unresolved_partition_returns_client_error() {
 async fn token_auth_rejects_missing_and_accepts_valid() {
     let (upstream, _captured) = start_upstream().await;
     let cluster = ClusterId::from("default");
-    let mut endpoints = HashMap::new();
-    endpoints.insert(cluster.clone(), upstream);
-    let sink = OpenSearchSink::new(endpoints);
-    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
+    let sink = OpenSearchSink::new();
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"), upstream);
 
     let mut tokens = HashMap::new();
     tokens.insert("s3cr3t".to_owned(), "svc-ingest".to_owned());
@@ -280,10 +273,8 @@ async fn a_mutating_request_over_cleartext_is_refused_when_tls_is_required() {
     // directly so the `secure` bit can be set without standing up a TLS listener.
     let (upstream, captured) = start_upstream().await;
     let cluster = ClusterId::from("default");
-    let mut endpoints = HashMap::new();
-    endpoints.insert(cluster.clone(), upstream);
-    let sink = OpenSearchSink::new(endpoints);
-    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
+    let sink = OpenSearchSink::new();
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"), upstream);
     // Default construction enforces NFR-S1 (no opt-out here).
     let handler = AppHandler::new(
         Pipeline::new(TenancyRouter::new(tenancy), sink),
@@ -346,10 +337,8 @@ async fn a_supplied_authorizer_can_decline_an_authenticated_request() {
     // the ingest action: 403 Unauthorized, and the write never reaches upstream.
     let (upstream, captured) = start_upstream().await;
     let cluster = ClusterId::from("default");
-    let mut endpoints = HashMap::new();
-    endpoints.insert(cluster.clone(), upstream);
-    let sink = OpenSearchSink::new(endpoints);
-    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
+    let sink = OpenSearchSink::new();
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"), upstream);
     let handler = AppHandler::new(
         Pipeline::new(TenancyRouter::new(tenancy), sink),
         ReferenceAuthenticator::dev(),
@@ -394,10 +383,8 @@ impl osproxy_server::log::RequestLog for RecordingLog {
 async fn a_handled_request_emits_a_structured_log_carrying_the_trace_id() {
     let (upstream, _captured) = start_upstream().await;
     let cluster = ClusterId::from("default");
-    let mut endpoints = HashMap::new();
-    endpoints.insert(cluster.clone(), upstream);
-    let sink = OpenSearchSink::new(endpoints);
-    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"));
+    let sink = OpenSearchSink::new();
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"), upstream);
 
     let log = RecordingLog::default();
     let handler = Arc::new(

@@ -24,19 +24,54 @@ use crate::ids::{ClusterId, IndexName};
 /// assert_eq!(target.cluster.as_str(), "eu-1");
 /// assert_eq!(target.to_string(), "eu-1/logs-shared");
 /// ```
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Debug)]
 pub struct Target {
     /// The physical OpenSearch cluster the request is sent to.
     pub cluster: ClusterId,
     /// The concrete (physical) index the request operates on.
     pub index: IndexName,
+    /// The cluster's base URL, supplied by the tenancy as part of the placement
+    /// result (the sink builds a pool for it on first use). `None` only in unit
+    /// tests that dispatch to an in-memory sink, which ignores it.
+    ///
+    /// Excluded from identity (equality/hashing/`Display`): the endpoint is a
+    /// function of the cluster, not part of *which* target this is, so two ops
+    /// for the same `cluster`+`index` stay one demux key regardless of it.
+    pub endpoint: Option<String>,
 }
 
 impl Target {
-    /// Constructs a target from a cluster and an index.
+    /// Constructs a target from a cluster and an index (no endpoint).
     #[must_use]
     pub fn new(cluster: ClusterId, index: IndexName) -> Self {
-        Self { cluster, index }
+        Self {
+            cluster,
+            index,
+            endpoint: None,
+        }
+    }
+
+    /// Sets the cluster's base URL (builder style), as resolved from the
+    /// placement result.
+    #[must_use]
+    pub fn with_endpoint(mut self, endpoint: Option<String>) -> Self {
+        self.endpoint = endpoint;
+        self
+    }
+}
+
+// Identity is (cluster, index) only; the endpoint is dispatch metadata derived
+// from the cluster, so it is deliberately excluded.
+impl PartialEq for Target {
+    fn eq(&self, other: &Self) -> bool {
+        self.cluster == other.cluster && self.index == other.index
+    }
+}
+impl Eq for Target {}
+impl std::hash::Hash for Target {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.cluster.hash(state);
+        self.index.hash(state);
     }
 }
 

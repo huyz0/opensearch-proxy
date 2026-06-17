@@ -5,7 +5,6 @@
 
 #![allow(clippy::unwrap_used)]
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use osproxy_core::{ClusterId, EndpointKind, IndexName, ManualClock};
@@ -22,11 +21,15 @@ use osproxy_transport::{IngressHandler, IngressRequest};
 const TOKEN: &str = "admin-secret";
 
 fn sink() -> OpenSearchSink {
-    OpenSearchSink::new(HashMap::<ClusterId, String>::new())
+    OpenSearchSink::new()
 }
 
 fn tenancy() -> ReferenceTenancy {
-    ReferenceTenancy::new(ClusterId::from("c"), IndexName::from("shared"))
+    ReferenceTenancy::new(
+        ClusterId::from("c"),
+        IndexName::from("shared"),
+        "http://unused",
+    )
 }
 
 fn post(body: &str, token: Option<&str>) -> IngressRequest {

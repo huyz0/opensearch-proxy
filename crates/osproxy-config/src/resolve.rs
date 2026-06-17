@@ -168,5 +168,9 @@ fn admin_passthrough(raw: &Raw) -> Option<AdminPassthroughConfig> {
         .filter(|p| !p.is_empty())
         .map(str::to_owned)
         .collect();
-    Some(AdminPassthroughConfig { cluster, prefixes })
+    Some(AdminPassthroughConfig {
+        cluster,
+        prefixes,
+        endpoint: opt(raw, "admin_passthrough_endpoint"),
+    })
 }

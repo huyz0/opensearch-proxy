@@ -135,16 +135,23 @@ pub struct PlacementAt {
     pub epoch: Epoch,
     /// The partition's migration phase at read time.
     pub phase: MigrationPhase,
+    /// The base URL of the placement's cluster. The tenancy is the source of
+    /// truth for where each cluster lives; the sink builds a pool for this URL
+    /// the first time it routes to the cluster. Required to reach a live cluster
+    /// (an in-memory sink ignores it).
+    pub endpoint: Option<String>,
 }
 
 impl PlacementAt {
-    /// Pairs a placement with the epoch it was read at (settled, not migrating).
+    /// Pairs a placement with the epoch it was read at (settled, not migrating,
+    /// no endpoint).
     #[must_use]
     pub fn new(placement: Placement, epoch: Epoch) -> Self {
         Self {
             placement,
             epoch,
             phase: MigrationPhase::Settled,
+            endpoint: None,
         }
     }
 
@@ -152,6 +159,15 @@ impl PlacementAt {
     #[must_use]
     pub fn with_phase(mut self, phase: MigrationPhase) -> Self {
         self.phase = phase;
+        self
+    }
+
+    /// Sets the cluster's base URL (builder style). This is how the tenancy tells
+    /// the proxy where the placement's cluster lives, e.g.
+    /// `.with_endpoint("https://eu-1.internal:9200")`.
+    #[must_use]
+    pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = Some(endpoint.into());
         self
     }
 }

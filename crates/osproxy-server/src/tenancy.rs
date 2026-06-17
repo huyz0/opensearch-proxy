@@ -25,13 +25,20 @@ const TENANT_HEADER: &str = "x-tenant";
 pub struct ReferenceTenancy {
     cluster: ClusterId,
     index: IndexName,
+    endpoint: String,
 }
 
 impl ReferenceTenancy {
-    /// Builds the reference tenancy over one cluster and shared index.
+    /// Builds the reference tenancy over one cluster and shared index, served at
+    /// `endpoint` (the cluster's base URL, reported as part of the placement
+    /// result so the sink can pool it).
     #[must_use]
-    pub fn new(cluster: ClusterId, index: IndexName) -> Self {
-        Self { cluster, index }
+    pub fn new(cluster: ClusterId, index: IndexName, endpoint: impl Into<String>) -> Self {
+        Self {
+            cluster,
+            index,
+            endpoint: endpoint.into(),
+        }
     }
 }
 
@@ -60,6 +67,12 @@ impl TenancySpi for ReferenceTenancy {
         SensitivitySpec::none()
     }
 
+    fn cluster_endpoint(&self, cluster: &ClusterId) -> Option<String> {
+        // The cursor-affinity path routes by cluster id with no placement; resolve
+        // its endpoint here (this reference tenancy has exactly one cluster).
+        (cluster == &self.cluster).then(|| self.endpoint.clone())
+    }
+
     async fn placement_for(&self, _partition: &PartitionId) -> Result<PlacementAt, SpiError> {
         // Every partition resolves to the same shared index. A constant epoch:
         // this reference tenancy has no migration (the epoch story is exercised
@@ -71,6 +84,7 @@ impl TenancySpi for ReferenceTenancy {
                 inject: self.injected_fields(),
             },
             Epoch::new(1),
-        ))
+        )
+        .with_endpoint(self.endpoint.clone()))
     }
 }

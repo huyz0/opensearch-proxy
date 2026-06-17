@@ -16,7 +16,6 @@
 // Splitting into multiple files would duplicate that ~120-line scaffold per
 // file (and spin extra containers); keeping them together is the cohesive unit.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -76,10 +75,8 @@ async fn wait_ready(client: &HttpClient, base: &str) -> bool {
 /// URL.
 async fn spawn_proxy(upstream: String) -> String {
     let cluster = ClusterId::from("default");
-    let mut endpoints = HashMap::new();
-    endpoints.insert(cluster.clone(), upstream);
-    let sink = OpenSearchSink::new(endpoints);
-    let tenancy = ReferenceTenancy::new(cluster, IndexName::from(INDEX));
+    let sink = OpenSearchSink::new();
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from(INDEX), upstream);
     let handler = Arc::new(
         AppHandler::new(
             Pipeline::new(TenancyRouter::new(tenancy), sink),
@@ -101,10 +98,8 @@ async fn spawn_proxy(upstream: String) -> String {
 /// test key), so scroll responses carry a signed `_scroll_id` envelope.
 async fn spawn_proxy_with_affinity(upstream: String) -> String {
     let cluster = ClusterId::from("default");
-    let mut endpoints = HashMap::new();
-    endpoints.insert(cluster.clone(), upstream);
-    let sink = OpenSearchSink::new(endpoints);
-    let tenancy = ReferenceTenancy::new(cluster, IndexName::from(INDEX));
+    let sink = OpenSearchSink::new();
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from(INDEX), upstream);
     let pipeline = Pipeline::new(TenancyRouter::new(tenancy), sink)
         .with_cursor_signer(Arc::new(HmacCursorSigner::new(b"scroll-test-key")));
     let handler = Arc::new(

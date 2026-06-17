@@ -41,10 +41,10 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    // 1. Where writes/reads go: one cluster id → its base URL.
-    let mut endpoints = HashMap::new();
-    endpoints.insert(ClusterId::from("eu-1"), "http://127.0.0.1:9200".to_owned());
-    let sink = OpenSearchSink::new(endpoints);
+    // 1. The sink has no static endpoint catalog. Each cluster's base URL comes
+    //    from your tenancy's placement result (PlacementAt::with_endpoint), and
+    //    the sink builds a pool for it the first time it routes there.
+    let sink = OpenSearchSink::new();
 
     // 2. Your tenancy rules, adapted into the engine's Router.
     let router = TenancyRouter::new(MyTenancy);

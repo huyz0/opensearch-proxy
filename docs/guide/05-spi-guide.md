@@ -72,8 +72,10 @@ impl TenancySpi for MyTenancy {
         SensitivitySpec::new(vec![FieldName::from("ssn")])
     }
 
-    /// Resolve a partition to its current placement and the epoch it was read at.
-    /// NOT pure: migration mutates placement; back it with your control-plane store.
+    /// Resolve a partition to its current placement, the epoch it was read at,
+    /// and the cluster's base URL (the sink pools that endpoint on first use —
+    /// the tenancy is the source of truth for where each cluster lives). NOT
+    /// pure: migration mutates placement; back it with your control-plane store.
     async fn placement_for(&self, partition: &PartitionId) -> Result<PlacementAt, SpiError> {
         Ok(PlacementAt::new(
             Placement::SharedIndex {
@@ -82,7 +84,8 @@ impl TenancySpi for MyTenancy {
                 inject: self.injected_fields(),
             },
             Epoch::ZERO,
-        ))
+        )
+        .with_endpoint("https://eu-1.internal:9200"))
     }
 
     // `admit_write` has a default (always-admit). Override it only if you run live
@@ -101,11 +104,37 @@ impl TenancySpi for MyTenancy {
 
 ### Partition key sources
 
+`partition_key` declares where the partition id lives, for the cases a name can
+express:
+
 | `PartitionKeySpec` | Source |
 |--------------------|--------|
 | `BodyField(JsonPath)` | A field in the request/document body (e.g. `tenant_id`). |
-| `Header(String)` | A request header (e.g. `x-tenant`). |
-| …  | See `osproxy-spi::rules` for the full set. |
+| `Header(String)` | A request header read verbatim (e.g. `x-tenant`). |
+| `PrincipalAttr(String)` | An attribute of the authenticated `Principal`. |
+| `AnyOf(Vec<…>)` | Try each source in order until one resolves. |
+
+### Deriving the partition with code
+
+When the id is not sitting in a header verbatim (a signed token, a base64 blob, a
+claim inside a structured header), override `extract_partition` and decode it
+yourself. It runs **before** `partition_key`, gets the full `RequestCtx` (headers,
+principal, path, query, body), and returns `Some(id)` to use the result or `None`
+to fall through to the declarative sources. The default returns `None`.
+
+```rust
+impl TenancySpi for MyTenancy {
+    fn extract_partition(&self, ctx: &RequestCtx<'_>) -> Option<PartitionId> {
+        let raw = ctx.headers().get("x-tenant-token")?;
+        // Decode/verify your encoded header, then return the claim. The decoded
+        // value is a routing key, never logged (NFR-S2).
+        let claim = decode_and_verify(raw)?;
+        Some(PartitionId::from(claim.tenant.as_str()))
+    }
+    // … partition_key/doc_id_rule/… as above; partition_key can stay as a
+    // fallback for requests the token path does not cover.
+}
+```
 
 ## `Authenticator` (required)
 

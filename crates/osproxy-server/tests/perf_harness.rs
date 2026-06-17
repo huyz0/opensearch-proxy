@@ -100,9 +100,8 @@ async fn wait_ready(client: &HttpClient, base: &str) -> bool {
 /// URL plus a handle to its handler, so the run can read upstream `pool_stats`.
 async fn spawn_proxy(upstream: String) -> (String, Arc<Handler>) {
     let cluster = ClusterId::from(CLUSTER);
-    let endpoints = std::iter::once((cluster.clone(), upstream)).collect();
-    let sink = OpenSearchSink::new(endpoints);
-    let tenancy = ReferenceTenancy::new(cluster, IndexName::from(INDEX));
+    let sink = OpenSearchSink::new();
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from(INDEX), upstream);
     let handler = Arc::new(
         AppHandler::new(
             Pipeline::new(TenancyRouter::new(tenancy), sink),

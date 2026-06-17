@@ -13,7 +13,6 @@
 // breaker eviction, pool reuse) sharing one mock-server harness; splitting it
 // would scatter the shared scaffolding without adding clarity.
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -119,16 +118,16 @@ async fn start_pooled_mock(response: &'static str) -> (String, Arc<AtomicUsize>)
     (format!("http://{addr}"), accepts)
 }
 
-fn sink_for(cluster: &str, base: String) -> OpenSearchSink {
-    let mut endpoints = HashMap::new();
-    endpoints.insert(ClusterId::from(cluster), base);
-    OpenSearchSink::new(endpoints)
+// A target carrying its cluster's endpoint, the way a placement result would.
+fn target(cluster: &str, index: &str, base: &str) -> Target {
+    Target::new(ClusterId::from(cluster), IndexName::from(index))
+        .with_endpoint(Some(base.to_owned()))
 }
 
 #[tokio::test]
 async fn the_trace_context_is_propagated_to_the_upstream() {
     let (base, captured) = start_mock(r#"{"_id":"acme:1","result":"created"}"#).await;
-    let sink = sink_for("eu-1", base);
+    let sink = OpenSearchSink::new();
 
     // A client request arrives carrying an upstream traceparent and tracestate.
     let incoming = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
@@ -138,7 +137,7 @@ async fn the_trace_context_is_propagated_to_the_upstream() {
         &RequestId::from("req-42"),
     );
     let op = WriteOp::new(
-        Target::new(ClusterId::from("eu-1"), IndexName::from("orders-shared")),
+        target("eu-1", "orders-shared", &base),
         DocOp::Index {
             id: Some("acme:1".to_owned()),
             routing: Some("acme".to_owned()),
@@ -176,14 +175,15 @@ async fn cursor_passthrough_forwards_method_path_and_body_to_the_pinned_cluster(
     // The engine has already recovered the cluster + real id from the envelope;
     // the sink forwards the raw op (method, path, body) verbatim to that cluster.
     let (base, captured) = start_mock(r#"{"_scroll_id":"X","hits":{"hits":[]}}"#).await;
-    let sink = sink_for("eu-1", base);
+    let sink = OpenSearchSink::new();
 
     let op = CursorOp::new(
         ClusterId::from("eu-1"),
         HttpMethod::Post,
         "/_search/scroll",
         br#"{"scroll":"1m","scroll_id":"REALID"}"#.to_vec(),
-    );
+    )
+    .with_endpoint(Some(base));
     let outcome = sink.cursor(op).await.unwrap();
 
     let got = captured.lock().unwrap().clone();
@@ -206,8 +206,8 @@ async fn a_passthrough_path_with_a_traversal_segment_is_refused_without_dispatch
     // Defense in depth at the one choke point that concatenates a passthrough
     // path verbatim into the upstream URI: a `..` segment is refused before any
     // request is built, so it can never resolve past an allow-listed prefix.
-    let (base, captured) = start_mock(r"{}").await;
-    let sink = sink_for("eu-1", base);
+    let (_base, captured) = start_mock(r"{}").await;
+    let sink = OpenSearchSink::new();
 
     let op = CursorOp::new(
         ClusterId::from("eu-1"),
@@ -229,10 +229,10 @@ async fn a_search_appends_its_allow_listed_query_to_the_upstream_url() {
     // The engine forwards only `scroll`/`keep_alive`; the sink appends it so a
     // scroll-opening search actually opens a scroll upstream.
     let (base, captured) = start_mock(r#"{"_scroll_id":"X","hits":{"hits":[]}}"#).await;
-    let sink = sink_for("eu-1", base);
+    let sink = OpenSearchSink::new();
 
     let op = SearchOp::new(
-        Target::new(ClusterId::from("eu-1"), IndexName::from("orders-shared")),
+        target("eu-1", "orders-shared", &base),
         br#"{"query":{"match_all":{}}}"#.to_vec(),
     )
     .with_query(Some("scroll=1m".to_owned()));
@@ -249,10 +249,10 @@ async fn a_search_appends_its_allow_listed_query_to_the_upstream_url() {
 #[tokio::test]
 async fn index_with_id_and_routing_is_sent_and_parsed() {
     let (base, captured) = start_mock(r#"{"_id":"acme:1001","result":"created"}"#).await;
-    let sink = sink_for("eu-1", base);
+    let sink = OpenSearchSink::new();
 
     let op = WriteOp::new(
-        Target::new(ClusterId::from("eu-1"), IndexName::from("orders-shared")),
+        target("eu-1", "orders-shared", &base),
         DocOp::Index {
             id: Some("acme:1001".to_owned()),
             routing: Some("acme".to_owned()),
@@ -275,12 +275,12 @@ async fn index_with_id_and_routing_is_sent_and_parsed() {
 #[tokio::test]
 async fn an_http2_op_is_dispatched_over_http2() {
     let (base, captured) = start_mock(r#"{"_id":"acme:1","result":"created"}"#).await;
-    let sink = sink_for("eu-1", base);
+    let sink = OpenSearchSink::new();
 
     // The op's resolved upstream protocol is HTTP/2 — the sink must dispatch it
     // over its h2 client, not the default h1 one (per-request selection).
     let op = WriteOp::new(
-        Target::new(ClusterId::from("eu-1"), IndexName::from("orders")),
+        target("eu-1", "orders", &base),
         DocOp::Index {
             id: Some("acme:1".to_owned()),
             routing: None,
@@ -303,11 +303,11 @@ async fn get_by_id_sends_request_and_returns_the_found_document() {
         r#"{"_index":"orders-shared","_id":"acme:7","found":true,"_source":{"_tenant":"acme","msg":"hi"}}"#,
     )
     .await;
-    let sink = sink_for("eu-1", base);
+    let sink = OpenSearchSink::new();
 
     let outcome = sink
         .get(ReadOp::new(
-            Target::new(ClusterId::from("eu-1"), IndexName::from("orders-shared")),
+            target("eu-1", "orders-shared", &base),
             "acme:7",
             Some("acme".to_owned()),
         ))
@@ -330,14 +330,11 @@ async fn each_cluster_routes_to_its_own_sharded_pool() {
     // cluster's pool (sharded per cluster, docs/01 §7).
     let (base_a, cap_a) = start_mock(r#"{"_id":"a:1","result":"created"}"#).await;
     let (base_b, cap_b) = start_mock(r#"{"_id":"b:1","result":"created"}"#).await;
-    let mut endpoints = HashMap::new();
-    endpoints.insert(ClusterId::from("eu-1"), base_a);
-    endpoints.insert(ClusterId::from("us-1"), base_b);
-    let sink = OpenSearchSink::new(endpoints);
+    let sink = OpenSearchSink::new();
 
-    let op = |cluster: &str| {
+    let op = |cluster: &str, base: &str| {
         WriteOp::new(
-            Target::new(ClusterId::from(cluster), IndexName::from("orders")),
+            target(cluster, "orders", base),
             DocOp::Index {
                 id: Some("1".to_owned()),
                 routing: None,
@@ -346,8 +343,12 @@ async fn each_cluster_routes_to_its_own_sharded_pool() {
             Epoch::new(1),
         )
     };
-    sink.write(WriteBatch::single(op("eu-1"))).await.unwrap();
-    sink.write(WriteBatch::single(op("us-1"))).await.unwrap();
+    sink.write(WriteBatch::single(op("eu-1", &base_a)))
+        .await
+        .unwrap();
+    sink.write(WriteBatch::single(op("us-1", &base_b)))
+        .await
+        .unwrap();
 
     // Each mock saw exactly its cluster's request — no cross-routing.
     assert_eq!(cap_a.lock().unwrap().method, "PUT");
@@ -361,14 +362,11 @@ async fn read_from_unreachable_upstream_is_a_transport_error() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     drop(listener);
-    let sink = sink_for("eu-1", format!("http://{addr}"));
+    let base = format!("http://{addr}");
+    let sink = OpenSearchSink::new();
 
     let err = sink
-        .get(ReadOp::new(
-            Target::new(ClusterId::from("eu-1"), IndexName::from("i")),
-            "x",
-            None,
-        ))
+        .get(ReadOp::new(target("eu-1", "i", &base), "x", None))
         .await
         .unwrap_err();
     assert!(
@@ -388,15 +386,14 @@ async fn a_failing_cluster_is_evicted_then_retried_after_cooldown() {
     drop(listener);
 
     let clock = Arc::new(ManualClock::new());
-    let mut endpoints = HashMap::new();
-    endpoints.insert(ClusterId::from("eu-1"), format!("http://{addr}"));
-    let sink = OpenSearchSink::new(endpoints)
+    let base = format!("http://{addr}");
+    let sink = OpenSearchSink::new()
         .with_clock(clock.clone())
         .with_breaker(2, std::time::Duration::from_secs(5));
 
     let write = || async {
         sink.write(WriteBatch::single(WriteOp::new(
-            Target::new(ClusterId::from("eu-1"), IndexName::from("i")),
+            target("eu-1", "i", &base),
             DocOp::Index {
                 id: Some("x".to_owned()),
                 routing: None,
@@ -450,10 +447,10 @@ async fn a_stuck_upstream_times_out_and_is_retryable() {
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
     });
 
-    let sink = sink_for("eu-1", format!("http://{addr}"))
-        .with_timeout(std::time::Duration::from_millis(50));
+    let base = format!("http://{addr}");
+    let sink = OpenSearchSink::new().with_timeout(std::time::Duration::from_millis(50));
     let op = WriteOp::new(
-        Target::new(ClusterId::from("eu-1"), IndexName::from("i")),
+        target("eu-1", "i", &base),
         DocOp::Index {
             id: Some("x".to_owned()),
             routing: None,
@@ -475,10 +472,11 @@ async fn server_error_surfaces_as_retryable_upstream() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     drop(listener);
-    let sink = sink_for("eu-1", format!("http://{addr}"));
+    let base = format!("http://{addr}");
+    let sink = OpenSearchSink::new();
 
     let op = WriteOp::new(
-        Target::new(ClusterId::from("eu-1"), IndexName::from("i")),
+        target("eu-1", "i", &base),
         DocOp::Index {
             id: Some("x".to_owned()),
             routing: None,
@@ -495,7 +493,7 @@ async fn server_error_surfaces_as_retryable_upstream() {
 
 #[tokio::test]
 async fn unconfigured_cluster_is_a_transport_error() {
-    let sink = sink_for("known", "http://127.0.0.1:1".to_owned());
+    let sink = OpenSearchSink::new();
     let op = WriteOp::new(
         Target::new(ClusterId::from("unknown"), IndexName::from("i")),
         DocOp::Index {
@@ -516,11 +514,11 @@ async fn repeated_writes_reuse_one_pooled_connection() {
     // connection-open counter.
     const WRITES: u64 = 5;
     let (base, accepts) = start_pooled_mock(r#"{"_id":"a:1","result":"created"}"#).await;
-    let sink = sink_for("eu-1", base);
+    let sink = OpenSearchSink::new();
 
     for i in 0..WRITES {
         let op = WriteOp::new(
-            Target::new(ClusterId::from("eu-1"), IndexName::from("orders")),
+            target("eu-1", "orders", &base),
             DocOp::Index {
                 id: Some("1".to_owned()),
                 routing: None,

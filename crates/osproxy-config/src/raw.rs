@@ -32,6 +32,7 @@ pub(crate) const KEYS: &[&str] = &[
     "directive_admin_token",
     "admin_passthrough_cluster",
     "admin_passthrough_prefixes",
+    "admin_passthrough_endpoint",
     "cursor_affinity_key",
 ];
 
