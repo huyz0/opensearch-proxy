@@ -19,7 +19,14 @@ krafka = { version = "0.12", default-features = false }
 # that krafka's `ClientConfig::builder()` resolves. The feature mirrors the
 # krafka provider feature below so exactly one provider is linked.
 rustls = { version = "0.23", default-features = false, features = ["std"] }
-tokio = { workspace = true, features = ["rt"] }
+# `time` backs the retry backoff; `rt` supplies the runtime handle the
+# fire-and-forget produce spawns onto.
+tokio = { workspace = true, features = ["rt", "time"] }
+
+[dev-dependencies]
+# Paused-time async tests for the delivery retry/backoff and saturation logic
+# (`test-util` provides `#[tokio::test(start_paused = true)]`).
+tokio = { workspace = true, features = ["rt", "time", "macros", "test-util"] }
 
 [features]
 # One client, both targets: the rustls crypto provider is chosen at build time,
