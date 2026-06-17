@@ -1,0 +1,15 @@
+[package]
+name = "osproxy-kafka-rdkafka"
+description = "librdkafka-backed Producer for osproxy-kafka. A standalone, workspace-excluded crate (links a heavy native library); build it only on a host with the required system toolchain."
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.94"
+license = "Apache-2.0"
+authors = ["Huy Nguyen"]
+repository = "https://github.com/huyz0/opensearch-proxy"
+
+[dependencies]
+osproxy-kafka = { path = "../osproxy-kafka" }
+# Builds librdkafka from source via cmake. Requires the system toolchain listed
+# in this crate's README (cmake, a C compiler, and curl/openssl dev headers).
+rdkafka = { version = "0.36", default-features = false, features = ["cmake-build"] }

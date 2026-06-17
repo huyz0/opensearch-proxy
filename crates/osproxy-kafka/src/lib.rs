@@ -8,7 +8,10 @@
 //! **No broker dependency lives here.** This crate provides the envelope, the
 //! `Producer` seam, and an in-memory producer; the Kafka (or other) client
 //! composes in as your own `Producer` impl, so the heavy native client is never
-//! forced into the build. A Kafka binding is a few lines over `rdkafka`:
+//! forced into the build. A ready-made librdkafka binding lives in the
+//! workspace-excluded `osproxy-kafka-rdkafka` crate (build it on its own, on a
+//! host with the documented system libraries). Rolling your own is a few lines
+//! over `rdkafka`:
 //!
 //! ```ignore
 //! use osproxy_kafka::{ProduceError, Producer};

@@ -62,6 +62,7 @@ flowchart TB
 | **osproxy-otlp** | `OtlpHttpExporter`, which POSTs encoded spans to an OTLP collector, fire-and-forget hardened. | observe, core |
 | **osproxy-capture** | The `Capture` seam for tenant-agnostic, full-fidelity traffic capture (`CaptureRecord`, `NoCapture`, the `RedactingCapture` decorator, `MemoryCapture`). A low leaf with no broker dependency, so an external recorder can implement it. | spi |
 | **osproxy-kafka** | Queue-backed capture: the `CaptureEnvelope` replay format, a `Producer` seam, `KafkaCapture`, and an in-memory producer. The actual Kafka client composes in as a `Producer` impl, so no broker dependency lives in the tree. | capture |
+| **osproxy-kafka-rdkafka** | A ready-made librdkafka `Producer` binding. **Not a workspace member** (root `Cargo.toml` `exclude`): it links a heavy native library, so the gate/CI never build it. Build it on its own on a host with cmake + curl/OpenSSL dev headers. | kafka (path) |
 | **osproxy-config** | Typed config load/validate (file → env → flags), all defaults applied once. No business logic. | core |
 | **osproxy-server** | The `osproxy` binary: `main`, signal handling, graceful drain, and the **reference wiring** of every crate. Also home to the reference `TenancySpi`, `Authenticator`, and the HTTP handler (`AppHandler`). | everything above |
 | **osproxy-bench** | The pure NFR-P harness: latency percentiles, proxy-vs-baseline profiles, scalability curve, footprint. Emits the JSON an LLM judge consumes. | core (test-only) |

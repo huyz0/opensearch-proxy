@@ -18,6 +18,13 @@ members = [
     "crates/osproxy-bench",
     "xtask",
 ]
+# The rdkafka binding is a standalone crate, deliberately NOT a workspace member:
+# it links librdkafka (a heavy native build), so the gate, cargo-deny, fmt, and
+# the arch check never touch it. Build it on its own with `cargo build` from its
+# directory, on a host with the documented system libraries.
+exclude = [
+    "crates/osproxy-kafka-rdkafka",
+]
 
 [workspace.package]
 version = "0.0.0"
