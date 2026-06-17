@@ -44,25 +44,22 @@ pub(crate) async fn attach<A: Authenticator>(
     // With a WAL directory, deliver durably (at-least-once, survives restart): the
     // disk buffer owns retry, so the in-memory delivery wrapper is bypassed.
     // Otherwise, bounded in-memory best-effort.
-    let capture = match &cap.wal_dir {
-        Some(dir) => {
-            let wal = WalConfig {
-                max_bytes: cap.wal_max_bytes,
-                base_backoff: Duration::from_millis(cap.backoff_ms),
-                ..WalConfig::default()
-            };
-            let durable = DurableProducer::spawn(dir, krafka, wal)
-                .map_err(|e| format!("opening capture WAL at {dir}: {e}"))?;
-            wrap_capture(durable, cap)
-        }
-        None => {
-            let delivery = DeliveryConfig {
-                max_inflight: cap.max_inflight,
-                max_attempts: cap.max_attempts,
-                base_backoff: Duration::from_millis(cap.backoff_ms),
-            };
-            wrap_capture(krafka.with_delivery(delivery), cap)
-        }
+    let capture = if let Some(dir) = &cap.wal_dir {
+        let wal = WalConfig {
+            max_bytes: cap.wal_max_bytes,
+            base_backoff: Duration::from_millis(cap.backoff_ms),
+            ..WalConfig::default()
+        };
+        let durable = DurableProducer::spawn(dir, krafka, wal)
+            .map_err(|e| format!("opening capture WAL at {dir}: {e}"))?;
+        wrap_capture(durable, cap)
+    } else {
+        let delivery = DeliveryConfig {
+            max_inflight: cap.max_inflight,
+            max_attempts: cap.max_attempts,
+            base_backoff: Duration::from_millis(cap.backoff_ms),
+        };
+        wrap_capture(krafka.with_delivery(delivery), cap)
     };
     println!(
         "osproxy capture: on (kafka topic={}, brokers={}, tls={}, redact={}, durable={})",
