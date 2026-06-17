@@ -44,9 +44,15 @@ osproxy-kafka = { workspace = true, optional = true }
 osproxy-kafka-krafka = { workspace = true, optional = true }
 osproxy-kafka-wal = { workspace = true, optional = true }
 serde_json.workspace = true
+prost.workspace = true
+ciborium.workspace = true
 ring = { workspace = true, optional = true }
 aws-lc-rs = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal"] }
+
+[build-dependencies]
+# Compiles the async fan-out op-envelope `.proto` (messages only, no service).
+tonic-prost-build.workspace = true
 
 [dev-dependencies]
 hyper = { workspace = true, features = ["server", "client", "http1"] }

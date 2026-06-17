@@ -12,6 +12,7 @@ use osproxy_sink::{CursorOp, Reader, Sink, WriteAck, WriteBatch};
 use osproxy_spi::RequestCtx;
 use osproxy_tenancy::{Resolved, Router};
 
+use crate::asyncwrite::WriteMode;
 use crate::cursor::{
     cursor_request, forwardable_query, has_scroll_id, pit_id_in_body, rewrite_cursor_body,
     wrap_scroll_id_in_response,
@@ -39,6 +40,10 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
 
         let batch = build_write_batch(&resolved, ctx.body())?;
         trace.record_rewrite(rewrite_info(&resolved, &batch));
+
+        if self.write_mode(ctx) == WriteMode::Async {
+            return Ok(self.enqueue_async(ctx, &resolved, batch).await);
+        }
 
         self.gate_write(&resolved).await?;
         let ack = self
@@ -159,6 +164,11 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             reason: "delete-by-id reached the engine without a document id",
         })?;
         let op = build_delete_op(&resolved, logical_id)?;
+
+        if self.write_mode(ctx) == WriteMode::Async {
+            let batch = WriteBatch::single(op);
+            return Ok(self.enqueue_async(ctx, &resolved, batch).await);
+        }
 
         self.gate_write(&resolved).await?;
         let ack = self

@@ -114,6 +114,9 @@ tonic = { version = "0.14", default-features = false, features = ["server", "rou
 tonic-prost = "0.14"
 prost = "0.14"
 tonic-prost-build = "0.14"
+# CBOR (RFC 8949) for the async fan-out op-envelope body: a compact, portable
+# binary encoding OpenSearch ingests natively (docs/04 §9, ADR-010).
+ciborium = "0.2"
 tokio-stream = { version = "0.1", default-features = false, features = ["net"] }
 # Live integration tests against a real OpenSearch container (the M1 exit gate).
 # Requires a running Docker daemon; the tests are #[ignore]'d so CI without

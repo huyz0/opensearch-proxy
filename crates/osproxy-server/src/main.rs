@@ -32,6 +32,11 @@ use osproxy_transport::{DefaultCryptoProvider, IngressHandler};
 use tokio::net::TcpListener;
 
 mod capture;
+// Async fan-out write queue (docs/04 §9). The Kafka queue + envelope encoder
+// compile under `capture-kafka` (and in the test lane, so the wire contract is
+// verified without a broker); `fanout::attach` is always present and binds the
+// queue into the pipeline from config.
+mod fanout;
 
 /// Entry point. Returns a process exit code rather than panicking, consistent
 /// with the no-panic reliability requirement (NFR-R1).
@@ -65,6 +70,9 @@ async fn run() -> Result<(), String> {
     // The fleet directive store the pipeline reads and the admin endpoint writes.
     let directive_store = Arc::new(InMemoryDirectiveStore::new());
     let pipeline = assemble_pipeline(tenancy, sink, directive_store.clone(), &cfg);
+    // Bind the async fan-out write queue (docs/04 §9) when configured; without the
+    // `capture-kafka` feature a configured fan-out is a loud startup error.
+    let pipeline = fanout::attach(pipeline, &cfg).await?;
 
     let tokens: HashMap<String, String> = cfg.tokens.iter().cloned().collect();
     let auth_mode = if tokens.is_empty() {

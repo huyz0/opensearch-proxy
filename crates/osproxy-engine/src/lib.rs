@@ -15,6 +15,7 @@
 #![deny(missing_docs)]
 
 mod admin;
+mod asyncwrite;
 mod bulk;
 mod bulkprep;
 mod cursor;
@@ -31,6 +32,10 @@ mod read;
 mod retry;
 
 pub use admin::AdminPolicy;
+pub use asyncwrite::{
+    op_id_for, unsupported_async, valid_op_id, NoQueue, QueueError, QueuedWrite, WriteMode,
+    WriteQueue,
+};
 pub use error::RequestError;
 pub use passthrough::PassthroughPolicy;
 pub use pipeline::{Pipeline, PipelineResponse};

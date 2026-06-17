@@ -108,6 +108,30 @@ the envelope carries. Durability is group-commit: a hard power loss can lose the
 last sub-second of appended-but-undelivered records; a graceful restart loses
 nothing.
 
+### Async fan-out write mode (Kafka)
+
+Async fan-out durably enqueues resolved write ops to a Kafka topic and returns
+`202`+`op_id` instead of forwarding the write synchronously; a downstream applier
+fans the topic out to one or more OpenSearch destinations (see
+[request pipeline §9](../04-request-pipeline.md#9-asynchronous-fan-out-write-mode)
+and [async clients](09-async-clients.md)). Like capture, these keys need a binary
+built with the `capture-kafka` feature; setting them without it is a loud startup
+error. Independent of capture — a proxy can run either, both, or neither.
+
+| Key (`OSPROXY_…`) | Default | Description |
+|-------------------|---------|-------------|
+| `fanout_kafka_brokers` | *(unset → off)* | Comma-separated Kafka bootstrap brokers (`host:port`). Both-or-neither with `fanout_topic`. |
+| `fanout_topic` | *(unset)* | The topic each op envelope is produced to (keyed by partition for per-partition ordering). |
+| `fanout_async_default` | `false` | The deployment-default write mode. `false` = sync unless a request sends `X-Write-Mode: async`; `true` = async unless a request sends `X-Write-Mode: sync`. |
+| `fanout_body_encoding` | `cbor` | Document body encoding in the envelope: `cbor` (compact binary, OpenSearch-native) or `json` (human-readable, for debugging the queue). The protobuf metadata wrapper is unaffected. |
+| `fanout_kafka_ca` | *(unset → plaintext)* | CA PEM the broker certificate must chain to. Present ⇒ TLS with that CA pinned; absent ⇒ plaintext broker connection. |
+| `fanout_kafka_client_cert` | *(unset)* | Client certificate chain PEM for broker mTLS. Both-or-neither with `fanout_kafka_client_key`, and requires `fanout_kafka_ca`. |
+| `fanout_kafka_client_key` | *(unset)* | Client private key PEM for broker mTLS. |
+
+The producer is **broker-acknowledged**: the `202` is returned only once the op
+is acked, never fire-and-forget. The proxy hosts no status surface — whether and
+how a failed apply is reported is the downstream applier's responsibility.
+
 ## Worked examples
 
 ### Local development (cleartext, open auth, full debug)

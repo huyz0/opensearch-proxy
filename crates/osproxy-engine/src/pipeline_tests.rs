@@ -173,3 +173,6 @@ async fn explain_records_failure_with_remediation() {
     assert_eq!(doc["error"]["code"], "unsupported_endpoint");
     assert!(doc["error"]["remediation"].is_string());
 }
+
+#[path = "pipeline_async_tests.rs"]
+mod async_mode;

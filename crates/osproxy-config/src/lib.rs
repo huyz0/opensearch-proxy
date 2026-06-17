@@ -66,6 +66,39 @@ pub struct Config {
     /// capture/migration proxy). Independent of the sink: it only decides *when*
     /// to capture; the sink still needs the `capture-kafka` feature + config.
     pub capture_default: bool,
+    /// Async fan-out write queue (`docs/04` §9), or `None` (off). Requires the
+    /// `capture-kafka` feature; a configured fan-out on a binary without it is a
+    /// loud startup error rather than a silent no-op.
+    pub fanout: Option<FanoutConfig>,
+}
+
+/// Async fan-out write queue settings: where resolved write ops are enqueued for
+/// a downstream applier (`docs/04` §9, ADR-010). Plain data (no broker types), so
+/// the config crate stays free of any Kafka client.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FanoutConfig {
+    /// The Kafka bootstrap brokers (`host:port`), at least one.
+    pub brokers: Vec<String>,
+    /// The topic each op envelope is produced to.
+    pub topic: String,
+    /// TLS to the brokers, or `None` for a plaintext broker connection.
+    pub tls: Option<CaptureTlsConfig>,
+    /// How the document body is encoded in the envelope (default CBOR).
+    pub body_encoding: FanoutBodyEncoding,
+    /// Whether async is the deployment-default write mode (default `false`):
+    /// `false` = sync unless a request sends `X-Write-Mode: async`; `true` =
+    /// async unless a request sends `X-Write-Mode: sync`.
+    pub async_default: bool,
+}
+
+/// The on-the-wire encoding of the fan-out op-envelope document body.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FanoutBodyEncoding {
+    /// CBOR (RFC 8949): compact binary, OpenSearch-native. The default.
+    #[default]
+    Cbor,
+    /// Verbatim JSON: human-readable for debugging the queue.
+    Json,
 }
 
 /// Full-fidelity traffic capture settings: where to send the captured exchange

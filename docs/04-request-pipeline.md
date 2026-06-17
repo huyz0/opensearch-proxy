@@ -110,3 +110,89 @@ single placement. `_mget` demuxes like bulk (per-doc) and re-interleaves.
 Each stage attaches typed span attributes (shape/ids/names only) to the request
 trace. The decision chain is accumulated stage-by-stage so a failure at any
 stage carries the full upstream context. See [05](05-observability.md).
+
+## 9. Asynchronous fan-out write mode
+
+A mutation can be dispatched in one of two modes:
+
+- **Sync** (the default): forward to the upstream and return its real result —
+  the path described in §2, §3, §5.
+- **Async**: durably enqueue the fully-resolved, epoch-stamped op onto a
+  `WriteQueue` and return `202 Accepted` with an `op_id`. A separate downstream
+  component consumes the queue and applies each op to one or more destinations
+  (fan-out). The proxy's only promise is **durable acceptance into the
+  pipeline** — never application, ordering across destinations, or a per-doc
+  result.
+
+### Mode negotiation
+
+| Source | Effect |
+| --- | --- |
+| `with_baseline_write_mode(..)` | The deployment default (config). `Sync` unless set. |
+| `X-Write-Mode: sync\|async` header | Per-request override of the baseline. Unknown value → baseline (not an error). |
+
+Async is therefore opt-in twice over: a deployment stays fully sync unless an
+operator sets the baseline or a client sends the header.
+
+### The async contract (single-doc / bulk / delete-by-id)
+
+1. Resolve + transform exactly as sync (same partition routing, same
+   epoch-stamped op) — async changes *delivery*, not *correctness*.
+2. If no queue is wired, refuse with **`422`** (`status:"rejected"`). An async
+   request is **never accepted-and-dropped**.
+3. Enqueue. Return **`202`** only **after** the queue acknowledges durable
+   acceptance (WAL/broker ack). A queue refusal is reported as **`503`** (the
+   same `op_id` makes a retry idempotent downstream).
+4. No live epoch gate runs: the op carries its epoch and the downstream applier
+   owns staleness — there is no synchronous upstream to hold.
+
+The `202` body is a generic async envelope, **not** a synthetic OpenSearch
+result:
+
+```json
+{ "op_id": "client-key-1", "status": "accepted", "result": "queued", "_index": "orders" }
+```
+
+### `op_id` — correlation + idempotency
+
+- Client-supplied via the **`X-Op-Id`** header when present and valid
+  (non-empty, ≤128 bytes, charset `A-Za-z0-9-_.:`); otherwise the proxy mints
+  one from the request id. Always present, always echoed in the `202`.
+- It is the **idempotency key** the downstream applier dedups on (delivery is
+  at-least-once), and the handle a client uses to correlate any
+  downstream-emitted outcome.
+- Bulk granularity (per-item ids vs. `batch_id` + line index) is owned by the
+  bulk demux; the header alone addresses single-doc/delete.
+
+### Queue wire format (op envelope)
+
+Each enqueued op is a **protobuf `OpEnvelope`** (`osproxy.fanout.v1`): typed
+metadata (`op_id`, `partition`, `cluster`, `index`, `epoch`, `op_type`, `id`,
+`routing`) plus a `content_type` and an opaque `body`. The downstream applier
+reads the metadata and forwards `body` to OpenSearch verbatim with that
+`Content-Type` — it never parses the document, so the document shape never enters
+the contract.
+
+- **Body encoding**: **CBOR** (RFC 8949) by default — compact binary, ingested
+  natively by OpenSearch — with JSON selectable for debuggability. Single-doc and
+  delete use this; **bulk stays JSON** for now (binary NDJSON framing is more
+  involved).
+- **Key**: the Kafka record is keyed by `partition`, so all ops for one logical
+  partition keep their order within a partition through the fan-out.
+- **Durability**: the producer is broker-acknowledged — the `202` is returned
+  only after the op is acked, never fire-and-forget.
+
+### What async does *not* cover
+
+- **Optimistic concurrency** (`if_seq_no`/`if_primary_term`, `version`),
+  **scripted/partial `_update`**, and **`_update_by_query`** cannot be honored
+  async and are rejected (`400`) — they need read-modify-write against current
+  state the proxy cannot evaluate at enqueue time.
+- **`_delete_by_query`** is reject-by-default; an opt-in expansion mode (proxy
+  runs the query against the read source, caps the match set, enqueues a
+  concrete delete per match) is future work.
+- **No status surface on the proxy.** Whether and how a failed apply is reported
+  back is the downstream's responsibility (an outcome topic, an alert, a
+  reconciler) — out of scope here. See [client handling](guide/09-async-clients.md).
+- **Read-after-write is not guaranteed**: a `202`'d doc is not queryable until
+  the downstream applies it; reads still hit the upstream synchronously.

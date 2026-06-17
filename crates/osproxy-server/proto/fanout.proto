@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+// The async fan-out op envelope (docs/04 §9, ADR-010). One resolved, durable
+// mutation the proxy enqueues for a downstream applier to fan out to one or more
+// OpenSearch destinations.
+//
+// The wrapper is typed; the document `body` is opaque bytes in `content_type`
+// (CBOR by default, JSON when configured) — OpenSearch ingests both natively, so
+// the applier forwards the body verbatim with that Content-Type and never parses
+// the document. The document shape therefore never enters this contract.
+package osproxy.fanout.v1;
+
+// The kind of document operation, matching the proxy's resolved `DocOp`.
+enum OpType {
+  OP_TYPE_UNSPECIFIED = 0;
+  OP_TYPE_INDEX = 1;   // create-or-replace (_doc)
+  OP_TYPE_CREATE = 2;  // fail-if-exists (_create)
+  OP_TYPE_UPDATE = 3;  // partial/scripted (_update)
+  OP_TYPE_DELETE = 4;  // delete by id
+}
+
+message OpEnvelope {
+  // Correlation handle and downstream idempotency key (the proxy/client op id).
+  string op_id = 1;
+  // Logical partition; also the queue partition key, so per-doc order is kept.
+  string partition = 2;
+  // Target physical cluster id.
+  string cluster = 3;
+  // Target physical index.
+  string index = 4;
+  // The placement epoch the op was resolved against (staleness is the applier's).
+  uint64 epoch = 5;
+  OpType op_type = 6;
+  // Constructed document id; empty means auto-assign (POST semantics).
+  string id = 7;
+  // _routing value; empty means none.
+  string routing = 8;
+  // Media type of `body` (e.g. "application/cbor", "application/json"). Empty
+  // for OP_TYPE_DELETE, which carries no body.
+  string content_type = 9;
+  // The transformed document in `content_type` encoding. Empty for a delete.
+  bytes body = 10;
+}

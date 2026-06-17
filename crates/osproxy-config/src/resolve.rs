@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use crate::raw::Raw;
 use crate::{
     AdminPassthroughConfig, CaptureConfig, CaptureTlsConfig, Config, ConfigError, DiagBaseline,
-    ObservabilityConfig, TlsConfig,
+    FanoutBodyEncoding, FanoutConfig, ObservabilityConfig, TlsConfig,
 };
 
 /// The default admin pass-through allow-list when a cluster is configured but no
@@ -32,7 +32,97 @@ pub(crate) fn resolve(raw: &Raw) -> Result<Config, ConfigError> {
         passthrough: passthrough(raw)?,
         capture: capture(raw)?,
         capture_default: bool_or(raw, "capture_default", false)?,
+        fanout: fanout(raw)?,
     })
+}
+
+/// Async fan-out queue: requires both the brokers and the topic, or neither.
+fn fanout(raw: &Raw) -> Result<Option<FanoutConfig>, ConfigError> {
+    match (opt(raw, "fanout_kafka_brokers"), opt(raw, "fanout_topic")) {
+        (None, None) => {
+            if raw.get("fanout_kafka_ca").is_some() {
+                return Err(ConfigError::invalid(
+                    "fanout_kafka_ca",
+                    "set fanout_kafka_brokers and fanout_topic to enable fan-out",
+                ));
+            }
+            Ok(None)
+        }
+        (Some(brokers), Some(topic)) => {
+            let brokers: Vec<String> = brokers
+                .split(',')
+                .map(str::trim)
+                .filter(|b| !b.is_empty())
+                .map(str::to_owned)
+                .collect();
+            if brokers.is_empty() {
+                return Err(ConfigError::invalid(
+                    "fanout_kafka_brokers",
+                    "expected at least one `host:port` broker",
+                ));
+            }
+            Ok(Some(FanoutConfig {
+                brokers,
+                topic,
+                tls: fanout_tls(raw)?,
+                body_encoding: fanout_body_encoding(raw)?,
+                async_default: bool_or(raw, "fanout_async_default", false)?,
+            }))
+        }
+        _ => Err(ConfigError::invalid(
+            "fanout_kafka_brokers",
+            "set both fanout_kafka_brokers and fanout_topic, or neither",
+        )),
+    }
+}
+
+/// The fan-out body encoding: `cbor` (default) or `json`.
+fn fanout_body_encoding(raw: &Raw) -> Result<FanoutBodyEncoding, ConfigError> {
+    match raw.get("fanout_body_encoding").map(str::trim) {
+        None => Ok(FanoutBodyEncoding::default()),
+        Some(v) if v.eq_ignore_ascii_case("cbor") => Ok(FanoutBodyEncoding::Cbor),
+        Some(v) if v.eq_ignore_ascii_case("json") => Ok(FanoutBodyEncoding::Json),
+        Some(_) => Err(ConfigError::invalid(
+            "fanout_body_encoding",
+            "expected `cbor` or `json`",
+        )),
+    }
+}
+
+/// Fan-out broker TLS: enabled by a pinned CA; a client cert/key pair (both or
+/// neither) adds mTLS and requires the CA. Mirrors capture broker TLS.
+fn fanout_tls(raw: &Raw) -> Result<Option<CaptureTlsConfig>, ConfigError> {
+    let client = match (
+        opt(raw, "fanout_kafka_client_cert"),
+        opt(raw, "fanout_kafka_client_key"),
+    ) {
+        (None, None) => None,
+        (Some(cert), Some(key)) => Some((cert, key)),
+        _ => {
+            return Err(ConfigError::invalid(
+                "fanout_kafka_client_cert",
+                "set both fanout_kafka_client_cert and fanout_kafka_client_key, or neither",
+            ))
+        }
+    };
+    let Some(ca_path) = opt(raw, "fanout_kafka_ca") else {
+        if client.is_some() {
+            return Err(ConfigError::invalid(
+                "fanout_kafka_ca",
+                "client-cert mTLS to the brokers requires fanout_kafka_ca",
+            ));
+        }
+        return Ok(None);
+    };
+    let (client_cert_path, client_key_path) = match client {
+        Some((cert, key)) => (Some(cert), Some(key)),
+        None => (None, None),
+    };
+    Ok(Some(CaptureTlsConfig {
+        ca_path,
+        client_cert_path,
+        client_key_path,
+    }))
 }
 
 /// Parses a required-positive `u64` setting, falling back to `default` when unset.

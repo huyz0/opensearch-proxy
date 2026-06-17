@@ -16,3 +16,4 @@ intent can be re-derived, not guessed (docs/10 §5).
 | [007](007-static-spi.md) | SPI compiled in statically; no WASM/dylib dynamic plugins |
 | [008](008-sink-trait-deferred-redundancy.md) | Write `Sink` trait; queue-based redundancy deferred behind it |
 | [009](009-m1-tls-ring-provider.md) | M1 TLS uses the `ring` provider; aws-lc-rs/FIPS at M6 behind the seam |
+| [010](010-async-fanout-write-mode.md) | Async fan-out write mode: same endpoints, `202`/`op_id`, refuse-don't-lie, no proxy status surface |

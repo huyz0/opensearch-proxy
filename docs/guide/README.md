@@ -20,6 +20,7 @@ If you are new, read [Overview](01-overview.md), then go straight to
 | 6 | [Wiring It Together](06-wiring-example.md) | A full program assembling a working proxy. |
 | 7 | [Configuration](07-configuration.md) | Every setting, its env var, default, and meaning. |
 | 8 | [Observability & Control Plane](08-observability.md) | Tracing, `/debug/explain`, break-glass, runtime directives, OTLP, metrics, and the LLM debugging model. |
+| 9 | [Async Fan-out Clients](09-async-clients.md) | The `202`/`op_id` async write mode, mode negotiation, and how an OpenSearch client (e.g. Java) handles it. |
 
 ## At a glance
 

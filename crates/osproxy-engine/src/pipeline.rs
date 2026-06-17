@@ -90,6 +90,14 @@ pub struct Pipeline<R, S> {
     /// every request is forwarded verbatim to this cluster with no rewrite; the
     /// router is unused. This is the transparent/capture-proxy mode.
     pub(crate) passthrough: Option<crate::passthrough::PassthroughPolicy>,
+    /// The write mode applied when a request does not select one with the
+    /// `X-Write-Mode` header. Default [`crate::WriteMode::Sync`] — async fan-out is
+    /// opt-in (`docs/04` §9).
+    pub(crate) baseline_write_mode: crate::asyncwrite::WriteMode,
+    /// The durable queue async writes are enqueued onto. Default
+    /// [`crate::asyncwrite::NoQueue`]: async requests are refused (`422`) until a
+    /// real queue is wired in.
+    pub(crate) write_queue: Arc<dyn crate::asyncwrite::WriteQueue>,
 }
 
 /// The diagnostics decision for one request: how much to record/export, whether
@@ -136,7 +144,37 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             cursor_signer: None,
             admin_policy: None,
             passthrough: None,
+            baseline_write_mode: crate::asyncwrite::WriteMode::Sync,
+            write_queue: Arc::new(crate::asyncwrite::NoQueue),
         }
+    }
+
+    /// Sets the baseline write mode applied when a request does not carry an
+    /// `X-Write-Mode` header (builder style). Default [`crate::WriteMode::Sync`]; set
+    /// [`crate::WriteMode::Async`] to make durable fan-out the deployment default
+    /// (`docs/04` §9).
+    #[must_use]
+    pub fn with_baseline_write_mode(mut self, mode: crate::asyncwrite::WriteMode) -> Self {
+        self.baseline_write_mode = mode;
+        self
+    }
+
+    /// Sets the durable queue async writes are enqueued onto (builder style).
+    /// Without it, async requests are refused with `422` rather than dropped.
+    #[must_use]
+    pub fn with_write_queue(mut self, queue: Arc<dyn crate::asyncwrite::WriteQueue>) -> Self {
+        self.write_queue = queue;
+        self
+    }
+
+    /// The write mode for `ctx`: the validated `X-Write-Mode` header if present,
+    /// else the deployment baseline. An unparseable header falls back to the
+    /// baseline rather than erroring — an unknown mode is not a hard failure.
+    pub(crate) fn write_mode(&self, ctx: &RequestCtx<'_>) -> crate::asyncwrite::WriteMode {
+        ctx.headers()
+            .get("x-write-mode")
+            .and_then(crate::asyncwrite::WriteMode::parse)
+            .unwrap_or(self.baseline_write_mode)
     }
 
     /// Enables tenant-agnostic passthrough: every request is forwarded verbatim to

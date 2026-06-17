@@ -48,6 +48,13 @@ pub(crate) const KEYS: &[&str] = &[
     "capture_backoff_ms",
     "capture_wal_dir",
     "capture_wal_max_bytes",
+    "fanout_kafka_brokers",
+    "fanout_topic",
+    "fanout_kafka_ca",
+    "fanout_kafka_client_cert",
+    "fanout_kafka_client_key",
+    "fanout_body_encoding",
+    "fanout_async_default",
 ];
 
 /// The environment variable name for a canonical key: `OSPROXY_` + the
