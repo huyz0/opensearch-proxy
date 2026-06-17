@@ -32,6 +32,7 @@ fn directive(
         sample_per_mille,
         expires_at: clock.now(),
         ring_buffer: false,
+        capture: false,
     }
 }
 

@@ -367,8 +367,10 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         .with_path(&req.path);
 
         // Echo the request id so a client (or LLM) can fetch its
-        // /debug/explain/{id} afterward.
-        let (response, ok) = match self.pipeline.handle(&ctx).await {
+        // /debug/explain/{id} afterward. `should_capture` is the live per-request
+        // capture decision, applied to both success and error responses.
+        let (result, should_capture) = self.pipeline.handle_with_capture(&ctx).await;
+        let (response, ok) = match result {
             Ok(resp) => {
                 let ok = (200..300).contains(&resp.status);
                 (IngressResponse::json(resp.status, resp.body), ok)
@@ -378,7 +380,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
                 false,
             ),
         };
-        self.after_response(&req, &response, &request_id, ok);
+        self.after_response(&req, &response, &request_id, ok, should_capture);
         response.with_header("x-request-id", request_id.as_str())
     }
 }
@@ -392,6 +394,7 @@ impl<A, Z> AppHandler<A, Z> {
         response: &IngressResponse,
         request_id: &RequestId,
         ok: bool,
+        should_capture: bool,
     ) {
         self.metrics.record(ok);
         // The structured log is the shape-only explain document, which carries the
@@ -401,10 +404,12 @@ impl<A, Z> AppHandler<A, Z> {
                 self.request_log.emit(&record);
             }
         }
-        self.tee_capture(req, response, request_id);
+        self.tee_capture(req, response, request_id, should_capture);
     }
 
-    /// Full-fidelity capture (opt-in): tee the raw exchange for replay/audit. The
+    /// Full-fidelity capture: tee the raw exchange for replay/audit when a capture
+    /// sink is wired *and* `should_capture` (the live directive decision) selected
+    /// this request — so capture is on demand, not whenever a sink exists. The
     /// original request headers pass through; redaction (e.g. dropping
     /// `Authorization`) is composed via `RedactingCapture`.
     fn tee_capture(
@@ -412,8 +417,9 @@ impl<A, Z> AppHandler<A, Z> {
         req: &IngressRequest,
         response: &IngressResponse,
         request_id: &RequestId,
+        should_capture: bool,
     ) {
-        if !self.capture.enabled() {
+        if !should_capture || !self.capture.enabled() {
             return;
         }
         self.capture.capture(&CaptureRecord {

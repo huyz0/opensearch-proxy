@@ -236,3 +236,49 @@ fn capture_tls_keys_without_brokers_are_rejected() {
     let err = resolve(&[("capture_kafka_ca", "/ca.pem")]).unwrap_err();
     assert_eq!(err.field(), "capture_kafka_ca");
 }
+
+#[test]
+fn capture_default_is_off_and_opts_in() {
+    assert!(!resolve(&[]).unwrap().capture_default);
+    assert!(
+        resolve(&[("capture_default", "true")])
+            .unwrap()
+            .capture_default
+    );
+}
+
+#[test]
+fn capture_delivery_knobs_default_and_parse() {
+    let cap = resolve(&[("capture_kafka_brokers", "b:9092"), ("capture_topic", "t")])
+        .unwrap()
+        .capture
+        .unwrap();
+    assert_eq!(
+        (cap.max_inflight, cap.max_attempts, cap.backoff_ms),
+        (1024, 4, 50)
+    );
+
+    let tuned = resolve(&[
+        ("capture_kafka_brokers", "b:9092"),
+        ("capture_topic", "t"),
+        ("capture_max_inflight", "8192"),
+        ("capture_max_attempts", "10"),
+        ("capture_backoff_ms", "100"),
+    ])
+    .unwrap()
+    .capture
+    .unwrap();
+    assert_eq!(
+        (tuned.max_inflight, tuned.max_attempts, tuned.backoff_ms),
+        (8192, 10, 100)
+    );
+
+    // Zero / non-numeric is rejected, naming the field.
+    let err = resolve(&[
+        ("capture_kafka_brokers", "b:9092"),
+        ("capture_topic", "t"),
+        ("capture_max_attempts", "0"),
+    ])
+    .unwrap_err();
+    assert_eq!(err.field(), "capture_max_attempts");
+}

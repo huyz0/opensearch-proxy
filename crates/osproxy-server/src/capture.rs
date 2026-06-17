@@ -18,9 +18,13 @@ pub(crate) async fn attach<A: Authenticator>(
     handler: AppHandler<A>,
     cfg: &Config,
 ) -> Result<AppHandler<A>, String> {
+    use std::time::Duration;
+
     use osproxy_capture::{Capture, RedactingCapture};
     use osproxy_kafka::KafkaCapture;
-    use osproxy_kafka_krafka::{AuthConfig, KrafkaProducer, TlsConfig as KafkaTlsConfig};
+    use osproxy_kafka_krafka::{
+        AuthConfig, DeliveryConfig, KrafkaProducer, TlsConfig as KafkaTlsConfig,
+    };
 
     let Some(cap) = &cfg.capture else {
         return Ok(handler);
@@ -34,9 +38,15 @@ pub(crate) async fn attach<A: Authenticator>(
         }
         AuthConfig::ssl(t)
     });
+    let delivery = DeliveryConfig {
+        max_inflight: cap.max_inflight,
+        max_attempts: cap.max_attempts,
+        base_backoff: Duration::from_millis(cap.backoff_ms),
+    };
     let producer = KrafkaProducer::connect(cap.brokers.clone(), "osproxy-capture", auth)
         .await
-        .map_err(|e| format!("connecting capture producer: {}", e.reason))?;
+        .map_err(|e| format!("connecting capture producer: {}", e.reason))?
+        .with_delivery(delivery);
     let kafka = KafkaCapture::new(producer, cap.topic.clone());
     let capture: Box<dyn Capture> = if cap.redact {
         Box::new(RedactingCapture::new(kafka))

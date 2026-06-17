@@ -79,14 +79,24 @@ stripped unless you opt out. These keys need a binary built with the
 setting them on a binary built without it is a loud startup error, not a silent
 no-op.
 
+The sink (where captured traffic goes) and the switch (when to capture) are
+separate. The keys below wire the **sink**; capture stays off until the switch is
+on, which is either `capture_default = true` or a published `capture` directive
+(see [Observability](08-observability.md) — capture is on demand through the same
+control store as diagnostics, so you flip it fleet-wide with no restart).
+
 | Key (`OSPROXY_…`) | Default | Description |
 |-------------------|---------|-------------|
-| `capture_kafka_brokers` | *(unset → capture off)* | Comma-separated Kafka bootstrap brokers (`host:port`). Both-or-neither with `capture_topic`. |
+| `capture_default` | `false` | The capture switch's baseline. `false` = on demand (nothing is teed until a `capture` directive selects requests). `true` = always-capture, for a dedicated capture/migration proxy. Independent of the sink keys below. |
+| `capture_kafka_brokers` | *(unset → no sink)* | Comma-separated Kafka bootstrap brokers (`host:port`). Both-or-neither with `capture_topic`. |
 | `capture_topic` | *(unset)* | The topic each captured exchange envelope is produced to. |
 | `capture_redact` | `true` | Strip the `Authorization` header from the captured stream. Set `false` only when the stream consumer needs credentials and is itself secured. |
 | `capture_kafka_ca` | *(unset → plaintext)* | Path to the CA PEM the broker certificate must chain to. Present ⇒ TLS to the brokers with that CA pinned; absent ⇒ a plaintext broker connection. |
 | `capture_kafka_client_cert` | *(unset)* | Client certificate chain PEM for broker mTLS. Both-or-neither with `capture_kafka_client_key`, and requires `capture_kafka_ca`. |
 | `capture_kafka_client_key` | *(unset)* | Client private key PEM for broker mTLS. |
+| `capture_max_inflight` | `1024` | The reliability/latency dial: most records buffered + retrying at once before a produce is dropped, bounding memory. Higher = fewer drops under load, more memory. |
+| `capture_max_attempts` | `4` | Send attempts per record before giving up. Higher = better delivery odds across a transient broker blip. Delivery is bounded in-memory best-effort, not durable across a restart. |
+| `capture_backoff_ms` | `50` | First retry backoff in milliseconds; doubles after each failure. |
 
 ## Worked examples
 

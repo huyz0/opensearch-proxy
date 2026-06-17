@@ -7,6 +7,12 @@
 //! adds the get-by-id read path (`docs/04` §5): resolve, map the logical id to
 //! the physical id, fetch, and shape the stored document back into the client's
 //! logical view. Search and bulk attach here in later milestones.
+//
+// JUSTIFY(file-length): this is the central request orchestrator — the lifecycle
+// (classify → route → transform → dispatch → trace → diagnostics decision) is one
+// cohesive flow, and the per-request directive evaluation it owns is the seam
+// every observability/capture feature attaches to. Tests already live in
+// `pipeline_tests.rs`; splitting the flow itself would scatter the lifecycle.
 
 use std::sync::Arc;
 
@@ -60,6 +66,11 @@ pub struct Pipeline<R, S> {
     /// so a configured exporter exports every request; lower it to `Off` to make
     /// export purely directive-driven (targeted sampling).
     baseline: DiagLevel,
+    /// Whether traffic capture is on for every request before any directive.
+    /// Default `false`: capture is off until a published `capture` directive
+    /// selects requests (capture on demand). Set `true` for an always-capture
+    /// deployment (e.g. a dedicated capture/migration proxy).
+    baseline_capture: bool,
     /// The fleet-wide directive source, polled fresh per request so an operator
     /// can flip verbosity without a restart. Defaults to an empty static set.
     directive_store: Arc<dyn DirectiveStore>,
@@ -81,12 +92,14 @@ pub struct Pipeline<R, S> {
     pub(crate) passthrough: Option<crate::passthrough::PassthroughPolicy>,
 }
 
-/// The diagnostics decision for one request: how much to record/export, and
-/// whether to capture it into the break-glass tape.
+/// The diagnostics decision for one request: how much to record/export, whether
+/// to capture it into the break-glass tape, and whether to tee it to the fleet
+/// traffic-capture sink.
 #[derive(Clone, Copy)]
 struct Diagnostics {
     level: DiagLevel,
     capture: bool,
+    traffic_capture: bool,
 }
 
 impl<R, S> std::fmt::Debug for Pipeline<R, S> {
@@ -113,6 +126,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             clock: Arc::new(SystemClock),
             service_name: "osproxy".to_owned(),
             baseline: DiagLevel::Shape,
+            baseline_capture: false,
             // An empty static set as the default store: `Arc<DirectiveSet>` is
             // itself a `DirectiveStore`, so this is `Arc<dyn DirectiveStore>` over
             // a constant snapshot. Swap it for a fleet store via builder.
@@ -190,6 +204,15 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         self
     }
 
+    /// Sets whether traffic capture is on for every request before directives
+    /// (builder style). Default `false` (capture on demand via a published
+    /// directive); set `true` for an always-capture deployment.
+    #[must_use]
+    pub fn with_baseline_capture(mut self, on: bool) -> Self {
+        self.baseline_capture = on;
+        self
+    }
+
     /// Sets a fixed set of active diagnostics directives (builder style). For a
     /// fleet-wide, restart-free source use [`Pipeline::with_directive_store`].
     #[must_use]
@@ -255,6 +278,16 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     /// Returns [`RequestError`] if the endpoint is unsupported in M1, routing
     /// fails, the body transform fails, or the sink rejects the write.
     pub async fn handle(&self, ctx: &RequestCtx<'_>) -> Result<PipelineResponse, RequestError> {
+        self.handle_with_capture(ctx).await.0
+    }
+
+    /// Like [`Self::handle`], but also returns whether this request should be teed
+    /// to the fleet traffic-capture sink — the live per-request capture decision,
+    /// applied by the ingress to both success and error responses.
+    pub async fn handle_with_capture(
+        &self,
+        ctx: &RequestCtx<'_>,
+    ) -> (Result<PipelineResponse, RequestError>, bool) {
         // Only pay for span timing/encoding when an exporter is actually active —
         // "Off" stays near-zero cost (`docs/05`).
         let exporting = self.exporter.enabled();
@@ -308,7 +341,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
                 self.exporter.export(payload);
             }
         }
-        result
+        (result, diag.traffic_capture)
     }
 
     /// The diagnostics decision for a finished request: the baseline level raised
@@ -330,6 +363,10 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         let snapshot = self.directive_store.load();
         let mut level = self.baseline.max(snapshot.evaluate(&attrs, now, request));
         let mut capture = snapshot.wants_ring_buffer(&attrs, now, request);
+        // Traffic capture is on when the deployment baseline says always-on or any
+        // published `capture` directive selects this request (capture on demand).
+        let mut traffic_capture =
+            self.baseline_capture || snapshot.wants_capture(&attrs, now, request);
         // Fold in a verified single-request directive from the signed
         // `X-Debug-Directive` header, if present and valid (`docs/05` §3).
         if let Some(directive) = ctx
@@ -340,9 +377,14 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             if let Some(from_header) = directive.level_if_applies(&attrs, now, request) {
                 level = level.max(from_header);
                 capture |= directive.ring_buffer;
+                traffic_capture |= directive.capture;
             }
         }
-        Diagnostics { level, capture }
+        Diagnostics {
+            level,
+            capture,
+            traffic_capture,
+        }
     }
 
     /// Dispatches on endpoint class, recording the per-stage spans into `trace`.

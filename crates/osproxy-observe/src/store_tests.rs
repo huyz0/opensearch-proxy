@@ -16,6 +16,7 @@ fn directive(level: DiagLevel, expires_at: Instant) -> DiagnosticsDirective {
         sample_per_mille: 1000,
         expires_at,
         ring_buffer: false,
+        capture: false,
     }
 }
 

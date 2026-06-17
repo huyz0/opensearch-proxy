@@ -137,6 +137,12 @@ pub struct DiagnosticsDirective {
     pub expires_at: Instant,
     /// Single-instance break-glass: capture into the local ring buffer.
     pub ring_buffer: bool,
+    /// Fleet traffic capture: tee the matching exchanges to the configured
+    /// capture sink (e.g. Kafka). The runtime on/off switch for capture — off in
+    /// the baseline, flipped on by publishing a directive, so capture is on demand
+    /// and fleet-wide with no restart. Distinct from [`Self::ring_buffer`], which
+    /// is the single-instance forensic tape.
+    pub capture: bool,
 }
 
 impl DiagnosticsDirective {
@@ -240,6 +246,21 @@ impl DirectiveSet {
             .any(|d| d.ring_buffer && d.applies(attrs, now, request))
     }
 
+    /// Whether any applying directive turns on fleet traffic capture for this
+    /// request. The runtime gate for capture-on-demand: with no matching
+    /// directive (the baseline), this is `false` and nothing is teed.
+    #[must_use]
+    pub fn wants_capture(
+        &self,
+        attrs: &RequestAttrs<'_>,
+        now: Instant,
+        request: &RequestId,
+    ) -> bool {
+        self.directives
+            .iter()
+            .any(|d| d.capture && d.applies(attrs, now, request))
+    }
+
     /// A well-defined, shape-only introspection of the active settings: for each
     /// directive, what it targets, at what verbosity and sample, whether it
     /// captures to the ring buffer, and whether it has expired at `now`.
@@ -273,6 +294,7 @@ impl DirectiveSet {
                 }
                 obj.insert("sample_per_mille".into(), d.sample_per_mille.into());
                 obj.insert("ring_buffer".into(), d.ring_buffer.into());
+                obj.insert("capture".into(), d.capture.into());
                 obj.insert("expired".into(), (now >= d.expires_at).into());
                 serde_json::Value::Object(obj)
             })

@@ -160,6 +160,7 @@ async fn baseline_off_suppresses_export_until_a_directive_selects_the_request() 
         sample_per_mille: 1000,
         expires_at: clock.now().saturating_add(Duration::from_secs(3600)),
         ring_buffer: false,
+        capture: false,
     };
     let on_pipeline = pipeline()
         .with_exporter(Arc::new(on.clone()))
@@ -203,6 +204,7 @@ async fn publishing_to_the_fleet_store_flips_export_without_rebuilding_the_pipel
         sample_per_mille: 1000,
         expires_at: clock.now().saturating_add(Duration::from_secs(3600)),
         ring_buffer: false,
+        capture: false,
     }]));
     ingest(&p, &RequestId::from("r")).await;
     assert_eq!(
@@ -246,6 +248,7 @@ async fn a_ring_buffer_directive_captures_into_the_break_glass_tape() {
         sample_per_mille: 1000,
         expires_at: clock.now().saturating_add(Duration::from_secs(3600)),
         ring_buffer: true,
+        capture: false,
     }]));
     ingest(&p, &RequestId::from("r1")).await;
     ingest(&p, &RequestId::from("r2")).await;
@@ -273,6 +276,7 @@ async fn an_expired_directive_does_not_re_enable_export() {
         sample_per_mille: 1000,
         expires_at: clock.now(), // == now, so `now < expires_at` is false
         ring_buffer: false,
+        capture: false,
     };
     let p = pipeline()
         .with_exporter(Arc::new(exporter.clone()))
@@ -301,6 +305,7 @@ impl DirectiveVerifier for FakeVerifier {
             sample_per_mille: 1000,
             expires_at: self.expires_at,
             ring_buffer: false,
+            capture: false,
         })
     }
 }

@@ -31,7 +31,20 @@ pub(crate) fn resolve(raw: &Raw) -> Result<Config, ConfigError> {
         cursor_affinity_key: opt(raw, "cursor_affinity_key"),
         passthrough: passthrough(raw)?,
         capture: capture(raw)?,
+        capture_default: bool_or(raw, "capture_default", false)?,
     })
+}
+
+/// Parses a required-positive `u64` setting, falling back to `default` when unset.
+/// A non-numeric or zero value names the field rather than silently defaulting.
+fn u64_or(raw: &Raw, key: &'static str, default: u64) -> Result<u64, ConfigError> {
+    match raw.get(key) {
+        None => Ok(default),
+        Some(value) => match value.trim().parse::<u64>() {
+            Ok(n) if n > 0 => Ok(n),
+            _ => Err(ConfigError::invalid(key, "expected a positive integer")),
+        },
+    }
 }
 
 /// Full-fidelity capture: requires both the brokers and the topic, or neither.
@@ -66,6 +79,11 @@ fn capture(raw: &Raw) -> Result<Option<CaptureConfig>, ConfigError> {
                 topic,
                 redact: bool_or(raw, "capture_redact", true)?,
                 tls: capture_tls(raw)?,
+                max_inflight: usize::try_from(u64_or(raw, "capture_max_inflight", 1024)?)
+                    .map_err(|_| ConfigError::invalid("capture_max_inflight", "value too large"))?,
+                max_attempts: u32::try_from(u64_or(raw, "capture_max_attempts", 4)?)
+                    .map_err(|_| ConfigError::invalid("capture_max_attempts", "value too large"))?,
+                backoff_ms: u64_or(raw, "capture_backoff_ms", 50)?,
             }))
         }
         _ => Err(ConfigError::invalid(

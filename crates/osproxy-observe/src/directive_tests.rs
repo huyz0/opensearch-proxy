@@ -20,6 +20,7 @@ fn directive(
         sample_per_mille,
         expires_at: at(100),
         ring_buffer: false,
+        capture: false,
     }
 }
 
@@ -96,6 +97,45 @@ fn each_target_field_narrows_the_match() {
 }
 
 #[test]
+fn wants_capture_tracks_a_matching_unexpired_capture_directive() {
+    let acme = PartitionId::from("acme");
+    let p = PrincipalId::from("svc");
+    let mut d = directive(
+        DiagLevel::Off,
+        DirectiveMatch::all().for_tenant(acme.clone()),
+        1000,
+    );
+    d.capture = true;
+    let set = DirectiveSet::from_directives(vec![d]);
+
+    let hit = attrs(Some(&acme), "orders", &p, EndpointKind::Search);
+    let other = PartitionId::from("globex");
+    let miss = attrs(Some(&other), "orders", &p, EndpointKind::Search);
+    let r = RequestId::from("r");
+
+    assert!(
+        set.wants_capture(&hit, at(1), &r),
+        "matches the target tenant"
+    );
+    assert!(
+        !set.wants_capture(&miss, at(1), &r),
+        "other tenant is not captured"
+    );
+    assert!(
+        !set.wants_capture(&hit, at(150), &r),
+        "past expiry, capture turns back off on its own (TTL)"
+    );
+    // A directive without the capture flag never enables capture, even when it
+    // raises the diagnostics level.
+    assert!(!DirectiveSet::from_directives(vec![directive(
+        DiagLevel::Shape,
+        DirectiveMatch::all(),
+        1000
+    )])
+    .wants_capture(&hit, at(1), &r));
+}
+
+#[test]
 fn an_expired_directive_does_not_apply() {
     let set = DirectiveSet::from_directives(vec![directive(
         DiagLevel::Shape,
@@ -167,6 +207,7 @@ fn introspect_renders_the_well_defined_settings_schema() {
         sample_per_mille: 250,
         expires_at: at(100),
         ring_buffer: true,
+        capture: true,
     }]);
     // Before expiry: the directive is live and fully described.
     let v = set.introspect(at(10));
@@ -177,6 +218,7 @@ fn introspect_renders_the_well_defined_settings_schema() {
     assert_eq!(d["index"], "orders");
     assert_eq!(d["sample_per_mille"], 250);
     assert_eq!(d["ring_buffer"], true);
+    assert_eq!(d["capture"], true);
     assert_eq!(d["expired"], false);
     // Unset targets are omitted (wildcards), not rendered null.
     assert!(d.get("principal").is_none());

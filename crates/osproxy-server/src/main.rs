@@ -247,7 +247,8 @@ fn assemble_pipeline(
     directive_store: Arc<InMemoryDirectiveStore>,
     cfg: &Config,
 ) -> Pipeline<TenancyRouter<ReferenceTenancy>, OpenSearchSink> {
-    let base = Pipeline::new(TenancyRouter::new(tenancy), sink);
+    let base =
+        Pipeline::new(TenancyRouter::new(tenancy), sink).with_baseline_capture(cfg.capture_default);
     let observed = with_debug_directive(
         with_diag_baseline(
             with_otlp_export(base, &cfg.observability),

@@ -51,6 +51,7 @@ const DIRECTIVE_KEYS: &[&str] = &[
     "endpoint",
     "sample_per_mille",
     "ring_buffer",
+    "capture",
 ];
 
 /// Rejects an object carrying any key outside `allowed` (fail-closed; an unknown
@@ -126,6 +127,7 @@ fn decode_one(v: &Value, clock: &dyn Clock) -> Result<DiagnosticsDirective, &'st
             .get("ring_buffer")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        capture: v.get("capture").and_then(Value::as_bool).unwrap_or(false),
     })
 }
 

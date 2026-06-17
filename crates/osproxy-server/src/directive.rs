@@ -117,6 +117,7 @@ impl HmacDirectiveVerifier {
                 .get("ring_buffer")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            capture: v.get("capture").and_then(Value::as_bool).unwrap_or(false),
         })
     }
 }

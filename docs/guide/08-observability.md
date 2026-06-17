@@ -90,7 +90,16 @@ Diagnostics verbosity is **togglable at runtime, fleet-wide, without a restart**
 | `level` | `Off` \| `Shape` \| `ShapeTiming` \| `ShapeRewriteDiff`. |
 | `sample_per_mille` | Fraction of matching requests to record (0–1000; deterministic per request id). |
 | `expires_at` | Absolute TTL. Matching auto-stops after expiry, no cleanup needed. |
-| `ring_buffer` | Also capture matching requests into the break-glass tape. |
+| `ring_buffer` | Also capture matching requests into the break-glass tape (single-instance forensic ring). |
+| `capture` | Tee matching requests to the fleet traffic-capture sink (full-fidelity Kafka capture). The runtime on switch for capture-on-demand. |
+
+`capture` makes full-fidelity traffic capture **on demand**: with the sink wired
+(the `capture_*` keys in [Configuration](07-configuration.md)) but
+`capture_default = false`, nothing is teed until you publish a `capture` directive
+— targeted by tenant/index/principal/endpoint, sampled, and TTL'd like any other.
+Capture then turns on fleet-wide with no restart and turns itself back off at the
+TTL. Distinct from `ring_buffer`, which is the local forensic tape; `capture` is
+the durable stream for replay/audit/migration.
 
 The effective level for a request is the **baseline raised by any matching
 directive** (highest wins). With `diag_baseline = off`, nothing is recorded/exported

@@ -60,6 +60,12 @@ pub struct Config {
     /// the binary be built with the `capture-kafka` feature; a configured capture
     /// on a binary without it is a loud startup error rather than a silent no-op.
     pub capture: Option<CaptureConfig>,
+    /// Whether capture is on for every request before any directive (default
+    /// `false`). `false` = capture on demand: nothing is teed until a published
+    /// `capture` directive selects requests. `true` = always-capture (a dedicated
+    /// capture/migration proxy). Independent of the sink: it only decides *when*
+    /// to capture; the sink still needs the `capture-kafka` feature + config.
+    pub capture_default: bool,
 }
 
 /// Full-fidelity traffic capture settings: where to send the captured exchange
@@ -77,6 +83,14 @@ pub struct CaptureConfig {
     pub redact: bool,
     /// TLS to the brokers, or `None` for a plaintext broker connection.
     pub tls: Option<CaptureTlsConfig>,
+    /// The most records in flight (buffered + retrying) at once before a produce
+    /// is dropped, bounding memory. Higher = fewer drops under load, more memory.
+    pub max_inflight: usize,
+    /// Total send attempts per record before giving up. Higher = better delivery
+    /// odds across a transient broker blip, at the cost of more retry work.
+    pub max_attempts: u32,
+    /// The first retry backoff in milliseconds; it doubles after each failure.
+    pub backoff_ms: u64,
 }
 
 /// TLS settings for the capture broker connection: PEM file **paths** (the binary
