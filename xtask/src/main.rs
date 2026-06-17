@@ -81,6 +81,9 @@ fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'static str]> {
         // implements it; the broker client is opt-in and not a workspace edge.
         "osproxy-capture" => &["osproxy-spi"],
         "osproxy-kafka" => &["osproxy-capture"],
+        // The portable pure-Rust Producer (rskafka + rustls); implements the
+        // queue-writer seam.
+        "osproxy-kafka-rskafka" => &["osproxy-kafka"],
         // Workspace-excluded (links librdkafka); its only internal edge is the
         // queue-writer crate whose `Producer` seam it implements.
         "osproxy-kafka-rdkafka" => &["osproxy-kafka"],
