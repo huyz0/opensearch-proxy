@@ -315,3 +315,8 @@ mod tests {
         assert_eq!(env.content_type, "");
     }
 }
+
+/// Live round-trip against a real broker (`docs/04` §9) — see the module file.
+#[cfg(all(test, feature = "capture-kafka"))]
+#[path = "fanout_kafka_test.rs"]
+mod kafka_round_trip;
