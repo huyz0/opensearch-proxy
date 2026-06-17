@@ -1,0 +1,21 @@
+[package]
+name = "osproxy-kafka-wal"
+description = "A durable, disk-backed spill buffer for osproxy capture: persists each record to a write-ahead log and drains it to an AckProducer with at-least-once delivery that survives a restart."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+osproxy-kafka.workspace = true
+# Runtime handle + Notify for the background drainer, time for retry backoff. The
+# WAL stores opaque bytes, so it needs no broker client or crypto provider.
+tokio = { workspace = true, features = ["rt", "time", "sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "time", "sync", "macros"] }
+
+[lints]
+workspace = true

@@ -1704,6 +1704,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "osproxy-kafka-wal"
+version = "0.0.0"
+dependencies = [
+ "osproxy-kafka",
+ "tokio",
+]
+
+[[package]]
 name = "osproxy-observe"
 version = "0.0.0"
 dependencies = [
@@ -1755,6 +1763,7 @@ dependencies = [
  "osproxy-engine",
  "osproxy-kafka",
  "osproxy-kafka-krafka",
+ "osproxy-kafka-wal",
  "osproxy-observe",
  "osproxy-otlp",
  "osproxy-sink",

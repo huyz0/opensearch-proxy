@@ -282,3 +282,25 @@ fn capture_delivery_knobs_default_and_parse() {
     .unwrap_err();
     assert_eq!(err.field(), "capture_max_attempts");
 }
+
+#[test]
+fn capture_wal_is_off_by_default_and_opts_into_durable() {
+    let plain = resolve(&[("capture_kafka_brokers", "b:9092"), ("capture_topic", "t")])
+        .unwrap()
+        .capture
+        .unwrap();
+    assert!(plain.wal_dir.is_none(), "in-memory best-effort by default");
+    assert_eq!(plain.wal_max_bytes, 256 * 1024 * 1024);
+
+    let durable = resolve(&[
+        ("capture_kafka_brokers", "b:9092"),
+        ("capture_topic", "t"),
+        ("capture_wal_dir", "/var/lib/osproxy/capture"),
+        ("capture_wal_max_bytes", "1048576"),
+    ])
+    .unwrap()
+    .capture
+    .unwrap();
+    assert_eq!(durable.wal_dir.as_deref(), Some("/var/lib/osproxy/capture"));
+    assert_eq!(durable.wal_max_bytes, 1_048_576);
+}

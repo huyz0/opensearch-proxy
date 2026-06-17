@@ -27,7 +27,7 @@ fips = ["osproxy-transport/fips", "dep:aws-lc-rs", "osproxy-kafka-krafka?/fips"]
 # Opt-in Kafka traffic capture: composes the portable krafka producer behind the
 # `Capture` seam. Off by default so the standard binary carries no broker client.
 # Build with `cargo build -p osproxy-server --features capture-kafka`.
-capture-kafka = ["dep:osproxy-kafka", "dep:osproxy-kafka-krafka"]
+capture-kafka = ["dep:osproxy-kafka", "dep:osproxy-kafka-krafka", "dep:osproxy-kafka-wal"]
 
 [dependencies]
 osproxy-core.workspace = true
@@ -42,6 +42,7 @@ osproxy-tenancy.workspace = true
 osproxy-sink.workspace = true
 osproxy-kafka = { workspace = true, optional = true }
 osproxy-kafka-krafka = { workspace = true, optional = true }
+osproxy-kafka-wal = { workspace = true, optional = true }
 serde_json.workspace = true
 ring = { workspace = true, optional = true }
 aws-lc-rs = { workspace = true, optional = true }

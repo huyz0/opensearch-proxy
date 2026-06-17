@@ -20,11 +20,10 @@ pub(crate) async fn attach<A: Authenticator>(
 ) -> Result<AppHandler<A>, String> {
     use std::time::Duration;
 
-    use osproxy_capture::{Capture, RedactingCapture};
-    use osproxy_kafka::KafkaCapture;
     use osproxy_kafka_krafka::{
         AuthConfig, DeliveryConfig, KrafkaProducer, TlsConfig as KafkaTlsConfig,
     };
+    use osproxy_kafka_wal::{DurableProducer, WalConfig};
 
     let Some(cap) = &cfg.capture else {
         return Ok(handler);
@@ -38,29 +37,58 @@ pub(crate) async fn attach<A: Authenticator>(
         }
         AuthConfig::ssl(t)
     });
-    let delivery = DeliveryConfig {
-        max_inflight: cap.max_inflight,
-        max_attempts: cap.max_attempts,
-        base_backoff: Duration::from_millis(cap.backoff_ms),
-    };
-    let producer = KrafkaProducer::connect(cap.brokers.clone(), "osproxy-capture", auth)
+    let krafka = KrafkaProducer::connect(cap.brokers.clone(), "osproxy-capture", auth)
         .await
-        .map_err(|e| format!("connecting capture producer: {}", e.reason))?
-        .with_delivery(delivery);
-    let kafka = KafkaCapture::new(producer, cap.topic.clone());
-    let capture: Box<dyn Capture> = if cap.redact {
-        Box::new(RedactingCapture::new(kafka))
-    } else {
-        Box::new(kafka)
+        .map_err(|e| format!("connecting capture producer: {}", e.reason))?;
+
+    // With a WAL directory, deliver durably (at-least-once, survives restart): the
+    // disk buffer owns retry, so the in-memory delivery wrapper is bypassed.
+    // Otherwise, bounded in-memory best-effort.
+    let capture = match &cap.wal_dir {
+        Some(dir) => {
+            let wal = WalConfig {
+                max_bytes: cap.wal_max_bytes,
+                base_backoff: Duration::from_millis(cap.backoff_ms),
+                ..WalConfig::default()
+            };
+            let durable = DurableProducer::spawn(dir, krafka, wal)
+                .map_err(|e| format!("opening capture WAL at {dir}: {e}"))?;
+            wrap_capture(durable, cap)
+        }
+        None => {
+            let delivery = DeliveryConfig {
+                max_inflight: cap.max_inflight,
+                max_attempts: cap.max_attempts,
+                base_backoff: Duration::from_millis(cap.backoff_ms),
+            };
+            wrap_capture(krafka.with_delivery(delivery), cap)
+        }
     };
     println!(
-        "osproxy capture: on (kafka topic={}, brokers={}, tls={}, redact={})",
+        "osproxy capture: on (kafka topic={}, brokers={}, tls={}, redact={}, durable={})",
         cap.topic,
         cap.brokers.len(),
         cap.tls.is_some(),
-        cap.redact
+        cap.redact,
+        cap.wal_dir.is_some()
     );
     Ok(handler.with_capture(capture))
+}
+
+/// Wraps a producer in a `KafkaCapture`, plus `RedactingCapture` unless capture
+/// redaction is opted out. Generic so either the durable or in-memory producer
+/// composes through the same path.
+#[cfg(feature = "capture-kafka")]
+fn wrap_capture<P: osproxy_kafka::Producer + 'static>(
+    producer: P,
+    cap: &osproxy_config::CaptureConfig,
+) -> Box<dyn osproxy_capture::Capture> {
+    let kafka = osproxy_kafka::KafkaCapture::new(producer, cap.topic.clone());
+    if cap.redact {
+        Box::new(osproxy_capture::RedactingCapture::new(kafka))
+    } else {
+        Box::new(kafka)
+    }
 }
 
 /// Without the `capture-kafka` feature no broker client is linked, so a

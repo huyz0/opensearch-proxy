@@ -97,6 +97,16 @@ control store as diagnostics, so you flip it fleet-wide with no restart).
 | `capture_max_inflight` | `1024` | The reliability/latency dial: most records buffered + retrying at once before a produce is dropped, bounding memory. Higher = fewer drops under load, more memory. |
 | `capture_max_attempts` | `4` | Send attempts per record before giving up. Higher = better delivery odds across a transient broker blip. Delivery is bounded in-memory best-effort, not durable across a restart. |
 | `capture_backoff_ms` | `50` | First retry backoff in milliseconds; doubles after each failure. |
+| `capture_wal_dir` | *(unset → in-memory)* | Directory for the durable on-disk spill buffer. Set it for **at-least-once** capture that survives a restart: records persist to a write-ahead log and replay until the broker acknowledges. Unset = bounded in-memory best-effort (the `max_inflight`/`max_attempts` knobs above). |
+| `capture_wal_max_bytes` | `268435456` (256 MiB) | Cap on undelivered bytes in the spill buffer before new records are dropped (only with `capture_wal_dir`). Bounds disk like `capture_max_inflight` bounds memory. |
+
+Two delivery tiers: without `capture_wal_dir`, delivery is bounded in-memory
+best-effort (a broker outage past the buffer drops records, and a restart loses
+the buffer). With it, delivery is durable at-least-once — records survive a
+restart and replay until acknowledged, so the consumer dedupes on the request id
+the envelope carries. Durability is group-commit: a hard power loss can lose the
+last sub-second of appended-but-undelivered records; a graceful restart loses
+nothing.
 
 ## Worked examples
 

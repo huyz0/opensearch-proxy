@@ -46,6 +46,8 @@ pub(crate) const KEYS: &[&str] = &[
     "capture_max_inflight",
     "capture_max_attempts",
     "capture_backoff_ms",
+    "capture_wal_dir",
+    "capture_wal_max_bytes",
 ];
 
 /// The environment variable name for a canonical key: `OSPROXY_` + the

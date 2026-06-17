@@ -96,6 +96,28 @@ pub trait Producer: Send + Sync {
     fn produce(&self, topic: &str, key: &[u8], payload: &[u8]) -> Result<(), ProduceError>;
 }
 
+/// A producer whose send resolves only when the record is **acknowledged** by the
+/// queue (or fails terminally). This is the seam a durable spill buffer drains
+/// onto: it must know delivery succeeded before it drops the record from disk, so
+/// the fire-and-forget [`Producer`] is not enough.
+///
+/// Implementations MUST NOT panic. The returned future is `Send` so the buffer's
+/// background drainer can own it across `.await`.
+pub trait AckProducer: Send + Sync + 'static {
+    /// Sends one record and resolves when the broker has acknowledged it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProduceError`] if delivery failed; the caller (e.g. a WAL
+    /// drainer) is expected to retry, since the record is still persisted.
+    fn send_acked(
+        &self,
+        topic: &str,
+        key: &[u8],
+        payload: &[u8],
+    ) -> impl std::future::Future<Output = Result<(), ProduceError>> + Send;
+}
+
 /// A [`Capture`] that serializes each exchange to a [`CaptureEnvelope`] and
 /// produces it to `topic` through a [`Producer`]. Generic over the producer, so
 /// the broker client composes in.

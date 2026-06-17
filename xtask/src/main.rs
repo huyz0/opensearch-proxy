@@ -85,6 +85,10 @@ fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'static str]> {
         // queue-writer seam. krafka feature-gates its rustls provider, so a FIPS
         // build links only aws-lc-rs (no ring).
         "osproxy-kafka-krafka" => &["osproxy-kafka"],
+        // The durable spill buffer: a Producer that persists to a WAL and drains
+        // to an AckProducer. Broker-agnostic, so its only internal edge is the
+        // queue-writer seam crate.
+        "osproxy-kafka-wal" => &["osproxy-kafka"],
         // Workspace-excluded (links librdkafka); its only internal edge is the
         // queue-writer crate whose `Producer` seam it implements.
         "osproxy-kafka-rdkafka" => &["osproxy-kafka"],
@@ -114,6 +118,7 @@ fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'static str]> {
             // portable krafka producer it composes for traffic capture.
             "osproxy-kafka",
             "osproxy-kafka-krafka",
+            "osproxy-kafka-wal",
             // dev-only: the #[ignore]'d perf harness reads NFR-P profile types.
             "osproxy-bench",
         ],

@@ -47,7 +47,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use krafka::producer::Producer as KrafkaInner;
-use osproxy_kafka::{ProduceError, Producer};
+use osproxy_kafka::{AckProducer, ProduceError, Producer};
 use tokio::runtime::Handle;
 use tokio::sync::Semaphore;
 
@@ -215,6 +215,26 @@ impl KrafkaProducer {
     pub fn with_delivery(mut self, cfg: DeliveryConfig) -> Self {
         self.delivery = Delivery::new(cfg, self.delivery.handle.clone());
         self
+    }
+}
+
+impl AckProducer for KrafkaProducer {
+    /// Sends and awaits the broker acknowledgement — the path a durable spill
+    /// buffer drains onto, since it must know delivery succeeded before dropping
+    /// the record from disk.
+    async fn send_acked(
+        &self,
+        topic: &str,
+        key: &[u8],
+        payload: &[u8],
+    ) -> Result<(), ProduceError> {
+        self.inner
+            .send(topic, Some(key), payload)
+            .await
+            .map(|_| ())
+            .map_err(|_| ProduceError {
+                reason: "kafka send was not acknowledged",
+            })
     }
 }
 

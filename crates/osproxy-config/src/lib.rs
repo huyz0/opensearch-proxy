@@ -91,6 +91,13 @@ pub struct CaptureConfig {
     pub max_attempts: u32,
     /// The first retry backoff in milliseconds; it doubles after each failure.
     pub backoff_ms: u64,
+    /// Directory for the durable on-disk spill buffer, or `None` for in-memory
+    /// best-effort. Set it for **at-least-once** capture that survives a restart:
+    /// records persist to a write-ahead log here and replay until acknowledged.
+    pub wal_dir: Option<String>,
+    /// Cap on undelivered bytes in the spill buffer before new records are dropped
+    /// (only meaningful with `wal_dir`). Bounds disk like `max_inflight` bounds memory.
+    pub wal_max_bytes: u64,
 }
 
 /// TLS settings for the capture broker connection: PEM file **paths** (the binary

@@ -84,6 +84,8 @@ fn capture(raw: &Raw) -> Result<Option<CaptureConfig>, ConfigError> {
                 max_attempts: u32::try_from(u64_or(raw, "capture_max_attempts", 4)?)
                     .map_err(|_| ConfigError::invalid("capture_max_attempts", "value too large"))?,
                 backoff_ms: u64_or(raw, "capture_backoff_ms", 50)?,
+                wal_dir: opt(raw, "capture_wal_dir"),
+                wal_max_bytes: u64_or(raw, "capture_wal_max_bytes", 256 * 1024 * 1024)?,
             }))
         }
         _ => Err(ConfigError::invalid(
