@@ -19,7 +19,7 @@ flowchart TB
     F --> G["Resolve<br/>(Router → TenancyRouter)<br/>partition → placement → target"]
     G --> H["Write gate (epoch)<br/>admit / stale-epoch 409"]
     H --> I["Transform (osproxy-rewrite)<br/>inject + construct id / filter + strip"]
-    I --> J["Dispatch (osproxy-sink)<br/>per-cluster pool · TLS reuse"]
+    I --> J["Dispatch (osproxy-sink)<br/>per-cluster pool from placement endpoint · TLS reuse"]
     J --> K["Reverse-transform<br/>strip injected fields from response"]
     K --> L["Response to client<br/>+ x-request-id"]
 

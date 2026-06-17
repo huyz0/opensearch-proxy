@@ -73,7 +73,7 @@ impl TenancySpi for MyTenancy {
     }
 
     /// Resolve a partition to its current placement, the epoch it was read at,
-    /// and the cluster's base URL (the sink pools that endpoint on first use —
+    /// and the cluster's base URL (the sink pools that endpoint on first use;
     /// the tenancy is the source of truth for where each cluster lives). NOT
     /// pure: migration mutates placement; back it with your control-plane store.
     async fn placement_for(&self, partition: &PartitionId) -> Result<PlacementAt, SpiError> {
@@ -135,6 +135,33 @@ impl TenancySpi for MyTenancy {
     // fallback for requests the token path does not cover.
 }
 ```
+
+### Telling the proxy where clusters live
+
+The sink has no static endpoint catalog. Your tenancy is the source of truth for
+where each cluster lives, and it reports that in two places.
+
+The data plane reads it from the placement result: `placement_for` attaches the
+cluster's base URL with `PlacementAt::with_endpoint(...)` (shown above), and the
+sink builds a pool for that URL the first time it routes there.
+
+The scroll/PIT affinity and admin pass-through paths route to a cluster by id with
+no placement to consult (a bare scroll continue carries only the pinned cluster in
+its signed envelope). For those, implement `cluster_endpoint`, a by-id lookup the
+engine calls server-side. Keeping it server-side is deliberate: the cluster's URL
+never goes into the client-visible cursor token.
+
+```rust
+impl TenancySpi for MyTenancy {
+    fn cluster_endpoint(&self, cluster: &ClusterId) -> Option<String> {
+        self.catalog.get(cluster).cloned() // your cluster-id → base-URL map
+    }
+}
+```
+
+The default returns `None`. A tenancy that never uses cursor affinity or admin
+pass-through can skip it; one that does must cover the clusters those paths reach,
+which is just its own cluster catalog by id.
 
 ## `Authenticator` (required)
 

@@ -11,8 +11,6 @@ It is designed to be consumed **as a library**: implementers depend on the
 logic statically into the proxy. No dynamic plugin loading (no WASM, no
 dylibs).
 
-📖 **Documentation site: https://huyz0.github.io/opensearch-proxy/**
-
 ## What it does
 
 - **Routes** every request to exactly one physical placement (dedicated

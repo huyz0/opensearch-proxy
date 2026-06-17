@@ -12,7 +12,7 @@ This page shows how the crates assemble into a running proxy. The composition is
 flowchart TB
     ten["MyTenancy : TenancySpi"] --> tr["TenancyRouter::new"]
     tr --> pl["Pipeline::new(router, sink)"]
-    sink["OpenSearchSink::new(endpoints)"] --> pl
+    sink["OpenSearchSink::new()"] --> pl
     pl --> h["AppHandler::new(pipeline, authenticator)"]
     h --> serve["transport::serve / serve_tls"]
 

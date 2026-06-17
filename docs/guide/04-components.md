@@ -54,7 +54,7 @@ flowchart TB
 | **osproxy-spi** | The public traits you `impl`: `TenancySpi`, `RoutingSpi`, `Authenticator`, `Authorizer`, plus the value types (`Placement`, `RequestCtx`, `RouteDecision`, `SpiError`…). | core |
 | **osproxy-tenancy** | Adapts your high-level `TenancySpi` into the engine's `Router` seam; the in-memory epoch-versioned `PlacementTable`; the SharedIndex partition-in-id invariant. | spi, core |
 | **osproxy-rewrite** | NDJSON/`_bulk` demux, query-DSL partition-filter wrap, response field-strip, doc-id construction, partition extraction. | core |
-| **osproxy-sink** | The `Sink` (write) and `Reader` (get/search/count/cursor) traits + `OpenSearchSink` (and `MemorySink` for tests). Per-cluster pools live here. | spi, core |
+| **osproxy-sink** | The `Sink` (write) and `Reader` (get/search/count/cursor) traits + `OpenSearchSink` (and `MemorySink` for tests). Per-cluster pools live here, built lazily from the endpoint each placement reports (no static catalog). | spi, core |
 | **osproxy-transport** | h1/h2/gRPC ingress, admission control (413/429), the upstream connection pools, TLS/mTLS, the `CryptoProvider` seam and the build-time `DefaultCryptoProvider`. | spi, core |
 | **osproxy-engine** | The request **pipeline**: dispatch by endpoint, resolve → write-gate → transform → dispatch → reverse-transform, and the per-request trace. Generic over `Router` + `Sink`. | tenancy, sink, rewrite, observe, spi, core |
 | **osproxy-observe** | Shape-only causal traces, the diagnostics **directive** model (level/targeting/TTL/sampling), `/debug/explain` assembly, break-glass tape, the OTLP `resource_spans` encoder, `/metrics` snapshot, the `DirectiveStore`/`SpanExporter`/`DirectiveVerifier` seams. | core |
