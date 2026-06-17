@@ -128,9 +128,12 @@ pub(crate) async fn ingest_bulk_async<R: Router>(
 
     for (ordinal, item) in items.into_iter().enumerate() {
         // A scripted/partial `_update` has no single current document to merge
-        // against under fan-out; reject it in place.
-        if matches!(item.action, BulkAction::Update) {
-            lines[ordinal] = json!({ "update": {
+        // against under fan-out, and an optimistic-concurrency precondition
+        // (`if_seq_no`/`version`/…) is evaluated against the live version that
+        // does not exist at enqueue time — reject either in place rather than
+        // silently dropping the precondition.
+        if matches!(item.action, BulkAction::Update) || item.concurrency_control {
+            lines[ordinal] = json!({ item.action.keyword(): {
                 "_index": item.index.clone().unwrap_or_else(|| index.to_owned()),
                 "_id": item.id,
                 "status": 400,

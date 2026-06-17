@@ -333,6 +333,29 @@ async fn async_bulk_with_no_queue_is_refused_422() {
     assert_eq!(resp.status, 422);
 }
 
+#[tokio::test]
+async fn async_bulk_rejects_a_per_item_optimistic_concurrency_precondition() {
+    let queue = Arc::new(RecordingQueue::default());
+    let p = pipeline().with_write_queue(Arc::clone(&queue) as Arc<dyn WriteQueue>);
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r");
+    let headers = vec![header("x-write-mode", "async"), header("x-tenant", "acme")];
+    // First item carries if_seq_no (CAS) → rejected; second is plain → enqueued.
+    let body = b"{\"index\":{\"_id\":\"1\",\"if_seq_no\":3,\"if_primary_term\":1}}\n{\"tenant_id\":\"acme\",\"id\":1}\n{\"index\":{}}\n{\"tenant_id\":\"acme\",\"id\":2}\n";
+    let c = ctx(&principal, &rid, &headers, EndpointKind::IngestBulk, body);
+    let resp = p.handle(&c).await.unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    let items = doc["items"].as_array().unwrap();
+    assert_eq!(
+        items[0]["index"]["status"], 400,
+        "CAS precondition rejected"
+    );
+    assert_eq!(items[1]["index"]["status"], 202, "plain item queued");
+    assert_eq!(doc["errors"], true);
+    // Only the honorable item was enqueued — the precondition was never dropped.
+    assert_eq!(queue.writes.lock().unwrap().len(), 1);
+}
+
 // --- async _delete_by_query expansion (docs/04 §9) ------------------------
 
 /// Stores two docs (sync), then runs an async DBQ that expands to one enqueued

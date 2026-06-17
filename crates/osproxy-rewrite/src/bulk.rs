@@ -56,6 +56,11 @@ pub struct BulkItem {
     pub id: Option<String>,
     /// The explicit `routing` from the action line, if any.
     pub routing: Option<String>,
+    /// Whether the action line carries an optimistic-concurrency precondition
+    /// (`if_seq_no`/`if_primary_term`/`version`/`version_type`). The async
+    /// fan-out path rejects such items: the precondition is evaluated against the
+    /// live version, which does not exist at enqueue time (`docs/04` §9).
+    pub concurrency_control: bool,
     /// The source document (for index/create/update; `None` for delete).
     pub source: Option<Value>,
 }
@@ -99,6 +104,7 @@ pub fn parse_bulk(body: &[u8]) -> Result<Vec<BulkItem>, RewriteError> {
             index: meta.index,
             id: meta.id,
             routing: meta.routing,
+            concurrency_control: meta.concurrency_control,
             source,
         });
     }
@@ -110,6 +116,7 @@ struct ActionMeta {
     index: Option<String>,
     id: Option<String>,
     routing: Option<String>,
+    concurrency_control: bool,
 }
 
 /// Parses one action line into its action and metadata.
@@ -136,10 +143,14 @@ fn parse_action_line(line: &[u8]) -> Result<(BulkAction, ActionMeta), RewriteErr
 /// a missing or non-object meta yields all-`None`).
 fn action_meta(meta: &Value) -> ActionMeta {
     let str_field = |name: &str| meta.get(name).and_then(Value::as_str).map(str::to_owned);
+    let concurrency_control = ["if_seq_no", "if_primary_term", "version", "version_type"]
+        .iter()
+        .any(|k| meta.get(*k).is_some());
     ActionMeta {
         index: str_field("_index"),
         id: str_field("_id"),
         routing: str_field("routing"),
+        concurrency_control,
     }
 }
 
@@ -171,6 +182,19 @@ mod tests {
         assert_eq!(items[2].action, BulkAction::Delete);
         assert_eq!(items[2].id.as_deref(), Some("3"));
         assert!(items[2].source.is_none());
+    }
+
+    #[test]
+    fn optimistic_concurrency_metadata_is_flagged() {
+        let body = concat!(
+            "{\"index\":{\"_id\":\"1\",\"if_seq_no\":3,\"if_primary_term\":1}}\n{\"k\":1}\n",
+            "{\"index\":{\"_id\":\"2\",\"version\":7}}\n{\"k\":2}\n",
+            "{\"index\":{\"_id\":\"3\"}}\n{\"k\":3}\n",
+        );
+        let items = parse_bulk(body.as_bytes()).unwrap();
+        assert!(items[0].concurrency_control, "if_seq_no/if_primary_term");
+        assert!(items[1].concurrency_control, "version");
+        assert!(!items[2].concurrency_control, "plain index");
     }
 
     #[test]
