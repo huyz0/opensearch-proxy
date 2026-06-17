@@ -1,0 +1,17 @@
+[package]
+name = "osproxy-kafka"
+description = "Queue-backed traffic capture: serializes captured exchanges to a replay envelope and produces them through a Producer seam. The broker client composes in; this crate has no broker dependency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+osproxy-capture.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+
+[lints]
+workspace = true

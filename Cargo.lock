@@ -1517,6 +1517,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "osproxy-capture"
+version = "0.0.0"
+dependencies = [
+ "osproxy-spi",
+]
+
+[[package]]
 name = "osproxy-config"
 version = "0.0.0"
 
@@ -1556,6 +1563,15 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "osproxy-kafka"
+version = "0.0.0"
+dependencies = [
+ "osproxy-capture",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1604,6 +1620,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "osproxy-bench",
+ "osproxy-capture",
  "osproxy-config",
  "osproxy-core",
  "osproxy-engine",

@@ -60,6 +60,8 @@ flowchart TB
 | **osproxy-observe** | Shape-only causal traces, the diagnostics **directive** model (level/targeting/TTL/sampling), `/debug/explain` assembly, break-glass tape, the OTLP `resource_spans` encoder, `/metrics` snapshot, the `DirectiveStore`/`SpanExporter`/`DirectiveVerifier` seams. | core |
 | **osproxy-control** | The watched-store **client seams** for the placement table and diagnostics directives (epoch-aware). Ships seams + reference impls, not a concrete distributed store. | core |
 | **osproxy-otlp** | `OtlpHttpExporter`, which POSTs encoded spans to an OTLP collector, fire-and-forget hardened. | observe, core |
+| **osproxy-capture** | The `Capture` seam for tenant-agnostic, full-fidelity traffic capture (`CaptureRecord`, `NoCapture`, the `RedactingCapture` decorator, `MemoryCapture`). A low leaf with no broker dependency, so an external recorder can implement it. | spi |
+| **osproxy-kafka** | Queue-backed capture: the `CaptureEnvelope` replay format, a `Producer` seam, `KafkaCapture`, and an in-memory producer. The actual Kafka client composes in as a `Producer` impl, so no broker dependency lives in the tree. | capture |
 | **osproxy-config** | Typed config load/validate (file → env → flags), all defaults applied once. No business logic. | core |
 | **osproxy-server** | The `osproxy` binary: `main`, signal handling, graceful drain, and the **reference wiring** of every crate. Also home to the reference `TenancySpi`, `Authenticator`, and the HTTP handler (`AppHandler`). | everything above |
 | **osproxy-bench** | The pure NFR-P harness: latency percentiles, proxy-vs-baseline profiles, scalability curve, footprint. Emits the JSON an LLM judge consumes. | core (test-only) |

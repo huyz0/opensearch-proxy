@@ -8,7 +8,7 @@
 
 pub mod auth;
 mod bearer;
-pub mod capture;
+pub use osproxy_capture as capture;
 pub mod cursor;
 pub mod directive;
 pub mod directives_api;

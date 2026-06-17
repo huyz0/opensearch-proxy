@@ -3,8 +3,11 @@
 //! A capture proxy forwards each request to the upstream while recording the raw
 //! request and response to a durable stream, so a replayer can later apply that
 //! stream to another cluster (the OpenSearch Migration Assistant capture proxy).
-//! This is the seam: [`Capture`] receives each exchange; a queue writer (Kafka),
-//! a file recorder, or the in-memory [`MemoryCapture`] implement it.
+//! This crate is the seam: [`Capture`] receives each exchange; a queue writer
+//! (the `osproxy-kafka` crate), a file recorder, or the in-memory
+//! [`MemoryCapture`] implement it. It pulls in no broker dependency, so the seam
+//! is implementable from a leaf crate without dragging a Kafka client into the
+//! default build.
 //!
 //! **This is not the shape-only telemetry.** Everything else osproxy records is
 //! shapes/ids/names and safe to expose by construction. A capture record carries
@@ -13,10 +16,11 @@
 //! secure it (encryption, access control), and enable it deliberately, never by
 //! default. Redaction is composed in via [`RedactingCapture`] rather than baked
 //! into every recorder.
+#![deny(missing_docs)]
 
 use std::sync::{Arc, Mutex};
 
-use osproxy_spi::HttpMethod;
+pub use osproxy_spi::HttpMethod;
 
 /// One captured request/response exchange, borrowed for the duration of the
 /// [`Capture::capture`] call. Full fidelity: bodies and header values included.
@@ -40,7 +44,7 @@ pub struct CaptureRecord<'a> {
     pub response_body: &'a [u8],
 }
 
-/// Receives one record per forwarded request. The "other SPI" a capture proxy
+/// Receives one record per forwarded request. The recorder a capture proxy
 /// provides: a queue writer implements this.
 ///
 /// Implementations MUST NOT panic. `capture` is called inline after the response
@@ -68,9 +72,19 @@ impl Capture for NoCapture {
     fn capture(&self, _record: &CaptureRecord<'_>) {}
 }
 
-/// Strips the `Authorization` header before the wrapped capture sees the record,
-/// reusing the same removal the data plane applies. Composition: redaction is a
-/// layer over any recorder, not a feature each recorder reimplements.
+/// The header list with any `Authorization` header removed (case-insensitive).
+#[must_use]
+pub fn without_authorization(headers: &[(String, String)]) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case("authorization"))
+        .cloned()
+        .collect()
+}
+
+/// Strips the `Authorization` header before the wrapped capture sees the record.
+/// Composition: redaction is a layer over any recorder, not a feature each
+/// recorder reimplements.
 ///
 /// This removes the credential only. The bodies remain full-fidelity (a replay
 /// needs them); securing the stream itself is the operator's responsibility.
@@ -91,7 +105,7 @@ impl<C: Capture> Capture for RedactingCapture<C> {
         self.inner.enabled()
     }
     fn capture(&self, record: &CaptureRecord<'_>) {
-        let safe_headers = crate::bearer::without_authorization(record.headers);
+        let safe_headers = without_authorization(record.headers);
         let redacted = CaptureRecord {
             headers: &safe_headers,
             ..*record
@@ -121,6 +135,23 @@ pub struct OwnedCapture {
     pub response_body: Vec<u8>,
 }
 
+impl OwnedCapture {
+    /// Copies a borrowed record into an owned one.
+    #[must_use]
+    pub fn from_record(record: &CaptureRecord<'_>) -> Self {
+        Self {
+            request_id: record.request_id.to_owned(),
+            method: record.method,
+            path: record.path.to_owned(),
+            query: record.query.map(str::to_owned),
+            headers: record.headers.to_vec(),
+            body: record.body.to_vec(),
+            response_status: record.response_status,
+            response_body: record.response_body.to_vec(),
+        }
+    }
+}
+
 /// A reference [`Capture`] that keeps exchanges in memory. For tests and local
 /// inspection; a real deployment writes to a durable queue.
 #[derive(Clone, Default, Debug)]
@@ -147,20 +178,10 @@ impl MemoryCapture {
 
 impl Capture for MemoryCapture {
     fn capture(&self, record: &CaptureRecord<'_>) {
-        let owned = OwnedCapture {
-            request_id: record.request_id.to_owned(),
-            method: record.method,
-            path: record.path.to_owned(),
-            query: record.query.map(str::to_owned),
-            headers: record.headers.to_vec(),
-            body: record.body.to_vec(),
-            response_status: record.response_status,
-            response_body: record.response_body.to_vec(),
-        };
         self.records
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(owned);
+            .push(OwnedCapture::from_record(record));
     }
 }
 

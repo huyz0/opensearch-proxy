@@ -24,6 +24,7 @@ fips = ["osproxy-transport/fips", "dep:aws-lc-rs"]
 
 [dependencies]
 osproxy-core.workspace = true
+osproxy-capture.workspace = true
 osproxy-config.workspace = true
 osproxy-engine.workspace = true
 osproxy-observe.workspace = true

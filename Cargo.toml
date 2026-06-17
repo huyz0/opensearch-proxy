@@ -12,6 +12,8 @@ members = [
     "crates/osproxy-otlp",
     "crates/osproxy-engine",
     "crates/osproxy-config",
+    "crates/osproxy-capture",
+    "crates/osproxy-kafka",
     "crates/osproxy-server",
     "crates/osproxy-bench",
     "xtask",
@@ -40,6 +42,8 @@ osproxy-observe = { path = "crates/osproxy-observe" }
 osproxy-otlp = { path = "crates/osproxy-otlp" }
 osproxy-engine = { path = "crates/osproxy-engine" }
 osproxy-config = { path = "crates/osproxy-config" }
+osproxy-capture = { path = "crates/osproxy-capture" }
+osproxy-kafka = { path = "crates/osproxy-kafka" }
 osproxy-bench = { path = "crates/osproxy-bench" }
 
 # Third-party (pinned conservatively; add as milestones need them).

@@ -21,10 +21,10 @@ use osproxy_tenancy::TenancyRouter;
 use osproxy_transport::{IngressHandler, IngressRequest, IngressResponse};
 
 use crate::auth::AllowAllAuthorizer;
-use crate::capture::{Capture, CaptureRecord, NoCapture};
 use crate::directives_api::decode_directive_set;
 use crate::log::{NoLog, RequestLog};
 use crate::tenancy::ReferenceTenancy;
+use osproxy_capture::{Capture, CaptureRecord, NoCapture};
 
 /// The privileged fleet-directive admin channel: a shared store to publish into,
 /// gated by a bearer token, with a clock to resolve relative TTLs.

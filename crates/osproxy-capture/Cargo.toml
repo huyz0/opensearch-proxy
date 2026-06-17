@@ -1,0 +1,15 @@
+[package]
+name = "osproxy-capture"
+description = "The traffic-capture seam: a Capture trait an external recorder (e.g. a Kafka writer) implements, with composable redaction. No broker dependency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+osproxy-spi.workspace = true
+
+[lints]
+workspace = true
