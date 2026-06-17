@@ -10,7 +10,7 @@
 use osproxy_core::{ClusterId, Epoch, FieldName, IndexName, PartitionId};
 use osproxy_spi::{
     DocIdRule, IdTemplate, InjectedField, InjectedValue, JsonPath, PartitionKeySpec, Placement,
-    PlacementAt, SensitivitySpec, SpiError, TenancySpi,
+    PlacementAt, SpiError, TenancySpi,
 };
 
 /// The injected tenancy field name.
@@ -63,9 +63,9 @@ impl TenancySpi for ReferenceTenancy {
         )]
     }
 
-    fn sensitive_fields(&self) -> SensitivitySpec {
-        SensitivitySpec::none()
-    }
+    // `sensitive_fields` is left at the deny-by-default `all_sensitive`: this
+    // tenancy carries real tenant payloads, so every value is redacted unless a
+    // future revision allow-lists a known-safe field.
 
     fn cluster_endpoint(&self, cluster: &ClusterId) -> Option<String> {
         // The cursor-affinity path routes by cluster id with no placement; resolve

@@ -92,9 +92,15 @@ pub trait TenancySpi: Send + Sync + 'static {
     /// chosen here (the SPI decides them).
     fn injected_fields(&self) -> Vec<InjectedField>;
 
-    /// Declares which fields are sensitive, driving value-suppression so
-    /// observability never captures these values (NFR-S2).
-    fn sensitive_fields(&self) -> SensitivitySpec;
+    /// Declares which field *values* observability may capture, driving
+    /// value-suppression (NFR-S2). Deny-by-default: the standard implementation
+    /// returns [`SensitivitySpec::all_sensitive`] (everything redacted) and
+    /// allow-lists known-safe fields with [`SensitivitySpec::allowing`]. The
+    /// default here is `all_sensitive`, so a tenancy that does not override it
+    /// leaks nothing.
+    fn sensitive_fields(&self) -> SensitivitySpec {
+        SensitivitySpec::all_sensitive()
+    }
 
     /// Resolves a partition to its current placement and the epoch it was read
     /// at. NOT a pure function — migration mutates the placement state.

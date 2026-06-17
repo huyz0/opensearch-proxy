@@ -103,9 +103,9 @@ fn resolve_values(
             let value = match &field.value {
                 InjectedValue::Constant(v) => v.clone(),
                 InjectedValue::PartitionId => Value::String(partition.to_owned()),
-                InjectedValue::FromPrincipal(_) => {
+                InjectedValue::FromPrincipal(_) | InjectedValue::FromHeader(_) => {
                     return Err(RequestError::Internal {
-                        reason: "injected principal value reached the engine unresolved",
+                        reason: "context-derived injected value reached the engine unresolved",
                     })
                 }
             };

@@ -177,42 +177,96 @@ impl InjectedField {
 /// concrete value, so a new kind should force the resolver to be updated.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum InjectedValue {
-    /// The resolved partition id.
+    /// The resolved partition id. This is the **isolation** value: the read path
+    /// filters on it, so it must be deterministic (the partition), not
+    /// context-derived. Exactly the fields whose value is `PartitionId` drive
+    /// read isolation.
     PartitionId,
     /// A fixed JSON value, the same for every document.
     Constant(JsonValue),
-    /// A named attribute of the authenticated principal.
+    /// A named attribute of the authenticated principal, resolved per request.
+    /// A *decorative* value: injected on write and stripped on read, never used
+    /// as a read filter (its value can differ between the write and the read).
     FromPrincipal(String),
+    /// A named request header, resolved per request. Decorative like
+    /// [`InjectedValue::FromPrincipal`]: injected and stripped, never filtered.
+    /// Lets injection be dynamic from request context (e.g. a `_region` field
+    /// taken from an `x-region` header set by an upstream gateway).
+    FromHeader(String),
 }
 
-/// Declares which document fields are sensitive.
+/// Declares which document field *values* observability may capture.
 ///
-/// Drives value-suppression so observability never captures these values
-/// (NFR-S2). The injected partition fields are implicitly sensitive; this
-/// covers tenant payload fields the implementer wants redacted.
-#[derive(Clone, PartialEq, Eq, Default, Debug)]
+/// Drives value-suppression so observability never leaks tenant values (NFR-S2).
+/// The model is **deny-by-default (opt-out)**: every field is treated as
+/// sensitive unless explicitly allow-listed as safe. A field added to your
+/// documents tomorrow is protected automatically — you opt specific, known-safe
+/// fields *out* of redaction rather than remembering to opt every risky one in.
+///
+/// Use [`SensitivitySpec::allowing`] to name the shape-only, non-tenant fields
+/// that are safe to capture; [`SensitivitySpec::all_sensitive`] (the default)
+/// redacts everything; [`SensitivitySpec::nothing_sensitive`] is the explicit
+/// opt-out for data that carries no tenant values at all (e.g. test fixtures).
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SensitivitySpec {
-    /// Fields whose *values* must never appear in telemetry.
-    pub fields: Vec<FieldName>,
+    /// Fields explicitly safe to capture. Consulted only in deny-by-default mode.
+    safe: Vec<FieldName>,
+    /// When `true` (default), every field not in `safe` is sensitive. When
+    /// `false`, nothing is sensitive (the explicit opt-out).
+    deny_by_default: bool,
+}
+
+impl Default for SensitivitySpec {
+    fn default() -> Self {
+        Self::all_sensitive()
+    }
 }
 
 impl SensitivitySpec {
-    /// A spec marking no extra fields sensitive.
+    /// Deny by default: every field's value is sensitive. The safe default.
+    #[must_use]
+    pub fn all_sensitive() -> Self {
+        Self {
+            safe: Vec::new(),
+            deny_by_default: true,
+        }
+    }
+
+    /// Deny by default, except the `safe` fields (known shape-only / non-tenant
+    /// values) which observability may capture.
+    #[must_use]
+    pub fn allowing(safe: Vec<FieldName>) -> Self {
+        Self {
+            safe,
+            deny_by_default: true,
+        }
+    }
+
+    /// Treat nothing as sensitive. An explicit opt-out for data that carries no
+    /// tenant values (e.g. test fixtures); never appropriate for tenant payloads.
+    #[must_use]
+    pub fn nothing_sensitive() -> Self {
+        Self {
+            safe: Vec::new(),
+            deny_by_default: false,
+        }
+    }
+
+    /// Alias for [`SensitivitySpec::nothing_sensitive`].
     #[must_use]
     pub fn none() -> Self {
-        Self::default()
+        Self::nothing_sensitive()
     }
 
-    /// Marks `fields` sensitive.
-    #[must_use]
-    pub fn new(fields: Vec<FieldName>) -> Self {
-        Self { fields }
-    }
-
-    /// Whether `field` is declared sensitive.
+    /// Whether `field`'s value is sensitive (deny-by-default: sensitive unless
+    /// explicitly allow-listed as safe).
     #[must_use]
     pub fn is_sensitive(&self, field: &FieldName) -> bool {
-        self.fields.contains(field)
+        if self.deny_by_default {
+            !self.safe.contains(field)
+        } else {
+            false
+        }
     }
 }
 
@@ -239,10 +293,23 @@ mod tests {
     }
 
     #[test]
-    fn sensitivity_spec_membership() {
-        let spec = SensitivitySpec::new(vec![FieldName::from("ssn")]);
-        assert!(spec.is_sensitive(&FieldName::from("ssn")));
-        assert!(!spec.is_sensitive(&FieldName::from("name")));
-        assert!(SensitivitySpec::none().fields.is_empty());
+    fn sensitivity_is_deny_by_default_with_an_allow_list() {
+        // Deny-by-default: an unknown field is sensitive, even one never named.
+        let spec = SensitivitySpec::allowing(vec![FieldName::from("status")]);
+        assert!(
+            spec.is_sensitive(&FieldName::from("ssn")),
+            "unknown ⇒ sensitive"
+        );
+        assert!(spec.is_sensitive(&FieldName::from("brand_new_field")));
+        assert!(
+            !spec.is_sensitive(&FieldName::from("status")),
+            "explicitly allow-listed ⇒ safe"
+        );
+        // `all_sensitive` (the default) redacts everything.
+        assert!(SensitivitySpec::all_sensitive().is_sensitive(&FieldName::from("anything")));
+        assert_eq!(SensitivitySpec::default(), SensitivitySpec::all_sensitive());
+        // The explicit opt-out treats nothing as sensitive.
+        assert!(!SensitivitySpec::nothing_sensitive().is_sensitive(&FieldName::from("ssn")));
+        assert!(!SensitivitySpec::none().is_sensitive(&FieldName::from("ssn")));
     }
 }

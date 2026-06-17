@@ -9,7 +9,7 @@
 use osproxy_core::FieldName;
 use osproxy_rewrite::{map_logical_to_physical, map_physical_to_logical, strip_fields, wrap_query};
 use osproxy_sink::{DocOp, ReadOp, SearchOp, WriteOp};
-use osproxy_spi::{BodyTransform, DocIdRule, InjectedField, InjectedValue};
+use osproxy_spi::{BodyTransform, DocIdRule, InjectedValue};
 use osproxy_tenancy::Resolved;
 use serde_json::Value;
 
@@ -227,22 +227,15 @@ fn filter_terms(transform: &BodyTransform, partition: &str) -> Vec<(FieldName, V
         }
         BodyTransform::None | BodyTransform::ConstructId(_) => &[],
     };
+    // Isolation filters on the partition field(s) only. Decorative injected fields
+    // (constants, principal/header-derived) are stripped from hits but never
+    // filtered: their value can differ between the write and this read, so a term
+    // on them would wrongly exclude the tenant's own documents.
     fields
         .iter()
-        .map(|field| (field.name.clone(), injected_value(field, partition)))
+        .filter(|field| matches!(field.value, InjectedValue::PartitionId))
+        .map(|field| (field.name.clone(), Value::String(partition.to_owned())))
         .collect()
-}
-
-/// The concrete value of an injected field (the adapter resolves these to
-/// constants; `PartitionId`/`FromPrincipal` fall back to the partition here for
-/// robustness — filtering on the partition is always isolating, never a leak).
-fn injected_value(field: &InjectedField, partition: &str) -> Value {
-    match &field.value {
-        InjectedValue::Constant(v) => v.clone(),
-        InjectedValue::PartitionId | InjectedValue::FromPrincipal(_) => {
-            Value::String(partition.to_owned())
-        }
-    }
 }
 
 /// Extracts the read shape (injected field names + id rule) from the body
@@ -274,127 +267,5 @@ fn field_names(fields: &[osproxy_spi::InjectedField]) -> Vec<FieldName> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use osproxy_core::{ClusterId, Epoch, IndexName, PartitionId, Target};
-    use osproxy_spi::{IdTemplate, InjectedField, InjectedValue, Protocol, RouteDecision};
-    use serde_json::json;
-
-    fn resolved(transform: BodyTransform) -> Resolved {
-        Resolved {
-            partition: PartitionId::from("acme"),
-            decision: RouteDecision {
-                target: Target::new(ClusterId::from("eu-1"), IndexName::from("shared")),
-                upstream_protocol: Protocol::Http1,
-                header_ops: Vec::new(),
-                body_transform: transform,
-                epoch: Epoch::new(4),
-            },
-            migration: osproxy_spi::MigrationPhase::Settled,
-        }
-    }
-
-    fn shared_transform() -> BodyTransform {
-        BodyTransform::Both {
-            inject: vec![InjectedField::new(
-                FieldName::from("_tenant"),
-                InjectedValue::Constant(json!("acme")),
-            )],
-            id: DocIdRule::new(IdTemplate::new("{partition}:{body.id}")).with_routing(true),
-        }
-    }
-
-    #[test]
-    fn read_op_maps_logical_id_and_sets_routing() {
-        let (op, shape) = build_read_op(&resolved(shared_transform()), "7").unwrap();
-        assert_eq!(op.id, "acme:7");
-        assert_eq!(op.routing.as_deref(), Some("acme"));
-        assert_eq!(op.target.index.as_str(), "shared");
-        assert_eq!(shape.inject_names, vec![FieldName::from("_tenant")]);
-    }
-
-    #[test]
-    fn read_op_without_id_rule_uses_client_id() {
-        let (op, _) = build_read_op(&resolved(BodyTransform::None), "raw-id").unwrap();
-        assert_eq!(op.id, "raw-id");
-        assert!(op.routing.is_none());
-    }
-
-    #[test]
-    fn found_response_is_the_logical_document() {
-        let upstream = br#"{
-            "_index": "shared",
-            "_id": "acme:7",
-            "_routing": "acme",
-            "found": true,
-            "_source": { "_tenant": "acme", "msg": "hi" }
-        }"#;
-        let body = shape_found(upstream, "orders", "7", &[FieldName::from("_tenant")]).unwrap();
-        let doc: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(doc["_index"], "orders");
-        assert_eq!(doc["_id"], "7");
-        assert!(doc.get("_routing").is_none());
-        assert!(doc["_source"].get("_tenant").is_none());
-        assert_eq!(doc["_source"]["msg"], "hi");
-    }
-
-    #[test]
-    fn not_found_body_is_logical() {
-        let doc: Value = serde_json::from_slice(&not_found_body("orders", "7")).unwrap();
-        assert_eq!(doc["_index"], "orders");
-        assert_eq!(doc["_id"], "7");
-        assert_eq!(doc["found"], false);
-    }
-
-    #[test]
-    fn delete_op_maps_logical_id_and_sets_routing() {
-        let op = build_delete_op(&resolved(shared_transform()), "7").unwrap();
-        assert_eq!(op.epoch, Epoch::new(4));
-        let DocOp::Delete { id, routing } = &op.doc else {
-            unreachable!("delete-by-id produces a Delete op")
-        };
-        assert_eq!(id, "acme:7");
-        assert_eq!(routing.as_deref(), Some("acme"));
-    }
-
-    #[test]
-    fn delete_response_reports_logical_terms() {
-        let ok: Value = serde_json::from_slice(&shape_delete("orders", "7", 200)).unwrap();
-        assert_eq!(ok["_index"], "orders");
-        assert_eq!(ok["_id"], "7");
-        assert_eq!(ok["result"], "deleted");
-        let miss: Value = serde_json::from_slice(&shape_delete("orders", "7", 404)).unwrap();
-        assert_eq!(miss["result"], "not_found");
-    }
-
-    #[test]
-    fn search_op_wraps_client_query_in_the_partition_filter() {
-        let (op, _) = build_search_op(
-            &resolved(shared_transform()),
-            br#"{"query":{"match_all":{}}}"#,
-        )
-        .unwrap();
-        let q: Value = serde_json::from_slice(&op.body).unwrap();
-        assert_eq!(q["query"]["bool"]["filter"][0]["term"]["_tenant"], "acme");
-        assert_eq!(q["query"]["bool"]["must"][0]["match_all"], json!({}));
-    }
-
-    #[test]
-    fn hits_are_stripped_to_the_logical_view() {
-        let upstream = br#"{
-            "hits": { "total": { "value": 1 }, "hits": [
-                { "_index": "shared", "_id": "acme:7", "_routing": "acme",
-                  "_source": { "_tenant": "acme", "msg": "hi" } }
-            ] }
-        }"#;
-        let shape = read_shape(&shared_transform());
-        let body = shape_hits(upstream, "orders", "acme", &shape).unwrap();
-        let doc: Value = serde_json::from_slice(&body).unwrap();
-        let hit = &doc["hits"]["hits"][0];
-        assert_eq!(hit["_index"], "orders");
-        assert_eq!(hit["_id"], "7");
-        assert!(hit.get("_routing").is_none());
-        assert!(hit["_source"].get("_tenant").is_none());
-        assert_eq!(hit["_source"]["msg"], "hi");
-    }
-}
+#[path = "read_tests.rs"]
+mod tests;

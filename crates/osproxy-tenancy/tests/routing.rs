@@ -115,13 +115,12 @@ async fn shared_index_ingest_resolves_target_inject_and_id() {
         d.body_transform
     );
     if let BodyTransform::Both { inject, id } = &d.body_transform {
-        // Injected value resolved to the concrete partition id (a constant).
+        // The partition isolation field stays symbolic (`PartitionId`) through
+        // resolution, so the read path can filter on it; downstream stages
+        // resolve it to the concrete partition when injecting.
         assert_eq!(inject.len(), 1);
         assert_eq!(inject[0].name, FieldName::from("_tenant"));
-        assert_eq!(
-            inject[0].value,
-            InjectedValue::Constant(serde_json::Value::from("acme"))
-        );
+        assert_eq!(inject[0].value, InjectedValue::PartitionId);
         assert!(id.set_routing);
         assert!(id.template.references_partition());
     }

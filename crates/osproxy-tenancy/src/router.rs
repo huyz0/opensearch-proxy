@@ -282,24 +282,35 @@ fn target_for(placement: &Placement, logical_index: &str) -> Target {
     }
 }
 
-/// Resolves each [`InjectedValue`] to a concrete constant, so downstream stages
-/// inject literals and need no access to the principal or partition.
+/// Resolves the *context-derived* injected values to constants, using the
+/// request. The `PartitionId` value is left as-is: it is the read-isolation key,
+/// and downstream stages resolve it to the partition, so the read path can tell
+/// the isolation field apart from the decorative (context-derived) ones.
 fn resolve_inject(
     fields: &[InjectedField],
-    partition: &PartitionId,
+    _partition: &PartitionId,
     ctx: &RequestCtx<'_>,
 ) -> Result<Vec<InjectedField>, SpiError> {
     fields
         .iter()
         .map(|field| {
             let value = match &field.value {
-                InjectedValue::PartitionId => Value::String(partition.as_str().to_owned()),
+                // The isolation field stays symbolic; never filtered on a
+                // context-derived value (which would differ on read).
+                InjectedValue::PartitionId => return Ok(field.clone()),
                 InjectedValue::Constant(constant) => constant.clone(),
                 InjectedValue::FromPrincipal(attr) => ctx
                     .principal()
                     .attr(attr)
                     .map(|v| Value::String(v.to_owned()))
                     .ok_or_else(|| SpiError::PrincipalAttrMissing { attr: attr.clone() })?,
+                InjectedValue::FromHeader(name) => ctx
+                    .headers()
+                    .get(name)
+                    .map(|v| Value::String(v.to_owned()))
+                    .ok_or_else(|| SpiError::HeaderMissing {
+                        header: name.clone(),
+                    })?,
             };
             Ok(InjectedField::new(
                 field.name.clone(),

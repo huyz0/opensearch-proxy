@@ -266,9 +266,13 @@ fn transform_parts<'a>(
 fn constant(value: &InjectedValue, partition: &str) -> Value {
     match value {
         InjectedValue::Constant(v) => v.clone(),
-        InjectedValue::PartitionId | InjectedValue::FromPrincipal(_) => {
-            Value::String(partition.to_owned())
-        }
+        // The adapter resolves context-derived values to constants before this
+        // point; `PartitionId` resolves here so isolation never depends on an
+        // empty value. The decorative variants fall back to the partition only as
+        // unreachable robustness.
+        InjectedValue::PartitionId
+        | InjectedValue::FromPrincipal(_)
+        | InjectedValue::FromHeader(_) => Value::String(partition.to_owned()),
     }
 }
 

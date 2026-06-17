@@ -1,5 +1,5 @@
 use super::*;
-use osproxy_core::{ClusterId, EndpointKind, PrincipalId, RequestId};
+use osproxy_core::{ClusterId, EndpointKind, FieldName, PrincipalId, RequestId};
 use osproxy_spi::{
     DocIdRule, HeaderView, HttpMethod, IdTemplate, PartitionKeySpec, PlacementAt, Principal,
     Protocol, SensitivitySpec,
@@ -141,4 +141,62 @@ async fn a_code_extractor_decodes_the_partition_and_wins_over_the_declarative_so
     );
     let partition = router.resolve_partition(&ctx, None).expect("extracted");
     assert_eq!(partition, PartitionId::from("acme"));
+}
+
+#[test]
+fn resolve_inject_keeps_the_partition_field_symbolic_and_resolves_a_header_field() {
+    // A SharedIndex inject list: the isolation field (PartitionId) plus a
+    // decorative field whose value comes from a request header.
+    let fields = vec![
+        InjectedField::new(FieldName::from("_tenant"), InjectedValue::PartitionId),
+        InjectedField::new(
+            FieldName::from("_region"),
+            InjectedValue::FromHeader("x-region".to_owned()),
+        ),
+    ];
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r1");
+    let headers = vec![("x-region".to_owned(), "eu".to_owned())];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::IngestDoc,
+        Protocol::Http1,
+        "logical",
+        HeaderView::new(&headers),
+        b"{}",
+    );
+
+    let resolved = resolve_inject(&fields, &PartitionId::from("acme"), &ctx).expect("resolves");
+    // The partition field stays symbolic so the read path filters on it.
+    assert_eq!(resolved[0].value, InjectedValue::PartitionId);
+    // The header field is resolved to a concrete constant from this request.
+    assert_eq!(
+        resolved[1].value,
+        InjectedValue::Constant(serde_json::Value::from("eu"))
+    );
+}
+
+#[test]
+fn resolve_inject_errors_when_a_required_header_is_absent() {
+    let fields = vec![InjectedField::new(
+        FieldName::from("_region"),
+        InjectedValue::FromHeader("x-region".to_owned()),
+    )];
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r1");
+    let headers: Vec<(String, String)> = vec![];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::IngestDoc,
+        Protocol::Http1,
+        "logical",
+        HeaderView::new(&headers),
+        b"{}",
+    );
+    let err = resolve_inject(&fields, &PartitionId::from("acme"), &ctx).unwrap_err();
+    assert!(matches!(err, SpiError::HeaderMissing { header } if header == "x-region"));
 }

@@ -63,13 +63,24 @@ impl TenancySpi for MyTenancy {
     }
 
     /// Fields injected on ingest and stripped on read (names chosen by you).
+    /// `PartitionId` is the isolation field the read path filters on. Other
+    /// values are decorative: injected and stripped, and may be context-derived.
     fn injected_fields(&self) -> Vec<InjectedField> {
-        vec![InjectedField::new(FieldName::from("_tenant"), InjectedValue::PartitionId)]
+        vec![
+            InjectedField::new(FieldName::from("_tenant"), InjectedValue::PartitionId),
+            // Dynamic from request context: e.g. a region set by a gateway header.
+            InjectedField::new(
+                FieldName::from("_region"),
+                InjectedValue::FromHeader("x-region".into()),
+            ),
+        ]
     }
 
-    /// Fields whose VALUES must never appear in any trace (NFR-S2).
+    /// Which field VALUES observability may capture (NFR-S2). Deny-by-default:
+    /// everything is sensitive unless allow-listed. `all_sensitive()` is the
+    /// default if you don't override this at all.
     fn sensitive_fields(&self) -> SensitivitySpec {
-        SensitivitySpec::new(vec![FieldName::from("ssn")])
+        SensitivitySpec::allowing(vec![FieldName::from("status")]) // status is safe
     }
 
     /// Resolve a partition to its current placement, the epoch it was read at,
@@ -99,8 +110,13 @@ impl TenancySpi for MyTenancy {
   with `PartitionUnresolved`.
 - In `SharedIndex` mode the partition id **must** be part of the constructed `_id`
   (the router enforces this and fails closed otherwise; see [Architecture](03-architecture.md)).
-- `injected_fields` names and `sensitive_fields` must be **stable** for a given
-  logical-index version, so read-path strip stays symmetric with write-path inject.
+- `injected_fields` names must be **stable** for a given logical-index version, so
+  read-path strip stays symmetric with write-path inject. Read isolation filters on
+  the `PartitionId` field only; decorative fields (`Constant`, `FromPrincipal`,
+  `FromHeader`) are injected and stripped but never filtered, so their value may be
+  context-dependent.
+- `sensitive_fields` is **deny-by-default**: every value is redacted unless you
+  allow-list it as safe. A field you add later is protected automatically.
 
 ### Partition key sources
 

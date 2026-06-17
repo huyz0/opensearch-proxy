@@ -67,6 +67,14 @@ pub enum SpiError {
         attr: String,
     },
 
+    /// An injected field draws its value from a request header the request does
+    /// not carry. Surfaced as a routing failure rather than injecting a null.
+    #[error("request is missing a header required by an injected field")]
+    HeaderMissing {
+        /// The missing header name.
+        header: String,
+    },
+
     /// A `SharedIndex` placement was configured with a doc-id rule that does not
     /// include the partition id, which would allow cross-tenant id collisions
     /// (`docs/03`). A configuration error, surfaced as a routing failure.
@@ -88,7 +96,8 @@ impl SpiError {
             // dedicated config code is added (additive, see docs/08 §7).
             Self::UnsupportedEndpoint { .. }
             | Self::IdRuleMissingPartition
-            | Self::PrincipalAttrMissing { .. } => ErrorCode::UnsupportedEndpoint,
+            | Self::PrincipalAttrMissing { .. }
+            | Self::HeaderMissing { .. } => ErrorCode::UnsupportedEndpoint,
         }
     }
 
