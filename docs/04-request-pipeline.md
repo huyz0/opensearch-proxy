@@ -161,8 +161,14 @@ result:
 - It is the **idempotency key** the downstream applier dedups on (delivery is
   at-least-once), and the handle a client uses to correlate any
   downstream-emitted outcome.
-- Bulk granularity (per-item ids vs. `batch_id` + line index) is owned by the
-  bulk demux; the header alone addresses single-doc/delete.
+- **Bulk** (`_bulk`) is supported in async mode: each item is resolved and
+  transformed exactly as the sync demux, then enqueued individually with a
+  per-item `op_id` of `{batch_id}:{ordinal}` (the `X-Op-Id`/request-id batch id
+  plus the line index). The response is the normal positional `items[]`, each a
+  `202 queued` line carrying its `op_id`; a per-item `update` is rejected in place
+  (`400`, scripted/partial update is not honorable async), and a queue refusal is
+  a per-item `503`. A whole-request refusal (no queue, or a query-level CAS param)
+  returns the generic envelope rather than a partially-applied bulk.
 
 ### Queue wire format (op envelope)
 
@@ -174,9 +180,10 @@ reads the metadata and forwards `body` to OpenSearch verbatim with that
 the contract.
 
 - **Body encoding**: **CBOR** (RFC 8949) by default — compact binary, ingested
-  natively by OpenSearch — with JSON selectable for debuggability. Single-doc and
-  delete use this; **bulk stays JSON** for now (binary NDJSON framing is more
-  involved).
+  natively by OpenSearch — with JSON selectable for debuggability. This applies
+  uniformly: a bulk request is demuxed into individual ops, so each bulk item is
+  its own CBOR-bodied envelope, the same as a single-doc write (there is no
+  binary-NDJSON framing to worry about).
 - **Key**: the Kafka record is keyed by `partition`, so all ops for one logical
   partition keep their order within a partition through the fan-out.
 - **Durability**: the producer is broker-acknowledged — the `202` is returned

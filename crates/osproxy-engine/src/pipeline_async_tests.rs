@@ -267,3 +267,63 @@ async fn async_rejects_scripted_update_path_with_400() {
     assert_eq!(resp.status, 400);
     assert!(queue.writes.lock().unwrap().is_empty());
 }
+
+// --- async bulk (docs/04 §9) ----------------------------------------------
+
+const ASYNC_BULK: &[u8] = b"{\"index\":{\"_id\":\"1\"}}\n{\"tenant_id\":\"acme\",\"id\":1}\n{\"update\":{\"_id\":\"acme:9\"}}\n{\"doc\":{\"x\":1}}\n{\"delete\":{\"_id\":\"acme:2\"}}\n";
+
+#[tokio::test]
+async fn async_bulk_enqueues_each_item_with_a_per_item_op_id() {
+    let queue = Arc::new(RecordingQueue::default());
+    let p = pipeline().with_write_queue(Arc::clone(&queue) as Arc<dyn WriteQueue>);
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r");
+    let headers = vec![header("x-write-mode", "async"), header("x-tenant", "acme")];
+    let c = ctx(
+        &principal,
+        &rid,
+        &headers,
+        EndpointKind::IngestBulk,
+        ASYNC_BULK,
+    );
+    let resp = p.handle(&c).await.unwrap();
+    assert_eq!(resp.status, 200);
+
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    // index → queued with op id "r:0"
+    assert_eq!(items[0]["index"]["status"], 202);
+    assert_eq!(items[0]["index"]["result"], "queued");
+    assert_eq!(items[0]["index"]["op_id"], "r:0");
+    // update → rejected 400, not enqueued
+    assert_eq!(items[1]["update"]["status"], 400);
+    // delete → queued with op id "r:2"
+    assert_eq!(items[2]["delete"]["status"], 202);
+    assert_eq!(items[2]["delete"]["op_id"], "r:2");
+    assert_eq!(body["errors"], true); // the rejected update sets the flag
+
+    // Only the two honorable ops were enqueued, keyed by their partition.
+    let writes = queue.writes.lock().unwrap();
+    assert_eq!(writes.len(), 2);
+    assert!(writes.iter().all(|w| w.partition_key == "acme"));
+    assert_eq!(writes[0].op_id, "r:0");
+    assert_eq!(writes[1].op_id, "r:2");
+}
+
+#[tokio::test]
+async fn async_bulk_with_no_queue_is_refused_422() {
+    let p = pipeline(); // default NoQueue
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r");
+    let headers = vec![header("x-write-mode", "async"), header("x-tenant", "acme")];
+    let c = ctx(
+        &principal,
+        &rid,
+        &headers,
+        EndpointKind::IngestBulk,
+        ASYNC_BULK,
+    );
+    let resp = p.handle(&c).await.unwrap();
+    assert_eq!(resp.status, 422);
+}

@@ -18,12 +18,16 @@ use std::collections::HashMap;
 
 use futures_util::stream::StreamExt as _;
 use osproxy_core::{PartitionId, Target};
-use osproxy_rewrite::parse_bulk;
+use osproxy_rewrite::{parse_bulk, BulkAction};
 use osproxy_sink::{OpResult, Sink, SinkError, WriteAck, WriteBatch};
 use osproxy_spi::RequestCtx;
 use osproxy_tenancy::{Resolved, Router};
 use serde_json::{json, Value};
 
+use crate::asyncwrite::{
+    op_id_for, unavailable_response, unsupported_async, unsupported_response, QueuedWrite,
+    WriteQueue,
+};
 use crate::bulkprep::{prepare, Prepared};
 use crate::error::RequestError;
 use crate::pipeline::PipelineResponse;
@@ -87,6 +91,101 @@ pub(crate) async fn ingest_bulk<R: Router, S: Sink>(
             reason: "serializing bulk response",
         })?,
     })
+}
+
+/// The async fan-out counterpart of [`ingest_bulk`] (`docs/04` §9): each item is
+/// resolved/transformed exactly as the sync path, then **durably enqueued** for
+/// downstream fan-out instead of dispatched, and reported positionally as
+/// `202 queued` with a per-item `op_id` (`{batch_id}:{ordinal}`).
+///
+/// Whole-request refusals (no queue, or a query-level unsupported op) return the
+/// generic envelope, never a partially-applied bulk. A per-item `update` is
+/// rejected in place (`400`): a scripted/partial update is not honorable async.
+///
+/// # Errors
+///
+/// Returns [`RequestError::Rewrite`] only if the whole body is unparseable.
+pub(crate) async fn ingest_bulk_async<R: Router>(
+    router: &R,
+    queue: &dyn WriteQueue,
+    ctx: &RequestCtx<'_>,
+    retry: crate::RetryPolicy,
+) -> Result<PipelineResponse, RequestError> {
+    let index = ctx.logical_index();
+    // A query-level unsupported op (optimistic concurrency) refuses the whole
+    // bulk; a missing queue refuses it too — never accepted-and-dropped.
+    if let Some(reason) = unsupported_async(ctx) {
+        return Ok(unsupported_response(reason, index));
+    }
+    if !queue.enabled() {
+        return Ok(unavailable_response(index));
+    }
+
+    let items = parse_bulk(ctx.body())?;
+    let batch_id = op_id_for(ctx, ctx.request_id());
+    let mut lines: Vec<Value> = vec![Value::Null; items.len()];
+    let mut cache: HashMap<(PartitionId, String), Resolved> = HashMap::new();
+
+    for (ordinal, item) in items.into_iter().enumerate() {
+        // A scripted/partial `_update` has no single current document to merge
+        // against under fan-out; reject it in place.
+        if matches!(item.action, BulkAction::Update) {
+            lines[ordinal] = json!({ "update": {
+                "_index": item.index.clone().unwrap_or_else(|| index.to_owned()),
+                "_id": item.id,
+                "status": 400,
+                "error": { "type": "unsupported_async" },
+            }});
+            continue;
+        }
+        match prepare(router, ctx, &mut cache, item, retry).await {
+            Ok(p) => {
+                let op_id = format!("{batch_id}:{ordinal}");
+                let write = QueuedWrite {
+                    op_id: op_id.clone(),
+                    partition_key: p.partition.as_str().to_owned(),
+                    batch: WriteBatch::single(p.op.clone()),
+                };
+                lines[ordinal] = match queue.enqueue(write).await {
+                    Ok(()) => queued_line(&p, &op_id),
+                    Err(_) => enqueue_failed_line(&p),
+                };
+            }
+            Err(fail) => lines[ordinal] = fail.into_line(),
+        }
+    }
+
+    let errors = lines.iter().any(is_error_line);
+    let body = json!({ "took": 0, "errors": errors, "items": lines });
+    Ok(PipelineResponse {
+        status: 200,
+        body: serde_json::to_vec(&body).map_err(|_| RequestError::Internal {
+            reason: "serializing bulk response",
+        })?,
+    })
+}
+
+/// The positioned `202 queued` line for an enqueued async op, carrying the
+/// per-item `op_id` the client correlates a downstream outcome against.
+fn queued_line(p: &Prepared, op_id: &str) -> Value {
+    json!({ p.action: {
+        "_index": p.logical_index,
+        "_id": p.logical_id,
+        "op_id": op_id,
+        "status": 202,
+        "result": "queued",
+    }})
+}
+
+/// The positioned `503` line for an op the queue refused (retryable; the same
+/// `op_id` makes a retry idempotent downstream).
+fn enqueue_failed_line(p: &Prepared) -> Value {
+    json!({ p.action: {
+        "_index": p.logical_index,
+        "_id": p.logical_id,
+        "status": 503,
+        "error": { "type": "enqueue_failed" },
+    }})
 }
 
 /// Flushes one target's sub-batch in place: re-check the migration write gate

@@ -89,6 +89,15 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         ctx: &RequestCtx<'_>,
         _trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
+        if self.write_mode(ctx) == WriteMode::Async {
+            return crate::bulk::ingest_bulk_async(
+                &self.router,
+                self.write_queue.as_ref(),
+                ctx,
+                self.retry,
+            )
+            .await;
+        }
         crate::bulk::ingest_bulk(&self.router, &self.sink, ctx, self.retry).await
     }
 
