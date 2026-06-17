@@ -34,6 +34,10 @@ pub enum EndpointKind {
     MultiGet,
     /// Delete by id: logical→physical id transform.
     DeleteById,
+    /// Delete by query (`_delete_by_query`): in async fan-out mode the proxy
+    /// runs the partition-scoped query, then enqueues a concrete delete per
+    /// match (`docs/04` §9). No synchronous implementation — rejected otherwise.
+    DeleteByQuery,
     /// Cursor lifecycle (scroll, PIT): affinity pinning.
     Cursor,
     /// Administrative endpoints (`_cat`, `_cluster`, …): pass-through allow-list
@@ -58,6 +62,7 @@ impl EndpointKind {
             Self::GetById => "GetById",
             Self::MultiGet => "MultiGet",
             Self::DeleteById => "DeleteById",
+            Self::DeleteByQuery => "DeleteByQuery",
             Self::Cursor => "Cursor",
             Self::Admin => "Admin",
             Self::Unknown => "Unknown",
@@ -78,6 +83,7 @@ impl EndpointKind {
             "GetById" => Some(Self::GetById),
             "MultiGet" => Some(Self::MultiGet),
             "DeleteById" => Some(Self::DeleteById),
+            "DeleteByQuery" => Some(Self::DeleteByQuery),
             "Cursor" => Some(Self::Cursor),
             "Admin" => Some(Self::Admin),
             "Unknown" => Some(Self::Unknown),
@@ -100,6 +106,7 @@ impl EndpointKind {
                 | Self::GetById
                 | Self::MultiGet
                 | Self::DeleteById
+                | Self::DeleteByQuery
                 | Self::Cursor
         )
     }

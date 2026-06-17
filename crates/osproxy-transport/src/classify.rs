@@ -85,6 +85,12 @@ pub fn classify(method: HttpMethod, path: &str) -> Classified {
             doc_id: None,
         },
         [index, "_bulk"] => classified(EndpointKind::IngestBulk, index),
+        // /{index}/_delete_by_query — only honorable in async fan-out mode, where
+        // the engine expands it to a delete per match; rejected otherwise
+        // (`docs/04` §9). `_update_by_query` is intentionally NOT classified — it
+        // needs a scripted read-modify-write the proxy cannot do, so it falls
+        // through to `Unknown` and is rejected.
+        [index, "_delete_by_query"] => classified(EndpointKind::DeleteByQuery, index),
         // Administrative endpoints (`_cat/*`, `_cluster/*`, `_nodes/*`): no tenancy
         // semantics, classified `Admin` so the engine can pass them through to an
         // operator-allow-listed cluster, or reject (the default). The full path is

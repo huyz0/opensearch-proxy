@@ -194,10 +194,16 @@ the contract.
 - **Optimistic concurrency** (`if_seq_no`/`if_primary_term`, `version`),
   **scripted/partial `_update`**, and **`_update_by_query`** cannot be honored
   async and are rejected (`400`) — they need read-modify-write against current
-  state the proxy cannot evaluate at enqueue time.
-- **`_delete_by_query`** is reject-by-default; an opt-in expansion mode (proxy
-  runs the query against the read source, caps the match set, enqueues a
-  concrete delete per match) is future work.
+  state the proxy cannot evaluate at enqueue time. `_update_by_query` is not even
+  classified (it falls through to `Unknown` and is rejected).
+- **`_delete_by_query`** is rejected by default, with an **opt-in expansion**
+  (`fanout_expand_delete_by_query`): in async mode the proxy runs the
+  **partition-scoped** query itself (the same mandatory isolation filter as a
+  normal search), caps the match set (refusing over the cap rather than partially
+  deleting), and enqueues a concrete delete per matched id — keeping the op stream
+  self-contained and idempotent. It returns a delete-by-query-shaped count where
+  `deleted` is what was durably enqueued (not yet applied). Sync mode, expansion
+  off, or no queue all reject (`400`/`422`).
 - **No status surface on the proxy.** Whether and how a failed apply is reported
   back is the downstream's responsibility (an outcome topic, an alert, a
   reconciler) — out of scope here. See [client handling](guide/09-async-clients.md).

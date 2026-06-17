@@ -37,6 +37,10 @@ fn fanout_parses_brokers_and_defaults_to_cbor_sync_plaintext() {
     );
     assert!(!fc.async_default, "sync is the default write mode");
     assert!(
+        !fc.expand_delete_by_query,
+        "delete-by-query expansion is opt-in"
+    );
+    assert!(
         fc.tls.is_none(),
         "no CA configured means a plaintext broker link"
     );
@@ -49,12 +53,14 @@ fn fanout_json_encoding_and_async_default_opt_in() {
         ("fanout_topic", "t"),
         ("fanout_body_encoding", "json"),
         ("fanout_async_default", "true"),
+        ("fanout_expand_delete_by_query", "true"),
     ])
     .unwrap()
     .fanout
     .unwrap();
     assert_eq!(fc.body_encoding, FanoutBodyEncoding::Json);
     assert!(fc.async_default);
+    assert!(fc.expand_delete_by_query);
 }
 
 #[test]

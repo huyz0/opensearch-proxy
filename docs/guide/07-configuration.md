@@ -123,6 +123,7 @@ error. Independent of capture — a proxy can run either, both, or neither.
 | `fanout_kafka_brokers` | *(unset → off)* | Comma-separated Kafka bootstrap brokers (`host:port`). Both-or-neither with `fanout_topic`. |
 | `fanout_topic` | *(unset)* | The topic each op envelope is produced to (keyed by partition for per-partition ordering). |
 | `fanout_async_default` | `false` | The deployment-default write mode. `false` = sync unless a request sends `X-Write-Mode: async`; `true` = async unless a request sends `X-Write-Mode: sync`. |
+| `fanout_expand_delete_by_query` | `false` | Allow `_delete_by_query` in async mode by expanding it into one enqueued delete per match (partition-scoped query, capped). Off ⇒ DBQ is rejected. |
 | `fanout_body_encoding` | `cbor` | Document body encoding in the envelope: `cbor` (compact binary, OpenSearch-native) or `json` (human-readable, for debugging the queue). The protobuf metadata wrapper is unaffected. |
 | `fanout_kafka_ca` | *(unset → plaintext)* | CA PEM the broker certificate must chain to. Present ⇒ TLS with that CA pinned; absent ⇒ plaintext broker connection. |
 | `fanout_kafka_client_cert` | *(unset)* | Client certificate chain PEM for broker mTLS. Both-or-neither with `fanout_kafka_client_key`, and requires `fanout_kafka_ca`. |

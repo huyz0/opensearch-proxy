@@ -1,6 +1,11 @@
-//! Async fan-out write-mode tests (`docs/04` §9). Split from `pipeline_tests.rs`
-//! to keep each test file within the length budget; shares that module's
-//! `pipeline()`/`ctx()` harness via `use super::*`.
+//! Async fan-out write-mode tests (`docs/04` §9). Split from `pipeline_tests.rs`;
+//! shares that module's `pipeline()`/`ctx()` harness via `use super::*`.
+//
+// JUSTIFY(file-length): one cohesive suite for the async write mode — single-doc,
+// bulk, and delete-by-query all exercise the same `RecordingQueue` + `header`
+// scaffolding defined here; splitting by sub-path would duplicate that harness
+// across files (and the shared `pipeline()`/`ctx()` is reachable only as a
+// sibling module). Kept together as the one place the mode's behavior is proven.
 
 use super::*;
 use crate::asyncwrite::{QueueError, QueuedWrite, WriteQueue};
@@ -326,4 +331,101 @@ async fn async_bulk_with_no_queue_is_refused_422() {
     );
     let resp = p.handle(&c).await.unwrap();
     assert_eq!(resp.status, 422);
+}
+
+// --- async _delete_by_query expansion (docs/04 §9) ------------------------
+
+/// Stores two docs (sync), then runs an async DBQ that expands to one enqueued
+/// delete per match — the sink is never asked to delete; the queue is.
+#[tokio::test]
+async fn async_delete_by_query_expands_to_one_enqueued_delete_per_match() {
+    let queue = Arc::new(RecordingQueue::default());
+    let p = pipeline()
+        .with_write_queue(Arc::clone(&queue) as Arc<dyn WriteQueue>)
+        .with_delete_by_query_expansion(true);
+    let principal = Principal::new(PrincipalId::from("svc"));
+
+    // Seed two docs synchronously (physical ids acme:1, acme:2).
+    for id in [1, 2] {
+        let rid = RequestId::from("seed");
+        let body = format!(r#"{{"tenant_id":"acme","id":{id}}}"#);
+        let c = ctx(
+            &principal,
+            &rid,
+            &[],
+            EndpointKind::IngestDoc,
+            body.as_bytes(),
+        );
+        p.handle(&c).await.unwrap();
+    }
+    assert!(
+        queue.writes.lock().unwrap().is_empty(),
+        "sync seeds must not enqueue"
+    );
+
+    // Async DBQ.
+    let rid = RequestId::from("r");
+    let headers = vec![header("x-write-mode", "async"), header("x-tenant", "acme")];
+    let c = ctx(
+        &principal,
+        &rid,
+        &headers,
+        EndpointKind::DeleteByQuery,
+        br#"{"query":{"match_all":{}}}"#,
+    );
+    let resp = p.handle(&c).await.unwrap();
+    assert_eq!(resp.status, 200);
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(body["total"], 2);
+    assert_eq!(body["deleted"], 2);
+    assert_eq!(body["version_conflicts"], 0);
+
+    // Two concrete deletes were enqueued (not dispatched to the sink), keyed by
+    // partition, with per-match op ids.
+    let writes = queue.writes.lock().unwrap();
+    assert_eq!(writes.len(), 2);
+    let mut ids: Vec<String> = writes
+        .iter()
+        .filter_map(|w| match &w.batch.ops()[0].doc {
+            osproxy_sink::DocOp::Delete { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    ids.sort();
+    assert_eq!(ids, vec!["acme:1".to_owned(), "acme:2".to_owned()]);
+    assert_eq!(writes[0].op_id, "r:0");
+    assert_eq!(writes[1].op_id, "r:1");
+}
+
+#[tokio::test]
+async fn delete_by_query_is_rejected_unless_async_and_expansion_enabled() {
+    let queue = Arc::new(RecordingQueue::default());
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r");
+    let dbq = br#"{"query":{"match_all":{}}}"#;
+    let tenant = vec![header("x-tenant", "acme")];
+    let h = vec![header("x-write-mode", "async"), header("x-tenant", "acme")];
+    let q = || Arc::clone(&queue) as Arc<dyn WriteQueue>;
+
+    // Sync (no async header) though expansion is on → 400.
+    let p = pipeline()
+        .with_write_queue(q())
+        .with_delete_by_query_expansion(true);
+    let c = ctx(&principal, &rid, &tenant, EndpointKind::DeleteByQuery, dbq);
+    assert_eq!(p.handle(&c).await.unwrap().status, 400);
+
+    // Async but expansion off → 400.
+    let p = pipeline().with_write_queue(q());
+    let c = ctx(&principal, &rid, &h, EndpointKind::DeleteByQuery, dbq);
+    assert_eq!(p.handle(&c).await.unwrap().status, 400);
+
+    // Async + expansion on but no queue → 422.
+    let p = pipeline().with_delete_by_query_expansion(true);
+    let c = ctx(&principal, &rid, &h, EndpointKind::DeleteByQuery, dbq);
+    assert_eq!(p.handle(&c).await.unwrap().status, 422);
+
+    assert!(
+        queue.writes.lock().unwrap().is_empty(),
+        "no deletes enqueued on rejection"
+    );
 }

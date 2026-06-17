@@ -98,6 +98,10 @@ pub struct Pipeline<R, S> {
     /// [`crate::asyncwrite::NoQueue`]: async requests are refused (`422`) until a
     /// real queue is wired in.
     pub(crate) write_queue: Arc<dyn crate::asyncwrite::WriteQueue>,
+    /// Whether `_delete_by_query` may be expanded into per-match deletes in async
+    /// mode (`docs/04` §9). Default `false`: DBQ is rejected until opted in, since
+    /// it reads the match set and enqueues a delete each.
+    pub(crate) delete_by_query_expansion: bool,
 }
 
 /// The diagnostics decision for one request: how much to record/export, whether
@@ -146,7 +150,16 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             passthrough: None,
             baseline_write_mode: crate::asyncwrite::WriteMode::Sync,
             write_queue: Arc::new(crate::asyncwrite::NoQueue),
+            delete_by_query_expansion: false,
         }
+    }
+
+    /// Enables the `_delete_by_query` async expansion (builder style). Without it,
+    /// DBQ is rejected even in async mode (`docs/04` §9).
+    #[must_use]
+    pub fn with_delete_by_query_expansion(mut self, on: bool) -> Self {
+        self.delete_by_query_expansion = on;
+        self
     }
 
     /// Sets the baseline write mode applied when a request does not carry an
@@ -441,6 +454,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             EndpointKind::GetById => self.get_by_id(ctx, trace).await,
             EndpointKind::MultiGet => self.multi_get(ctx, trace).await,
             EndpointKind::DeleteById => self.delete_by_id(ctx, trace).await,
+            EndpointKind::DeleteByQuery => self.delete_by_query(ctx, trace).await,
             EndpointKind::Search => self.search(ctx, trace).await,
             EndpointKind::MultiSearch => self.multi_search(ctx, trace).await,
             EndpointKind::Count => self.count(ctx, trace).await,

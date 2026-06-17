@@ -55,6 +55,7 @@ pub(crate) const KEYS: &[&str] = &[
     "fanout_kafka_client_key",
     "fanout_body_encoding",
     "fanout_async_default",
+    "fanout_expand_delete_by_query",
 ];
 
 /// The environment variable name for a canonical key: `OSPROXY_` + the

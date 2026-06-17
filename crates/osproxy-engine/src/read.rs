@@ -68,6 +68,28 @@ pub(crate) fn build_delete_op(
     .with_protocol(resolved.decision.upstream_protocol))
 }
 
+/// Builds a delete [`WriteOp`] for a document already known by its **physical**
+/// id (the `_delete_by_query` expansion, `docs/04` §9): the search ran against the
+/// physical index, so its hit ids are physical — only `_routing` is derived from
+/// the placement's id rule. Epoch-stamped like any write.
+pub(crate) fn build_delete_op_physical(resolved: &Resolved, physical_id: String) -> WriteOp {
+    let shape = read_shape(&resolved.decision.body_transform);
+    let routing = shape
+        .id_rule
+        .as_ref()
+        .filter(|r| r.set_routing)
+        .map(|_| resolved.partition.as_str().to_owned());
+    WriteOp::new(
+        resolved.decision.target.clone(),
+        DocOp::Delete {
+            id: physical_id,
+            routing,
+        },
+        resolved.decision.epoch,
+    )
+    .with_protocol(resolved.decision.upstream_protocol)
+}
+
 /// Maps a logical id to `(physical_id, routing)` for a by-id request: applies the
 /// id rule when present (else the client id is already physical), and sets
 /// routing to the partition when the rule asks for it.

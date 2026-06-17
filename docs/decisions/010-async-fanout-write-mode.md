@@ -38,8 +38,11 @@ fan-out enqueue cannot honor those — it responds before the write is applied, 
    alert, a reconciler. The proxy does not poll or store outcomes.
 7. **Unsupported-async ops are rejected (`400`), not enqueued.** Optimistic
    concurrency, scripted/partial `_update`, and `_update_by_query` need
-   read-modify-write the proxy cannot do at enqueue time. `_delete_by_query` is
-   reject-by-default, with bounded query-expansion as future work.
+   read-modify-write the proxy cannot do at enqueue time. **`_delete_by_query`**
+   is reject-by-default with an **opt-in bounded expansion**
+   (`fanout_expand_delete_by_query`): the proxy runs the partition-scoped query
+   itself, caps the match set, and enqueues a concrete delete per matched id —
+   never a partial delete, never a query the fan-out can't carry.
 
 ## Why
 

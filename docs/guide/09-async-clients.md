@@ -22,6 +22,12 @@ Unsupported in async mode (rejected with `400`): optimistic concurrency
 `_update_by_query`. They need read-modify-write the proxy cannot do at enqueue
 time.
 
+`_delete_by_query` works only where the operator enabled expansion
+(`fanout_expand_delete_by_query`): the proxy runs your (partition-scoped) query,
+caps the match set, and enqueues a delete per match. The response is the usual
+delete-by-query shape, but `deleted` counts what was *enqueued*, not yet applied;
+a match set over the cap is refused rather than partially deleted.
+
 ## Selecting async
 
 Per request, send `X-Write-Mode: async` (or `sync` to override a deployment whose

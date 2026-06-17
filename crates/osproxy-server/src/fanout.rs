@@ -202,17 +202,19 @@ where
         WriteMode::Sync
     };
     println!(
-        "osproxy fanout: on (topic={}, brokers={}, tls={}, body={:?}, default={:?})",
+        "osproxy fanout: on (topic={}, brokers={}, tls={}, body={:?}, default={:?}, dbq_expand={})",
         fc.topic,
         fc.brokers.len(),
         fc.tls.is_some(),
         fc.body_encoding,
         mode,
+        fc.expand_delete_by_query,
     );
     let queue = KafkaWriteQueue::new(std::sync::Arc::new(producer), fc.topic.clone(), encoding);
     Ok(pipeline
         .with_write_queue(std::sync::Arc::new(queue))
-        .with_baseline_write_mode(mode))
+        .with_baseline_write_mode(mode)
+        .with_delete_by_query_expansion(fc.expand_delete_by_query))
 }
 
 /// Without the `capture-kafka` feature no broker client is linked, so a

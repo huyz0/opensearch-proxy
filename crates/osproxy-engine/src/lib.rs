@@ -19,6 +19,7 @@ mod asyncwrite;
 mod bulk;
 mod bulkprep;
 mod cursor;
+mod dbq;
 mod endpoints;
 mod error;
 mod mget;

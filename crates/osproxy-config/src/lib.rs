@@ -89,6 +89,10 @@ pub struct FanoutConfig {
     /// `false` = sync unless a request sends `X-Write-Mode: async`; `true` =
     /// async unless a request sends `X-Write-Mode: sync`.
     pub async_default: bool,
+    /// Whether `_delete_by_query` may be expanded into per-match deletes in async
+    /// mode (default `false`). It reads the match set and enqueues a delete each,
+    /// so it is opt-in (`docs/04` §9).
+    pub expand_delete_by_query: bool,
 }
 
 /// The on-the-wire encoding of the fan-out op-envelope document body.

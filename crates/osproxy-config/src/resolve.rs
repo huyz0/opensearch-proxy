@@ -67,6 +67,7 @@ fn fanout(raw: &Raw) -> Result<Option<FanoutConfig>, ConfigError> {
                 tls: fanout_tls(raw)?,
                 body_encoding: fanout_body_encoding(raw)?,
                 async_default: bool_or(raw, "fanout_async_default", false)?,
+                expand_delete_by_query: bool_or(raw, "fanout_expand_delete_by_query", false)?,
             }))
         }
         _ => Err(ConfigError::invalid(
