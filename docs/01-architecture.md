@@ -122,7 +122,7 @@ fixed even where the threshold is tuned later.
 
 | ID | Requirement |
 |----|-------------|
-| NFR-S1 | TLS termination required for any request that is mutated (cannot rewrite an encrypted stream); no body-mutating passthrough mode. |
+| NFR-S1 | TLS termination required for any request that is mutated (cannot rewrite an encrypted stream). Enforced at ingress on the endpoint classification, before dispatch — so it holds even in **tenant-agnostic passthrough** (docs/04 §10): a write to a tenancy-aware endpoint over cleartext is refused whether it is tenanted or forwarded verbatim. (Read-only admin/`Unknown` pass-through is unaffected.) |
 | NFR-S2 | No secret/credential/token/tenant value in any log or trace at any verbosity level. Diagnostic capture is shape-only by construction. |
 | NFR-S3 | Debug directives delivered via header are HMAC-signed; clients cannot self-enable expensive tracing. |
 | NFR-S4 | Partition isolation enforced on the read path (query filter cannot be bypassed by client-supplied query) — see [03](03-tenancy-and-placement.md) §isolation for the isolation guarantee level. |

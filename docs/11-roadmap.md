@@ -4,6 +4,25 @@ Built as thin vertical slices: each milestone is shippable, tested to the docs/0
 bar, and exercises real architectural seams rather than building horizontal
 layers that can't be validated until the end.
 
+> **Status (2026-06-19): M0–M7 are all complete and CI-green** (build/fips,
+> clippy `-D warnings`, coverage ≥90%, deterministic perf, supply-chain, and a
+> live-Docker integration lane). The milestone descriptions below are the original
+> plan, kept for provenance. The only remaining items are *external*: the AWS-LC
+> CMVP certificate award (docs/07 §5) and authoritative NFR-P thresholds on
+> reference hardware — no code-side v1 gaps remain.
+>
+> **Shipped beyond the original plan**, on the seams the milestones established:
+> - **Async fan-out write mode** (ADR-010, docs/04 §9): per-request `X-Write-Mode`,
+>   honest `202`/`op_id`, protobuf+CBOR op envelope, Kafka queue behind the
+>   `WriteQueue` seam (`fanout` feature). This *is* the queue-based redundancy that
+>   was a non-goal — delivered as durable async enqueue, not synchronous dual-write.
+> - **Tenant-agnostic passthrough** (docs/04 §10), per-request by logical-index
+>   prefix so one instance serves tenanted and legacy/agnostic traffic at once.
+> - **Traffic capture** (docs/guide/08): full-fidelity tee to Kafka behind the
+>   `Capture` seam (`capture` feature), runtime on-demand via diagnostics directives.
+> - **Modes-UX pass**: SPI collapsed to one `resolve_partition`; `capture`/`fanout`
+>   features split; optional `[section]` config grouping; docs/guide/10 mode map.
+
 ## M0 — Workspace & guardrails (foundation)
 
 - Workspace + empty crates per docs/01 §2; strict dependency graph wired and
@@ -92,9 +111,15 @@ rewrite.
 
 ## Deferred (post-v1, behind existing seams)
 
-- **Queue-based redundancy**: `QueueSink` (Kafka) + pull-ingester for dual/triple
-  write. The `Sink` trait already accommodates it; no core change.
-- Additional control-store backends; richer admin tooling.
+- **Queue-based redundancy** — ✅ delivered as the **async fan-out write mode**
+  (ADR-010, docs/04 §9): writes are durably enqueued to Kafka behind the
+  `WriteQueue` seam and a downstream component fans them out to 1..N destinations.
+  This covers the dual/triple-write intent as honest async enqueue (`202`/`op_id`),
+  not synchronous fan-out (still excluded — ADR-002).
+- Concrete distributed control-store bindings (etcd/Consul/Redis/OS-index) behind
+  the `DirectiveStore`/`MigrationStore` seams — operator-provided; the proxy ships
+  the seams + in-memory reference impls, not the infra.
+- Richer admin tooling; the larger `capture`/`fanout` packaging refinements.
 
 ## Cross-cutting, every milestone
 

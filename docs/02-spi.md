@@ -126,6 +126,16 @@ pub trait TenancySpi: Send + Sync + 'static {
     /// it). Returns the placement *and* the epoch it was read at.
     async fn placement_for(&self, partition: &PartitionId)
         -> Result<PlacementAt, SpiError>;
+
+    /// Migration write gate (docs/06 §2): may a write that resolved at `epoch`
+    /// for `partition` still commit? Re-checked at dispatch; `false` ⇒ a retryable
+    /// stale-epoch rejection. Defaults to always-admit (no live migration).
+    async fn admit_write(&self, _partition: &PartitionId, _epoch: Epoch) -> bool { true }
+
+    /// Base URL of a cluster by id, for the paths that route to a cluster without
+    /// a placement to consult (cursor affinity, admin pass-through). `None` ⇒ the
+    /// request fails closed rather than route blind. Default `None`.
+    fn cluster_endpoint(&self, _cluster: &ClusterId) -> Option<String> { None }
 }
 
 pub struct PlacementAt { pub placement: Placement, pub epoch: PlacementEpoch }

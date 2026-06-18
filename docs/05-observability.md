@@ -70,15 +70,34 @@ low-cost NFR.
   **recorded/exported**. "Off" cost is near-zero (NFR-T3, NFR-P).
 - The directive evaluator is a small, hot, lock-light component in `osproxy-observe`.
 
-## 5. Egress & aggregation
+## 5. Egress & introspection surfaces
 
-- Default: structured JSON logs and/or OTLP traces (OpenTelemetry) tagged with a
-  shared `request_id`/trace id, shipped to the user's aggregator. This is the
-  fleet-scale story.
-- **Ring buffer**: populated only when `ring_buffer: true` — a short-lived
-  in-memory ring of the last N request explanations on a single instance. Useful
-  only for single-instance local debugging; explicitly marginal in a fleet and
-  documented as such.
+All of these are **shipped** and per-instance by design; fleet rollup is the
+external aggregator's job. They share the `trace_id` so an agent can correlate
+across them (W3C trace-context is propagated to every upstream call).
+
+- **Structured JSON logs** — one shape-only line per request (the `/debug/explain`
+  document, carrying `trace_id`). Off unless `OSPROXY_LOG_REQUESTS` is set
+  (`RequestLog` seam: `NoLog` default / `StdoutJsonLog`).
+- **OTLP export** — a shape-only `resource_spans` SERVER span per request via the
+  `SpanExporter` seam. Off (near-zero cost) unless `OSPROXY_OTLP_ENDPOINT` is set;
+  the `osproxy-otlp` crate POSTs to `{endpoint}/v1/traces`, fire-and-forget. The
+  proxy span nests under the caller (`parentSpanId`) so the client→proxy→upstream
+  tree reconstructs.
+- **`GET /metrics`** — always-on shape-only counters (requests total/ok/error) and
+  per-cluster pool-reuse snapshot, served **before auth**. This is the one
+  introspection surface meant to stay on in production where `/debug/*` is off.
+- **`/debug/explain` + `/debug/breakglass`** — see §6.
+- **`GET`/`POST /admin/directives`** — token-gated, fail-closed. `POST` publishes a
+  `DirectiveSet` to the fleet `DirectiveStore` (polled fresh per request → flips
+  fleet-wide with no restart); `GET` introspects the active set as shape-only JSON
+  that round-trips back to a publish. This is the store-agnostic control-plane
+  seam (the proxy ships the seam + an in-memory reference impl, not a distributed
+  store).
+- **Break-glass ring buffer** — populated only when a matching `ring_buffer: true`
+  directive is active: a short-lived in-memory ring of the last N request
+  explanations on one instance, served at `/debug/breakglass`. Single-instance
+  local debugging; explicitly marginal in a fleet and documented as such.
 
 ## 6. `/debug/explain/{request_id}`
 
@@ -88,9 +107,12 @@ chain, each span's shape attributes, the final status, and — on failure — th
 `ErrorContext` with remediation. This is the primary "no human gathers context"
 affordance (NFR-T4).
 
-Security: the endpoint is itself authenticated/authorized and returns only
-shape-level data; it cannot reveal tenant values because they were never
-captured.
+Security: the endpoint returns only shape-level data; it cannot reveal tenant
+values because they were never captured. It short-circuits before auth (like
+`/metrics` and `/debug/breakglass`) and is gated by `OSPROXY_DEBUG_ENDPOINTS`
+(default on; **set `false` in production** so operational metadata is not exposed
+unauthenticated — `/metrics` stays on regardless). `/debug/breakglass` serves the
+break-glass tape (§5) in the same shape-only form.
 
 ## 7. What is NEVER captured
 

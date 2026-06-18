@@ -1,11 +1,17 @@
 # OpenSearch Endpoint Matrix (supported handling)
 
-> Status: **skeleton** — to be filled with version-pinned upstream excerpts in
-> M0–M1 (docs/11). Derived-from OpenSearch version: `[PIN: e.g. 2.x / 3.x]`.
+> Status: **implemented** — the classes below are live in `osproxy-transport`'s
+> classifier and `osproxy-engine`'s dispatch. Remaining to-do is version-pinning
+> the exact request/response shapes against a specific OpenSearch release
+> (`[PIN: e.g. 2.x / 3.x]`); the handling classes themselves are stable.
 
 This is the authoritative list of which OpenSearch REST endpoints the proxy
 handles and how. `osproxy-core::EndpointKind` mirrors this table; adding a row to
 a tenancy-aware class requires a symmetry test (docs/09).
+
+> **Tenant-agnostic passthrough** (docs/04 §10) overrides this matrix for the
+> indices it matches: those requests are forwarded verbatim with no tenancy
+> handling at all. Everything below describes the default tenanted path.
 
 ## Classes
 
@@ -27,6 +33,8 @@ See docs/02 §5 for the class definitions. Default for unmatched: **reject**
 | `GET /{index}/_doc/{id}` | GetById | logical→physical id | |
 | `GET /_mget`, `POST /_mget` | GetById | demux by doc | re-interleave |
 | `DELETE /{index}/_doc/{id}` | DeleteById | id map | |
+| `POST /{index}/_delete_by_query` | DeleteByQuery | reject by default; **async opt-in** expansion (`fanout_expand_delete_by_query`) runs the partition-scoped query and enqueues a delete per matched id | docs/04 §9 |
+| `POST /{index}/_update_by_query` | (unsupported) | not classified → `Unknown` → reject | needs read-modify-write |
 | `POST /{index}/_search/scroll`, `_search/scroll` | Cursor | affinity pin | |
 | `POST /_search/point_in_time`, PIT use | Cursor | affinity pin | |
 | `_sql`, scripted/`_render` | (unsupported) | reject in shared mode unless allow-listed | isolation risk |

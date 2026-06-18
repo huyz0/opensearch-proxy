@@ -209,3 +209,27 @@ the contract.
   reconciler) — out of scope here. See [client handling](guide/09-async-clients.md).
 - **Read-after-write is not guaranteed**: a `202`'d doc is not queryable until
   the downstream applies it; reads still hit the upstream synchronously.
+
+## 10. Tenant-agnostic passthrough
+
+A deployment can forward requests **verbatim** to one cluster with no partition
+resolution, body rewrite, or isolation — a transparent / capture / migration
+proxy that still gets osproxy's auth, TLS, pooling, and observability. It is a
+short-circuit *before* the endpoint demux above: a matching request is forwarded
+raw (reusing the same verbatim-forward primitive as the cursor/admin paths) and
+the upstream response is returned untouched.
+
+The match is **per request, by logical index**, and **fail-closed**, so one
+instance can serve both modes at once (the migration shape):
+
+- `passthrough_cluster` + `passthrough_endpoint` with **no** `passthrough_indices`
+  → *every* request passes through (whole-instance transparent proxy).
+- `passthrough_indices` = a comma-separated **logical-index prefix list** → only
+  those indices pass through; every other index keeps full tenancy. A not-yet-
+  onboarded legacy index flows through untouched while onboarded indices are
+  isolated, on the same instance.
+
+Matching is on the operator-configured index list **only — never a client
+header** — so a client cannot opt itself out of isolation, and a non-match keeps
+tenancy (the safe direction). Unset ⇒ pure tenancy mode (the default). See
+[choosing a mode](guide/10-choosing-a-mode.md).

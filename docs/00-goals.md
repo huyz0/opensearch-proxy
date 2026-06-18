@@ -43,7 +43,7 @@ crypto build.
 |----------|---------------------|
 | Synchronous fan-out / scatter-gather **search** | Search is always single-cluster. A partition lives in one place. |
 | Cross-cluster result merge, agg merge, cross-cluster scoring | Eliminated by single-target search. |
-| Synchronous dual/triple-write redundancy | Deferred to a future queue-based (Kafka) + pull-ingester mode behind the `Sink` trait. |
+| Synchronous dual/triple-write redundancy | Excluded; redundancy is instead **async** — the fan-out write mode (ADR-010, docs/04 §9) durably enqueues a write to Kafka behind the `WriteQueue` seam and a downstream component applies it to 1..N destinations. Honest `202`/`op_id`, never a synchronous fan-out. |
 | Copying partition data during migration | External reindex/snapshot tooling does the copy; the proxy only gates the routing flip. |
 | Dynamic plugin loading (WASM/dylib) | SPI is compiled in statically. |
 | The proxy mutating cluster state via AI | Observability is **read-only**; the AI observes, humans/automation act. |
