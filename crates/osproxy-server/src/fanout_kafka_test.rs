@@ -80,6 +80,80 @@ async fn op_envelope_round_trips_through_a_real_broker() {
     );
 }
 
+/// A bulk request and an expanded `_delete_by_query` both enqueue *multiple*
+/// envelopes for one logical partition: bulk with a per-item `{batch}:{n}` op id,
+/// delete-by-query with a `Delete` op (no body) per match. This proves that shape
+/// survives a real broker — same-key ordering preserved, the bodyless delete
+/// envelope decodes — which the single-op test above does not exercise.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a Docker daemon"]
+async fn multi_op_partition_round_trips_in_order() {
+    let node = Kafka::default().start().await.expect("start kafka");
+    let port = node
+        .get_host_port_ipv4(KAFKA_PORT)
+        .await
+        .expect("mapped kafka port");
+    let brokers = vec![format!("127.0.0.1:{port}")];
+    let topic = "osproxy.fanout.multi";
+    ensure_topic(&brokers, topic).await;
+
+    let producer = KrafkaProducer::connect(brokers.clone(), "osproxy-fanout-multi", None)
+        .await
+        .expect("connect producer");
+    let queue = KafkaWriteQueue::new(Arc::new(producer), topic.to_owned(), BodyEncoding::Cbor);
+
+    // An index item (op_id `batch:0`) then a delete item (op_id `batch:1`), as
+    // the bulk demux / DBQ expansion enqueue them — each its own single-op write,
+    // all keyed by the same partition so they stay ordered within a Kafka partition.
+    let index = single(
+        "batch:0",
+        DocOp::Index {
+            id: Some("acme:7".to_owned()),
+            routing: Some("acme".to_owned()),
+            body: br#"{"_tenant":"acme","id":7}"#.to_vec(),
+        },
+    );
+    let delete = single(
+        "batch:1",
+        DocOp::Delete {
+            id: "acme:8".to_owned(),
+            routing: Some("acme".to_owned()),
+        },
+    );
+    queue.enqueue(index).await.expect("enqueue index acked");
+    queue.enqueue(delete).await.expect("enqueue delete acked");
+
+    let records = read_n(&brokers, topic, 2).await;
+    for r in &records {
+        assert_eq!(r.key.as_deref(), Some(b"acme".as_ref())); // same partition key
+    }
+    let first = OpEnvelope::decode(records[0].value.as_deref().expect("payload")).expect("decode");
+    assert_eq!(first.op_id, "batch:0");
+    assert_eq!(first.op_type, OpType::Index as i32);
+    assert_eq!(first.id, "acme:7");
+    assert_eq!(first.content_type, "application/cbor");
+
+    let second = OpEnvelope::decode(records[1].value.as_deref().expect("payload")).expect("decode");
+    assert_eq!(second.op_id, "batch:1");
+    assert_eq!(second.op_type, OpType::Delete as i32);
+    assert_eq!(second.id, "acme:8");
+    assert!(second.body.is_empty(), "a delete carries no body");
+    assert_eq!(second.content_type, "");
+}
+
+/// One single-op write keyed by `acme`, as the bulk/DBQ paths enqueue each item.
+fn single(op_id: &str, doc: DocOp) -> QueuedWrite {
+    QueuedWrite {
+        op_id: op_id.to_owned(),
+        partition_key: "acme".to_owned(),
+        batch: WriteBatch::single(WriteOp::new(
+            Target::new(ClusterId::from("eu-1"), IndexName::from("shared")),
+            doc,
+            Epoch::new(4),
+        )),
+    }
+}
+
 /// Creates `topic` (1 partition, RF 1), retrying through the broker's
 /// post-start warmup. krafka does not auto-create topics on produce.
 async fn ensure_topic(brokers: &[String], topic: &str) {
@@ -117,8 +191,33 @@ async fn read_first(brokers: &[String], topic: &str) -> krafka::consumer::Consum
         .seek_to_beginning(topic, 0)
         .await
         .expect("seek to beginning");
-    tokio::time::timeout(Duration::from_secs(30), consumer.recv())
+    read_n(brokers, topic, 1).await.pop().expect("a record")
+}
+
+/// Reads the first `n` records on partition 0 of `topic`, in offset order
+/// (manual assign + seek, no consumer group — see [`read_first`]).
+async fn read_n(
+    brokers: &[String],
+    topic: &str,
+    n: usize,
+) -> Vec<krafka::consumer::ConsumerRecord> {
+    let consumer = Consumer::builder()
+        .bootstrap_servers(brokers.join(","))
+        .build()
         .await
-        .expect("recv did not time out")
-        .expect("a record")
+        .expect("build consumer");
+    consumer.assign(topic, vec![0]).await.expect("assign");
+    consumer
+        .seek_to_beginning(topic, 0)
+        .await
+        .expect("seek to beginning");
+    let mut out = Vec::with_capacity(n);
+    while out.len() < n {
+        let record = tokio::time::timeout(Duration::from_secs(30), consumer.recv())
+            .await
+            .expect("recv did not time out")
+            .expect("a record");
+        out.push(record);
+    }
+    out
 }
