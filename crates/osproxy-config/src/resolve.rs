@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use crate::raw::Raw;
 use crate::{
     AdminPassthroughConfig, CaptureConfig, CaptureTlsConfig, Config, ConfigError, DiagBaseline,
-    FanoutBodyEncoding, FanoutConfig, ObservabilityConfig, TlsConfig,
+    FanoutBodyEncoding, FanoutConfig, ObservabilityConfig, PassthroughConfig, TlsConfig,
 };
 
 /// The default admin pass-through allow-list when a cluster is configured but no
@@ -222,20 +222,37 @@ fn capture_tls(raw: &Raw) -> Result<Option<CaptureTlsConfig>, ConfigError> {
     }))
 }
 
-/// Transparent passthrough: requires both the cluster and its endpoint, or
-/// neither. Set, both, the proxy forwards every request verbatim there.
-fn passthrough(raw: &Raw) -> Result<Option<(String, String)>, ConfigError> {
+/// Tenant-agnostic passthrough: requires both the cluster and its endpoint, or
+/// neither. With both set, requests matching `passthrough_indices` (a
+/// comma-separated logical-index prefix list; empty ⇒ all requests) are forwarded
+/// verbatim; the rest stay tenant-isolated.
+fn passthrough(raw: &Raw) -> Result<Option<PassthroughConfig>, ConfigError> {
     match (
         opt(raw, "passthrough_cluster"),
         opt(raw, "passthrough_endpoint"),
     ) {
         (None, None) => Ok(None),
-        (Some(cluster), Some(endpoint)) => Ok(Some((cluster, endpoint))),
+        (Some(cluster), Some(endpoint)) => Ok(Some(PassthroughConfig {
+            cluster,
+            endpoint,
+            index_prefixes: csv(raw, "passthrough_indices"),
+        })),
         _ => Err(ConfigError::invalid(
             "passthrough_cluster",
             "set both passthrough_cluster and passthrough_endpoint, or neither",
         )),
     }
+}
+
+/// A comma-separated list value, trimmed and empties dropped (`[]` when unset).
+fn csv(raw: &Raw, key: &'static str) -> Vec<String> {
+    raw.get(key)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// An optional string value (`None` when unset/empty).

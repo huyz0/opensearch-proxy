@@ -87,10 +87,19 @@ assembling the pipeline, handler, and ingress. See [The SPI](05-spi-guide.md) an
 
 ## Tenant-agnostic mode
 
-osproxy also runs without tenancy. Set `passthrough_cluster` and the proxy forwards
-every request verbatim to one cluster with no partition resolution, no body rewrite,
-and no isolation. On its own that is a plain reverse proxy with osproxy's auth, TLS,
-pooling, and observability.
+osproxy also runs without tenancy. Set `passthrough_cluster` (+ `passthrough_endpoint`)
+and the proxy forwards every request verbatim to one cluster with no partition
+resolution, no body rewrite, and no isolation. On its own that is a plain reverse proxy
+with osproxy's auth, TLS, pooling, and observability.
+
+**One proxy, both modes.** Add `passthrough_indices` (a comma-separated list of
+logical-index prefixes) and *only* those indices pass through verbatim — every other
+index stays fully tenant-isolated. This is the migration shape: a not-yet-onboarded
+(legacy) index flows through untouched while the indices you have onboarded are
+tenanted, on the same instance, with no second deployment. The match is per request,
+**fail-closed** (an index that does not match keeps tenancy), and keyed on the
+operator-configured index list only — never a client header — so a client cannot opt
+itself out of isolation.
 
 Pair it with the `Capture` seam and you get a capture proxy in the style of the
 [OpenSearch Migration Assistant](https://docs.opensearch.org/latest/migration-assistant/architecture/):

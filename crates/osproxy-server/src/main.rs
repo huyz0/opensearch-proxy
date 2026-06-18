@@ -14,7 +14,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use osproxy_config::{
-    AdminPassthroughConfig, Config, DiagBaseline, ObservabilityConfig, TlsConfig,
+    AdminPassthroughConfig, Config, DiagBaseline, ObservabilityConfig, PassthroughConfig, TlsConfig,
 };
 use osproxy_core::{ClusterId, IndexName, SystemClock};
 use osproxy_engine::{AdminPolicy, PassthroughPolicy, Pipeline};
@@ -273,21 +273,30 @@ fn assemble_pipeline(
 }
 
 /// Enables tenant-agnostic passthrough when `OSPROXY_PASSTHROUGH_CLUSTER` and
-/// `OSPROXY_PASSTHROUGH_ENDPOINT` are set: every request is forwarded verbatim to
-/// that cluster with no tenancy rewrite (a transparent / capture proxy). Unset ⇒
-/// tenancy mode (the default).
+/// `OSPROXY_PASSTHROUGH_ENDPOINT` are set. With no `OSPROXY_PASSTHROUGH_INDICES`,
+/// every request is forwarded verbatim (a transparent / capture proxy); with a
+/// comma-separated index-prefix list, only those indices pass through and the
+/// rest stay tenant-isolated (the migration shape). Unset ⇒ tenancy mode.
 fn with_passthrough(
     pipeline: Pipeline<TenancyRouter<ReferenceTenancy>, OpenSearchSink>,
-    passthrough: Option<&(String, String)>,
+    passthrough: Option<&PassthroughConfig>,
 ) -> Pipeline<TenancyRouter<ReferenceTenancy>, OpenSearchSink> {
-    let Some((cluster, endpoint)) = passthrough else {
+    let Some(pt) = passthrough else {
         return pipeline;
     };
-    println!("osproxy passthrough: on (forwarding verbatim to cluster={cluster} at {endpoint})");
-    pipeline.with_passthrough(PassthroughPolicy::new(
-        ClusterId::from(cluster.as_str()),
-        endpoint.clone(),
-    ))
+    let scope = if pt.index_prefixes.is_empty() {
+        "all requests".to_owned()
+    } else {
+        format!("indices {:?}", pt.index_prefixes)
+    };
+    println!(
+        "osproxy passthrough: on (forwarding {scope} verbatim to cluster={} at {})",
+        pt.cluster, pt.endpoint,
+    );
+    pipeline.with_passthrough(
+        PassthroughPolicy::new(ClusterId::from(pt.cluster.as_str()), pt.endpoint.clone())
+            .with_index_prefixes(pt.index_prefixes.clone()),
+    )
 }
 
 /// Enables opt-in admin (`_cat`/`_cluster`/`_nodes`) pass-through when

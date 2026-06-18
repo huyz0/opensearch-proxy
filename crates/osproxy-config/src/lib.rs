@@ -52,10 +52,10 @@ pub struct Config {
     pub admin_passthrough: Option<AdminPassthroughConfig>,
     /// The shared HMAC key enabling scroll/PIT cursor affinity, or `None` (off).
     pub cursor_affinity_key: Option<String>,
-    /// Tenant-agnostic passthrough: forward every request verbatim to this
-    /// `(cluster, base URL)`, with no tenancy rewrite. `None` = tenancy mode (the
-    /// default). Used for a transparent or capture/migration proxy.
-    pub passthrough: Option<(String, String)>,
+    /// Tenant-agnostic passthrough policy, or `None` = pure tenancy mode (the
+    /// default). Used for a transparent proxy or to pass selected (e.g. not-yet-
+    /// onboarded) indices through verbatim while tenant-isolating the rest.
+    pub passthrough: Option<PassthroughConfig>,
     /// Full-fidelity traffic capture to a Kafka topic, or `None` (off). Requires
     /// the binary be built with the `capture-kafka` feature; a configured capture
     /// on a binary without it is a loud startup error rather than a silent no-op.
@@ -195,6 +195,20 @@ pub struct AdminPassthroughConfig {
     /// The admin cluster's base URL, or `None` to resolve it via the tenancy's
     /// `cluster_endpoint` lookup.
     pub endpoint: Option<String>,
+}
+
+/// Tenant-agnostic passthrough: forward matching requests verbatim to one
+/// cluster with no tenancy rewrite.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PassthroughConfig {
+    /// The cluster id matching requests are forwarded to.
+    pub cluster: String,
+    /// The cluster's base URL (the sink pools it).
+    pub endpoint: String,
+    /// Logical-index prefixes that pass through verbatim; empty ⇒ every request
+    /// passes through (whole-instance transparent proxy). A non-empty list
+    /// tenant-isolates every index that does not match (fail-closed).
+    pub index_prefixes: Vec<String>,
 }
 
 /// The baseline diagnostics verbosity. A config-local enum so this crate stays

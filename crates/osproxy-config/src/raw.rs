@@ -36,6 +36,7 @@ pub(crate) const KEYS: &[&str] = &[
     "cursor_affinity_key",
     "passthrough_cluster",
     "passthrough_endpoint",
+    "passthrough_indices",
     "capture_default",
     "capture_kafka_brokers",
     "capture_topic",

@@ -86,9 +86,10 @@ pub struct Pipeline<R, S> {
     /// allow-listed `_cat`/`_cluster`/`_nodes` requests, and which path prefixes
     /// are permitted. `None` = reject all admin requests (the default).
     pub(crate) admin_policy: Option<crate::admin::AdminPolicy>,
-    /// Tenant-agnostic passthrough (`None` = tenancy mode, the default). When set,
-    /// every request is forwarded verbatim to this cluster with no rewrite; the
-    /// router is unused. This is the transparent/capture-proxy mode.
+    /// Tenant-agnostic passthrough (`None` = pure tenancy mode, the default).
+    /// When set, requests the policy matches (by logical index) are forwarded
+    /// verbatim with no rewrite; unmatched requests stay tenant-isolated. A
+    /// prefix-free policy passes everything through (transparent/capture proxy).
     pub(crate) passthrough: Option<crate::passthrough::PassthroughPolicy>,
     /// The write mode applied when a request does not select one with the
     /// `X-Write-Mode` header. Default [`crate::WriteMode::Sync`] — async fan-out is
@@ -444,8 +445,10 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         ctx: &RequestCtx<'_>,
         trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
-        // Tenant-agnostic passthrough short-circuits tenancy dispatch entirely.
-        if let Some(policy) = &self.passthrough {
+        // Tenant-agnostic passthrough short-circuits tenancy dispatch for the
+        // requests it matches (by logical index); unmatched requests fall through
+        // to tenancy below (fail-closed).
+        if let Some(policy) = self.passthrough.as_ref().filter(|p| p.matches(ctx)) {
             return self.forward(ctx, policy, trace).await;
         }
         match ctx.endpoint() {

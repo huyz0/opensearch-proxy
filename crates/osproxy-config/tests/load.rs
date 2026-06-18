@@ -122,6 +122,42 @@ fn admin_passthrough_defaults_its_prefixes() {
 }
 
 #[test]
+fn passthrough_needs_both_cluster_and_endpoint() {
+    assert!(
+        resolve(&[]).unwrap().passthrough.is_none(),
+        "off by default"
+    );
+    let err = resolve(&[("passthrough_cluster", "src")]).unwrap_err();
+    assert_eq!(err.field(), "passthrough_cluster");
+}
+
+#[test]
+fn passthrough_defaults_to_whole_instance_and_takes_an_index_prefix_list() {
+    // Cluster + endpoint, no indices ⇒ every request passes through.
+    let all = resolve(&[
+        ("passthrough_cluster", "src"),
+        ("passthrough_endpoint", "http://src:9200"),
+    ])
+    .unwrap()
+    .passthrough
+    .expect("policy built");
+    assert_eq!(all.cluster, "src");
+    assert_eq!(all.endpoint, "http://src:9200");
+    assert!(all.index_prefixes.is_empty(), "whole-instance passthrough");
+
+    // With an index list ⇒ only those indices pass through, rest stay tenanted.
+    let scoped = resolve(&[
+        ("passthrough_cluster", "src"),
+        ("passthrough_endpoint", "http://src:9200"),
+        ("passthrough_indices", "legacy-, raw_"),
+    ])
+    .unwrap()
+    .passthrough
+    .unwrap();
+    assert_eq!(scoped.index_prefixes, vec!["legacy-", "raw_"]);
+}
+
+#[test]
 fn an_unknown_key_fails_closed() {
     let err = resolve(&[("bnid", "x")]).unwrap_err();
     assert_eq!(err.field(), "bnid");
