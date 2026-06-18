@@ -91,16 +91,24 @@ pub enum BodyTransform {
 /// the proxy's `osproxy-tenancy` crate turns these into a `RoutingSpi`.
 ///
 /// # Invariants
-/// - `partition_key` MUST be derivable for every routable request, or the
-///   request is rejected with a typed `SpiError::PartitionUnresolved`.
+/// - `resolve_partition` MUST yield a partition id for every routable request,
+///   or it returns a typed `SpiError::PartitionUnresolved` and the request is
+///   rejected.
 /// - In `SharedIndex` mode the partition id MUST be part of the constructed
 ///   `_id` to prevent cross-tenant id collisions (see docs/03).
 /// - `injected_fields` names and `sensitive_fields` MUST be stable for a given
 ///   logical index version, so read-path strip/filter stays symmetric with the
 ///   write-path inject.
 pub trait TenancySpi: Send + Sync + 'static {
-    /// Which document field carries the partition id, or how to derive it.
-    fn partition_key(&self) -> PartitionKeySpec;
+    /// Resolve the partition id for a request. Most impls defer to the
+    /// declarative `osproxy_tenancy::resolve_partition_spec` (naming a body
+    /// field / header / principal attr); override the body to decode an encoded
+    /// header, parse a token, or combine inputs — you choose the order.
+    fn resolve_partition(
+        &self,
+        ctx: &RequestCtx<'_>,
+        doc: Option<&serde_json::Value>,
+    ) -> Result<PartitionId, SpiError>;
 
     /// Optional rule to construct the document `_id` (and `_routing`).
     fn doc_id_rule(&self) -> Option<DocIdRule>;

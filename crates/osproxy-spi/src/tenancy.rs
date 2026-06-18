@@ -5,7 +5,7 @@ use osproxy_core::{ClusterId, Epoch, PartitionId};
 use crate::error::SpiError;
 use crate::placement::PlacementAt;
 use crate::request::RequestCtx;
-use crate::rules::{DocIdRule, InjectedField, PartitionKeySpec, SensitivitySpec};
+use crate::rules::{DocIdRule, InjectedField, SensitivitySpec};
 
 /// The tenancy-focused contract most implementers provide.
 ///
@@ -17,8 +17,9 @@ use crate::rules::{DocIdRule, InjectedField, PartitionKeySpec, SensitivitySpec};
 ///
 /// # Invariants
 ///
-/// - [`TenancySpi::partition_key`] MUST be derivable for every routable request
-///   or the request is rejected with [`SpiError::PartitionUnresolved`].
+/// - [`TenancySpi::resolve_partition`] MUST yield a partition id for every
+///   routable request, or it returns [`SpiError::PartitionUnresolved`] and the
+///   request is rejected.
 /// - In `SharedIndex` mode the partition id MUST be part of the constructed
 ///   `_id` to prevent cross-tenant id collisions (`docs/03`); the adapter
 ///   enforces this.
@@ -31,15 +32,21 @@ use crate::rules::{DocIdRule, InjectedField, PartitionKeySpec, SensitivitySpec};
 /// ```
 /// use osproxy_core::{ClusterId, Epoch, FieldName, IndexName, PartitionId};
 /// use osproxy_spi::{
-///     InjectedField, InjectedValue, JsonPath, Placement, PlacementAt,
-///     PartitionKeySpec, SensitivitySpec, SpiError, TenancySpi,
+///     InjectedField, InjectedValue, Placement, PlacementAt, PartitionKeySpecKind,
+///     RequestCtx, SensitivitySpec, SpiError, TenancySpi,
 /// };
+/// use serde_json::Value;
 ///
-/// struct OneTenantPerField;
+/// struct OneTenantPerHeader;
 ///
-/// impl TenancySpi for OneTenantPerField {
-///     fn partition_key(&self) -> PartitionKeySpec {
-///         PartitionKeySpec::BodyField(JsonPath::new("tenant_id"))
+/// impl TenancySpi for OneTenantPerHeader {
+///     fn resolve_partition(&self, ctx: &RequestCtx<'_>, _doc: Option<&Value>)
+///         -> Result<PartitionId, SpiError>
+///     {
+///         // Real impls usually defer to `osproxy_tenancy::resolve_partition_spec`;
+///         // here we resolve inline to keep the SPI crate self-contained.
+///         ctx.headers().get("x-tenant").map(PartitionId::from).ok_or(
+///             SpiError::PartitionUnresolved { tried: vec![PartitionKeySpecKind::Header] })
 ///     }
 ///     fn doc_id_rule(&self) -> Option<osproxy_spi::DocIdRule> { None }
 ///     fn injected_fields(&self) -> Vec<InjectedField> {
@@ -64,26 +71,42 @@ use crate::rules::{DocIdRule, InjectedField, PartitionKeySpec, SensitivitySpec};
               checked at the engine's spawn site (docs/02 §2)"
 )]
 pub trait TenancySpi: Send + Sync + 'static {
-    /// Which field (or source) carries the partition id.
-    fn partition_key(&self) -> PartitionKeySpec;
-
-    /// Derive the partition id by running your own code over the request, for
-    /// cases the declarative [`TenancySpi::partition_key`] sources cannot express:
-    /// decoding an encoded or signed header and extracting a claim, parsing a
-    /// structured token, combining several inputs, and so on. The context gives
-    /// you the headers, principal, path, query, and body.
+    /// Resolves the partition id for a request.
     ///
-    /// This is tried **before** [`TenancySpi::partition_key`]. Return `Some` to
-    /// use the extracted id; return `None` to fall through to the declarative
-    /// sources. The default returns `None`, so a tenancy that only needs the
-    /// declarative sources ignores this entirely.
+    /// `doc` is the request body parsed as JSON (or `None` if absent / not JSON);
+    /// the adapter parses it once and shares it across a bulk request's items.
     ///
-    /// The no-value-leak rule still holds (NFR-S2): whatever you decode here, the
-    /// decoded value must not be logged. The id you return is treated as a
-    /// partition id (an opaque routing key), never as a tenant *value* to capture.
-    fn extract_partition(&self, _ctx: &RequestCtx<'_>) -> Option<PartitionId> {
-        None
-    }
+    /// Most implementations just defer to the declarative resolver
+    /// `osproxy_tenancy::resolve_partition_spec`, naming the source(s) the
+    /// partition id lives in (a body field, a header, a principal attribute):
+    ///
+    /// ```ignore
+    /// fn resolve_partition(&self, ctx: &RequestCtx<'_>, doc: Option<&Value>)
+    ///     -> Result<PartitionId, SpiError>
+    /// {
+    ///     osproxy_tenancy::resolve_partition_spec(
+    ///         &PartitionKeySpec::BodyField(JsonPath::new("tenant_id")), ctx, doc)
+    /// }
+    /// ```
+    ///
+    /// Override the body freely for cases the declarative sources cannot express
+    /// — decoding an encoded or signed header, parsing a structured token,
+    /// combining several inputs — and fall back to the declarative resolver if you
+    /// like. You choose the order; nothing is tried implicitly before you.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SpiError::PartitionUnresolved`] when no configured source yields a
+    /// partition id; the request is then rejected.
+    ///
+    /// The no-value-leak rule holds (NFR-S2): whatever you decode here must not be
+    /// logged. The id you return is treated as a partition id (an opaque routing
+    /// key), never as a tenant *value* to capture.
+    fn resolve_partition(
+        &self,
+        ctx: &RequestCtx<'_>,
+        doc: Option<&serde_json::Value>,
+    ) -> Result<PartitionId, SpiError>;
 
     /// Optional rule to construct the document `_id` (and `_routing`).
     fn doc_id_rule(&self) -> Option<DocIdRule>;

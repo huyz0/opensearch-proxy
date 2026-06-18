@@ -12,8 +12,12 @@ struct SharedTenancy {
 }
 
 impl TenancySpi for SharedTenancy {
-    fn partition_key(&self) -> PartitionKeySpec {
-        PartitionKeySpec::Header("x-tenant".to_owned())
+    fn resolve_partition(
+        &self,
+        ctx: &RequestCtx<'_>,
+        doc: Option<&serde_json::Value>,
+    ) -> Result<PartitionId, SpiError> {
+        crate::resolve_partition_spec(&PartitionKeySpec::Header("x-tenant".to_owned()), ctx, doc)
     }
     fn doc_id_rule(&self) -> Option<DocIdRule> {
         self.id_rule.clone()
@@ -90,16 +94,22 @@ async fn shared_index_with_a_partition_scoped_id_rule_is_accepted() {
 struct EncodedHeaderTenancy;
 
 impl TenancySpi for EncodedHeaderTenancy {
-    fn extract_partition(&self, ctx: &RequestCtx<'_>) -> Option<PartitionId> {
-        let raw = ctx.headers().get("x-tenant-token")?;
-        // Decode: take the claim before the signature separator.
-        let claim = raw.split_once('.').map_or(raw, |(c, _sig)| c);
-        (!claim.is_empty()).then(|| PartitionId::from(claim))
-    }
-    // The declarative source would resolve a *different*, wrong id, proving
-    // the code extractor takes precedence when it returns `Some`.
-    fn partition_key(&self) -> PartitionKeySpec {
-        PartitionKeySpec::Header("x-wrong".to_owned())
+    fn resolve_partition(
+        &self,
+        ctx: &RequestCtx<'_>,
+        doc: Option<&serde_json::Value>,
+    ) -> Result<PartitionId, SpiError> {
+        // Decode an encoded header ourselves first; take the claim before the
+        // signature separator.
+        if let Some(raw) = ctx.headers().get("x-tenant-token") {
+            let claim = raw.split_once('.').map_or(raw, |(c, _sig)| c);
+            if !claim.is_empty() {
+                return Ok(PartitionId::from(claim));
+            }
+        }
+        // The declarative source resolves a *different*, wrong id; reaching it
+        // would prove the decode path did not take precedence.
+        crate::resolve_partition_spec(&PartitionKeySpec::Header("x-wrong".to_owned()), ctx, doc)
     }
     fn doc_id_rule(&self) -> Option<DocIdRule> {
         None

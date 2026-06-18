@@ -31,8 +31,16 @@ struct FlakyTenancy {
 }
 
 impl TenancySpi for FlakyTenancy {
-    fn partition_key(&self) -> PartitionKeySpec {
-        PartitionKeySpec::BodyField(JsonPath::new("tenant_id"))
+    fn resolve_partition(
+        &self,
+        ctx: &osproxy_spi::RequestCtx<'_>,
+        doc: Option<&serde_json::Value>,
+    ) -> Result<osproxy_core::PartitionId, osproxy_spi::SpiError> {
+        osproxy_tenancy::resolve_partition_spec(
+            &PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
+            ctx,
+            doc,
+        )
     }
     fn doc_id_rule(&self) -> Option<osproxy_spi::DocIdRule> {
         // SharedIndex requires a partition-scoped id (docs/03 §4), enforced by the

@@ -5,7 +5,9 @@ use osproxy_rewrite::extract_scalar;
 use osproxy_spi::{PartitionKeySpec, PartitionKeySpecKind, RequestCtx, SpiError};
 use serde_json::Value;
 
-/// Resolves the partition id by trying `spec`'s sources in order.
+/// Resolves the partition id by trying `spec`'s sources in order — the
+/// declarative resolver most [`osproxy_spi::TenancySpi::resolve_partition`]
+/// implementations defer to.
 ///
 /// `doc` is the request body parsed as JSON, or `None` if the body was absent
 /// or not valid JSON (in which case [`PartitionKeySpec::BodyField`] simply does
@@ -15,7 +17,7 @@ use serde_json::Value;
 ///
 /// Returns [`SpiError::PartitionUnresolved`] listing the source kinds tried if
 /// none resolved.
-pub(crate) fn resolve_partition(
+pub fn resolve_partition_spec(
     spec: &PartitionKeySpec,
     ctx: &RequestCtx<'_>,
     doc: Option<&Value>,
@@ -90,7 +92,7 @@ mod tests {
         let doc = json!({ "tenant_id": "acme" });
         let spec = PartitionKeySpec::BodyField(JsonPath::new("tenant_id"));
         assert_eq!(
-            resolve_partition(&spec, &c, Some(&doc)).unwrap(),
+            resolve_partition_spec(&spec, &c, Some(&doc)).unwrap(),
             PartitionId::from("acme")
         );
     }
@@ -109,7 +111,7 @@ mod tests {
             PartitionKeySpec::PrincipalAttr("tenant".to_owned()),
         ]);
         assert_eq!(
-            resolve_partition(&spec, &c, Some(&doc)).unwrap(),
+            resolve_partition_spec(&spec, &c, Some(&doc)).unwrap(),
             PartitionId::from("p9")
         );
     }
@@ -124,7 +126,7 @@ mod tests {
             PartitionKeySpec::Header("x-tenant".to_owned()),
             PartitionKeySpec::PrincipalAttr("tenant".to_owned()),
         ]);
-        let err = resolve_partition(&spec, &c, None).unwrap_err();
+        let err = resolve_partition_spec(&spec, &c, None).unwrap_err();
         assert!(
             matches!(&err, SpiError::PartitionUnresolved { tried }
             if *tried == vec![

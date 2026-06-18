@@ -14,12 +14,21 @@ struct Tenancy {
 }
 
 impl TenancySpi for Tenancy {
-    fn partition_key(&self) -> PartitionKeySpec {
+    fn resolve_partition(
+        &self,
+        ctx: &osproxy_spi::RequestCtx<'_>,
+        doc: Option<&serde_json::Value>,
+    ) -> Result<osproxy_core::PartitionId, osproxy_spi::SpiError> {
+        osproxy_tenancy::resolve_partition_spec(
+            &
         // Ingest resolves from the body; by-id reads (no body) from a header.
         PartitionKeySpec::AnyOf(vec![
             PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
             PartitionKeySpec::Header("x-tenant".to_owned()),
-        ])
+        ]),
+            ctx,
+            doc,
+        )
     }
     fn doc_id_rule(&self) -> Option<DocIdRule> {
         Some(DocIdRule::new(IdTemplate::new("{partition}:{body.id}")).with_routing(true))

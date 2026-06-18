@@ -43,13 +43,22 @@ impl ReferenceTenancy {
 }
 
 impl TenancySpi for ReferenceTenancy {
-    fn partition_key(&self) -> PartitionKeySpec {
+    fn resolve_partition(
+        &self,
+        ctx: &osproxy_spi::RequestCtx<'_>,
+        doc: Option<&serde_json::Value>,
+    ) -> Result<osproxy_core::PartitionId, osproxy_spi::SpiError> {
+        osproxy_tenancy::resolve_partition_spec(
+            &
         // Ingest carries the partition in the body; by-id reads have no body, so
         // they carry it in a header set by the caller (or an auth gateway).
         PartitionKeySpec::AnyOf(vec![
             PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
             PartitionKeySpec::Header(TENANT_HEADER.to_owned()),
-        ])
+        ]),
+            ctx,
+            doc,
+        )
     }
 
     fn doc_id_rule(&self) -> Option<DocIdRule> {

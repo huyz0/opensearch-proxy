@@ -24,4 +24,5 @@ mod router;
 
 pub use migration::{MigrationError, PartitionState, Phase, WriteAdmission};
 pub use placement_table::PlacementTable;
+pub use resolve::resolve_partition_spec;
 pub use router::{Resolved, Router, TenancyRouter};

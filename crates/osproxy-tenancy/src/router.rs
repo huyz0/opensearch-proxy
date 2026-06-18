@@ -13,8 +13,6 @@ use osproxy_spi::{
 };
 use serde_json::Value;
 
-use crate::resolve::resolve_partition;
-
 /// A fully resolved routing decision plus the partition it was resolved for.
 ///
 /// The engine consumes this richer result directly (it needs the partition to
@@ -90,12 +88,7 @@ impl<T: TenancySpi> TenancyRouter<T> {
         ctx: &RequestCtx<'_>,
         doc: Option<&Value>,
     ) -> Result<PartitionId, SpiError> {
-        // A code-based extractor (e.g. decoding an encoded header) wins over the
-        // declarative sources when it resolves; otherwise fall through to them.
-        if let Some(id) = self.spi.extract_partition(ctx) {
-            return Ok(id);
-        }
-        resolve_partition(&self.spi.partition_key(), ctx, doc)
+        self.spi.resolve_partition(ctx, doc)
     }
 
     /// Resolves a known partition to its placement and the routing plan for a

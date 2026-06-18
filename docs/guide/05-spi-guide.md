@@ -51,9 +51,14 @@ use osproxy_spi::{
 struct MyTenancy;
 
 impl TenancySpi for MyTenancy {
-    /// Where the partition (tenant) id comes from. Here: a body field `tenant_id`.
-    fn partition_key(&self) -> PartitionKeySpec {
-        PartitionKeySpec::BodyField(JsonPath::new("tenant_id"))
+    /// Resolve the partition (tenant) id. Here we defer to the declarative
+    /// resolver, naming a body field `tenant_id`. (Override the body to decode an
+    /// encoded header or combine inputs — see "Deriving the partition with code".)
+    fn resolve_partition(&self, ctx: &RequestCtx<'_>, doc: Option<&serde_json::Value>)
+        -> Result<PartitionId, SpiError>
+    {
+        osproxy_tenancy::resolve_partition_spec(
+            &PartitionKeySpec::BodyField(JsonPath::new("tenant_id")), ctx, doc)
     }
 
     /// How to build the physical document id. For SharedIndex the partition id is
@@ -106,8 +111,8 @@ impl TenancySpi for MyTenancy {
 
 ### Invariants you must uphold
 
-- `partition_key` must resolve for every routable request, or the request is rejected
-  with `PartitionUnresolved`.
+- `resolve_partition` must yield a partition id for every routable request, or it
+  returns `PartitionUnresolved` and the request is rejected.
 - In `SharedIndex` mode the partition id **must** be part of the constructed `_id`
   (the router enforces this and fails closed otherwise; see [Architecture](03-architecture.md)).
 - `injected_fields` names must be **stable** for a given logical-index version, so
@@ -120,8 +125,10 @@ impl TenancySpi for MyTenancy {
 
 ### Partition key sources
 
-`partition_key` declares where the partition id lives, for the cases a name can
-express:
+For the common case the id lives somewhere a name can point at, hand a
+`PartitionKeySpec` to `osproxy_tenancy::resolve_partition_spec` (as the example
+above does). It reports `PartitionUnresolved { tried }` listing the sources it
+attempted:
 
 | `PartitionKeySpec` | Source |
 |--------------------|--------|
@@ -133,22 +140,28 @@ express:
 ### Deriving the partition with code
 
 When the id is not sitting in a header verbatim (a signed token, a base64 blob, a
-claim inside a structured header), override `extract_partition` and decode it
-yourself. It runs **before** `partition_key`, gets the full `RequestCtx` (headers,
-principal, path, query, body), and returns `Some(id)` to use the result or `None`
-to fall through to the declarative sources. The default returns `None`.
+claim inside a structured header), write the `resolve_partition` body yourself.
+You get the full `RequestCtx` (headers, principal, path, query, body) and the
+parsed document, and **you** pick the order — decode first, then fall back to the
+declarative resolver if you like:
 
 ```rust
 impl TenancySpi for MyTenancy {
-    fn extract_partition(&self, ctx: &RequestCtx<'_>) -> Option<PartitionId> {
-        let raw = ctx.headers().get("x-tenant-token")?;
-        // Decode/verify your encoded header, then return the claim. The decoded
-        // value is a routing key, never logged (NFR-S2).
-        let claim = decode_and_verify(raw)?;
-        Some(PartitionId::from(claim.tenant.as_str()))
+    fn resolve_partition(&self, ctx: &RequestCtx<'_>, doc: Option<&serde_json::Value>)
+        -> Result<PartitionId, SpiError>
+    {
+        if let Some(raw) = ctx.headers().get("x-tenant-token") {
+            // Decode/verify your encoded header. The decoded value is a routing
+            // key, never logged (NFR-S2).
+            if let Some(claim) = decode_and_verify(raw) {
+                return Ok(PartitionId::from(claim.tenant.as_str()));
+            }
+        }
+        // Fall back to a declarative source for requests the token path misses.
+        osproxy_tenancy::resolve_partition_spec(
+            &PartitionKeySpec::Header("x-tenant".to_owned()), ctx, doc)
     }
-    // … partition_key/doc_id_rule/… as above; partition_key can stay as a
-    // fallback for requests the token path does not cover.
+    // … doc_id_rule / injected_fields / … as above.
 }
 ```
 

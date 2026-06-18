@@ -105,8 +105,16 @@ impl Reader for RecordingSink {
 /// only to satisfy the pipeline's type.
 struct StubTenancy;
 impl TenancySpi for StubTenancy {
-    fn partition_key(&self) -> PartitionKeySpec {
-        PartitionKeySpec::BodyField(JsonPath::new("tenant_id"))
+    fn resolve_partition(
+        &self,
+        ctx: &osproxy_spi::RequestCtx<'_>,
+        doc: Option<&serde_json::Value>,
+    ) -> Result<osproxy_core::PartitionId, osproxy_spi::SpiError> {
+        osproxy_tenancy::resolve_partition_spec(
+            &PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
+            ctx,
+            doc,
+        )
     }
     fn doc_id_rule(&self) -> Option<DocIdRule> {
         // SharedIndex requires a partition-scoped id rule (docs/03 §4); the search
