@@ -196,6 +196,51 @@ fn an_unknown_flag_is_rejected() {
 }
 
 #[test]
+fn config_file_sections_are_optional_grouping_sugar() {
+    // `[capture]` lets keys be written bare (`kafka_brokers`); a fully-qualified
+    // key still works inside the section; `[]` clears back to top level. The
+    // canonical key is unchanged, so this is pure file-side sugar.
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("osproxy-sect-{}.conf", std::process::id()));
+    std::fs::write(
+        &path,
+        "[capture]\nkafka_brokers = b1:9092\ncapture_topic = t\n[]\nindex = top-level\n",
+    )
+    .unwrap();
+
+    let cfg = Config::load(vec![
+        "--config".to_owned(),
+        path.to_string_lossy().into_owned(),
+    ])
+    .unwrap();
+    let cap = cfg.capture.expect("capture configured via section");
+    assert_eq!(
+        cap.brokers,
+        vec!["b1:9092"],
+        "bare key resolved under section"
+    );
+    assert_eq!(cap.topic, "t", "fully-qualified key also works in section");
+    assert_eq!(cfg.index, "top-level", "[] cleared the section");
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn a_bare_key_unknown_even_with_the_section_prefix_fails_closed() {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("osproxy-sect-bad-{}.conf", std::process::id()));
+    // `[capture]` + `nonsense` → neither `capture_nonsense` nor `nonsense` is a key.
+    std::fs::write(&path, "[capture]\nnonsense = 1\n").unwrap();
+    let err = Config::load(vec![
+        "--config".to_owned(),
+        path.to_string_lossy().into_owned(),
+    ])
+    .unwrap_err();
+    assert_eq!(err.field(), "nonsense");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn capture_is_off_by_default() {
     assert!(resolve(&[]).unwrap().capture.is_none());
 }

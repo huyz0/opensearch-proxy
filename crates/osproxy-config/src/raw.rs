@@ -72,6 +72,15 @@ fn canonical(key: &str) -> Option<&'static str> {
     KEYS.iter().copied().find(|k| *k == key)
 }
 
+/// Resolves a file key that may be written bare inside a `[section]`: tries
+/// `{section}_{key}` first, then the key as-is (so a fully-qualified key still
+/// works inside a section, and a key outside any section is unchanged).
+fn canonical_in(section: Option<&str>, key: &str) -> Option<&'static str> {
+    section
+        .and_then(|s| canonical(&format!("{s}_{key}")))
+        .or_else(|| canonical(key))
+}
+
 /// One source's worth of raw string values, keyed by canonical setting key.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Raw {
@@ -110,21 +119,35 @@ impl Raw {
     /// every other line is `key = value`, where `value` may be wrapped in matching
     /// single or double quotes. An unrecognized key fails closed.
     ///
+    /// A `[section]` header is optional grouping sugar: inside one, a bare key is
+    /// resolved as `{section}_{key}` first (e.g. `kafka_brokers` under `[capture]`
+    /// → `capture_kafka_brokers`), falling back to the key as-is, so a
+    /// fully-qualified key still works anywhere and the canonical key — hence the
+    /// `OSPROXY_<KEY>` env var and `--key` flag — is unchanged. `[]` clears the
+    /// section. A file with no headers behaves exactly as before.
+    ///
     /// # Errors
     ///
     /// Returns a [`ConfigError`] for a malformed line or an unknown setting key.
     pub(crate) fn from_file(text: &str) -> Result<Self, ConfigError> {
         let mut raw = Raw::default();
+        let mut section: Option<String> = None;
         for (n, line) in text.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some(name) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                let name = name.trim();
+                section = (!name.is_empty()).then(|| name.to_owned());
                 continue;
             }
             let (key, value) = line.split_once('=').ok_or_else(|| {
                 ConfigError::invalid("file", format!("line {}: expected `key = value`", n + 1))
             })?;
             let key = key.trim();
-            let canonical = canonical(key).ok_or_else(|| ConfigError::unknown(key))?;
+            let canonical =
+                canonical_in(section.as_deref(), key).ok_or_else(|| ConfigError::unknown(key))?;
             raw.set(canonical, unquote(value.trim()).to_owned());
         }
         Ok(raw)

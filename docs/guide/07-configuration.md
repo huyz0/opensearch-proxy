@@ -21,6 +21,23 @@ config file   <   environment   <   command-line flags
 The canonical key is `snake_case`; the env var is `OSPROXY_` + the upper-cased key
 (e.g. `bind` → `OSPROXY_BIND`).
 
+**Optional file sections.** In the config file you may group keys under a
+`[section]` header purely for readability: inside it a bare key is read as
+`{section}_{key}`, so under `[capture]` you can write `kafka_brokers` instead of
+`capture_kafka_brokers`. It is only sugar — the canonical key (and therefore the
+env var and flag) is unchanged, a fully-qualified key still works inside a section,
+and `[]` returns to the top level. A file with no headers behaves exactly as before.
+
+```ini
+# These two files are equivalent.
+capture_kafka_brokers = b1:9092
+capture_topic         = osproxy.capture
+
+[capture]
+kafka_brokers = b1:9092
+topic         = osproxy.capture
+```
+
 ## Settings reference
 
 ### Networking
