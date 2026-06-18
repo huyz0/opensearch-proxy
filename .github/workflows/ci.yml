@@ -94,7 +94,10 @@ jobs:
       # (testcontainer/perf_harness/soak — they only run with `--ignored` against a
       # live container, so under coverage their scaffolding reads as uncovered).
       # The server's *library* code (auth, handler, tenancy) is tested and counted.
-      - run: cargo llvm-cov --workspace --lib --tests --fail-under-lines 90 --ignore-filename-regex 'xtask|osproxy-server/src/main\.rs|tests/(testcontainer|perf_harness|soak)\.rs'
+      # `tests/memory.rs` are dhat allocation-budget tests; they self-skip under
+      # instrumentation (the counts are meaningless there) so their bodies don't
+      # count toward the line percentage — exclude them from attribution too.
+      - run: cargo llvm-cov --workspace --lib --tests --fail-under-lines 90 --ignore-filename-regex 'xtask|osproxy-server/src/main\.rs|tests/(testcontainer|perf_harness|soak|memory)\.rs'
 
   perf:
     name: Deterministic perf (iai-callgrind)

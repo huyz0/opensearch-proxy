@@ -41,6 +41,13 @@ fn directive(sample_per_mille: u16) -> DiagnosticsDirective {
 
 #[test]
 fn evaluate_does_not_allocate() {
+    // Skip under coverage instrumentation: `cargo llvm-cov` rewrites the binary
+    // with profiling counters that perturb heap-allocation counts, so these exact
+    // budgets are meaningless and flaky there. The uninstrumented `performance`
+    // gate enforces them for real.
+    if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        return;
+    }
     let _profiler = Profiler::builder().testing().build();
 
     let set = DirectiveSet::from_directives(vec![directive(100), directive(1000)]);

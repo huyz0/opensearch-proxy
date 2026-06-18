@@ -36,6 +36,13 @@ fn allocs(f: impl FnOnce()) -> u64 {
 /// are helpers called within the one live profiler, not separate tests.
 #[test]
 fn rewrite_hot_path_allocation_budgets() {
+    // Skip under coverage instrumentation: `cargo llvm-cov` rewrites the binary
+    // with profiling counters that perturb heap-allocation counts, so these exact
+    // budgets (especially the `== 0` ones) are meaningless and flaky there. The
+    // budgets are enforced for real by the uninstrumented `performance` gate.
+    if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        return;
+    }
     let _profiler = Profiler::builder().testing().build();
     document_transform_budgets();
     bulk_path_budgets();
