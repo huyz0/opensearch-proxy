@@ -139,10 +139,10 @@ jobs:
       - name: Live integration + NFR-P harnesses
         run: cargo test -p osproxy-server --test testcontainer --test perf_harness --test soak -- --ignored --nocapture --test-threads=1
       # The async fan-out round-trip (docs/04 §9): produce a real op envelope to a
-      # containerized Kafka and read it back. Needs the `capture-kafka` feature, so
+      # containerized Kafka and read it back. Needs the `kafka` feature, so
       # it is a separate invocation from the default-feature harnesses above.
       - name: Async fan-out Kafka round-trip
-        run: cargo test -p osproxy-server --features capture-kafka --bin osproxy kafka_round_trip -- --ignored --nocapture --test-threads=1
+        run: cargo test -p osproxy-server --features kafka --bin osproxy kafka_round_trip -- --ignored --nocapture --test-threads=1
       # Render the Markdown briefs the runners emit into the job summary, so the
       # latency / scalability / footprint tables and verdicts show up on the run
       # page itself — the consolidated view an operator (or an LLM) reads.

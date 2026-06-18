@@ -57,17 +57,17 @@ pub struct Config {
     /// onboarded) indices through verbatim while tenant-isolating the rest.
     pub passthrough: Option<PassthroughConfig>,
     /// Full-fidelity traffic capture to a Kafka topic, or `None` (off). Requires
-    /// the binary be built with the `capture-kafka` feature; a configured capture
+    /// the binary be built with the `kafka` feature; a configured capture
     /// on a binary without it is a loud startup error rather than a silent no-op.
     pub capture: Option<CaptureConfig>,
     /// Whether capture is on for every request before any directive (default
     /// `false`). `false` = capture on demand: nothing is teed until a published
     /// `capture` directive selects requests. `true` = always-capture (a dedicated
     /// capture/migration proxy). Independent of the sink: it only decides *when*
-    /// to capture; the sink still needs the `capture-kafka` feature + config.
+    /// to capture; the sink still needs the `kafka` feature + config.
     pub capture_default: bool,
     /// Async fan-out write queue (`docs/04` §9), or `None` (off). Requires the
-    /// `capture-kafka` feature; a configured fan-out on a binary without it is a
+    /// `kafka` feature; a configured fan-out on a binary without it is a
     /// loud startup error rather than a silent no-op.
     pub fanout: Option<FanoutConfig>,
 }
