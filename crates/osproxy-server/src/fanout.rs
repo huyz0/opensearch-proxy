@@ -10,13 +10,13 @@
 //! configured for debuggability. The downstream applier forwards the body verbatim
 //! with that Content-Type and never parses the document.
 
-#[cfg(any(feature = "kafka", test))]
+#[cfg(any(feature = "fanout", test))]
 use osproxy_engine::{QueueError, QueuedWrite};
-#[cfg(any(feature = "kafka", test))]
+#[cfg(any(feature = "fanout", test))]
 use osproxy_sink::{DocOp, WriteOp};
 
 /// The generated protobuf messages (`osproxy.fanout.v1`).
-#[cfg(any(feature = "kafka", test))]
+#[cfg(any(feature = "fanout", test))]
 mod pb {
     #![allow(
         clippy::doc_markdown,
@@ -28,11 +28,11 @@ mod pb {
     include!(concat!(env!("OUT_DIR"), "/osproxy.fanout.v1.rs"));
 }
 
-#[cfg(any(feature = "kafka", test))]
+#[cfg(any(feature = "fanout", test))]
 pub(crate) use pb::{OpEnvelope, OpType};
 
 /// How the document body is encoded inside the envelope.
-#[cfg(any(feature = "kafka", test))]
+#[cfg(any(feature = "fanout", test))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum BodyEncoding {
     /// CBOR (RFC 8949): compact binary, OpenSearch-native. The default.
@@ -44,7 +44,7 @@ pub(crate) enum BodyEncoding {
 
 /// Transcodes a JSON document body to the configured encoding, returning the
 /// bytes and the media type to stamp on the envelope.
-#[cfg(any(feature = "kafka", test))]
+#[cfg(any(feature = "fanout", test))]
 fn encode_body(json: &[u8], encoding: BodyEncoding) -> Result<(Vec<u8>, &'static str), QueueError> {
     match encoding {
         BodyEncoding::Json => Ok((json.to_vec(), "application/json")),
@@ -66,7 +66,7 @@ fn encode_body(json: &[u8], encoding: BodyEncoding) -> Result<(Vec<u8>, &'static
 }
 
 /// Builds the protobuf envelope for one resolved op.
-#[cfg(any(feature = "kafka", test))]
+#[cfg(any(feature = "fanout", test))]
 pub(crate) fn envelope(
     write: &QueuedWrite,
     op: &WriteOp,
@@ -111,14 +111,14 @@ pub(crate) fn envelope(
 
 /// A [`WriteQueue`](osproxy_engine::WriteQueue) that produces each resolved op as
 /// an [`OpEnvelope`] to a Kafka topic, acknowledged before returning.
-#[cfg(feature = "kafka")]
+#[cfg(feature = "fanout")]
 pub(crate) struct KafkaWriteQueue<P> {
     producer: std::sync::Arc<P>,
     topic: String,
     encoding: BodyEncoding,
 }
 
-#[cfg(feature = "kafka")]
+#[cfg(feature = "fanout")]
 impl<P> KafkaWriteQueue<P> {
     /// Builds a queue producing to `topic` with the given body `encoding`.
     pub(crate) fn new(producer: std::sync::Arc<P>, topic: String, encoding: BodyEncoding) -> Self {
@@ -130,7 +130,7 @@ impl<P> KafkaWriteQueue<P> {
     }
 }
 
-#[cfg(feature = "kafka")]
+#[cfg(feature = "fanout")]
 impl<P: osproxy_kafka::AckProducer> osproxy_engine::WriteQueue for KafkaWriteQueue<P> {
     fn enabled(&self) -> bool {
         true
@@ -164,7 +164,7 @@ impl<P: osproxy_kafka::AckProducer> osproxy_engine::WriteQueue for KafkaWriteQue
 /// connects an ack-producing krafka producer (over TLS/mTLS when configured),
 /// wraps it in [`KafkaWriteQueue`], and sets the deployment-default write mode.
 /// A fan-out without TLS is a plaintext broker connection.
-#[cfg(feature = "kafka")]
+#[cfg(feature = "fanout")]
 pub(crate) async fn attach<R, S>(
     pipeline: osproxy_engine::Pipeline<R, S>,
     cfg: &osproxy_config::Config,
@@ -217,9 +217,9 @@ where
         .with_delete_by_query_expansion(fc.expand_delete_by_query))
 }
 
-/// Without the `kafka` feature no broker client is linked, so a
+/// Without the `fanout` feature no broker client is linked, so a
 /// configured fan-out is a loud startup error rather than a silent no-op.
-#[cfg(not(feature = "kafka"))]
+#[cfg(not(feature = "fanout"))]
 #[allow(clippy::unused_async)]
 pub(crate) async fn attach<R, S>(
     pipeline: osproxy_engine::Pipeline<R, S>,
@@ -232,8 +232,8 @@ where
     if cfg.fanout.is_some() {
         return Err(
             "fan-out is configured (fanout_kafka_brokers/fanout_topic) but this binary \
-                    was built without the `kafka` feature; rebuild with \
-                    `--features kafka`"
+                    was built without the `fanout` feature; rebuild with \
+                    `--features fanout`"
                 .to_owned(),
         );
     }
@@ -319,6 +319,6 @@ mod tests {
 }
 
 /// Live round-trip against a real broker (`docs/04` §9) — see the module file.
-#[cfg(all(test, feature = "kafka"))]
+#[cfg(all(test, feature = "fanout"))]
 #[path = "fanout_kafka_test.rs"]
 mod kafka_round_trip;

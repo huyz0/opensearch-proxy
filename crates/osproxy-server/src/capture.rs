@@ -1,7 +1,7 @@
 //! Wiring for full-fidelity Kafka traffic capture.
 //!
 //! Capture is opt-in twice over: it links no broker client unless the binary is
-//! built with the `kafka` feature, and even then it stays off until
+//! built with the `capture` feature, and even then it stays off until
 //! `capture_kafka_brokers`/`capture_topic` are configured. The captured stream
 //! carries bodies and values verbatim, so it is privileged: the `Authorization`
 //! header is redacted unless explicitly kept. See `docs/guide/07-configuration.md`.
@@ -13,7 +13,7 @@ use osproxy_spi::Authenticator;
 /// Attaches Kafka capture when configured. Builds the portable krafka producer
 /// (over TLS/mTLS when `capture_kafka_ca` is set) behind the `Capture` seam,
 /// wrapping it in `RedactingCapture` unless `capture_redact=false`.
-#[cfg(feature = "kafka")]
+#[cfg(feature = "capture")]
 pub(crate) async fn attach<A: Authenticator>(
     handler: AppHandler<A>,
     cfg: &Config,
@@ -75,7 +75,7 @@ pub(crate) async fn attach<A: Authenticator>(
 /// Wraps a producer in a `KafkaCapture`, plus `RedactingCapture` unless capture
 /// redaction is opted out. Generic so either the durable or in-memory producer
 /// composes through the same path.
-#[cfg(feature = "kafka")]
+#[cfg(feature = "capture")]
 fn wrap_capture<P: osproxy_kafka::Producer + 'static>(
     producer: P,
     cap: &osproxy_config::CaptureConfig,
@@ -88,9 +88,9 @@ fn wrap_capture<P: osproxy_kafka::Producer + 'static>(
     }
 }
 
-/// Without the `kafka` feature no broker client is linked, so a
+/// Without the `capture` feature no broker client is linked, so a
 /// configured capture is a loud startup error rather than a silent no-op.
-#[cfg(not(feature = "kafka"))]
+#[cfg(not(feature = "capture"))]
 #[allow(clippy::unused_async)]
 pub(crate) async fn attach<A: Authenticator>(
     handler: AppHandler<A>,
@@ -99,8 +99,8 @@ pub(crate) async fn attach<A: Authenticator>(
     if cfg.capture.is_some() {
         return Err(
             "capture is configured (capture_kafka_brokers/capture_topic) but this binary \
-                    was built without the `kafka` feature; rebuild with \
-                    `--features kafka`"
+                    was built without the `capture` feature; rebuild with \
+                    `--features capture`"
                 .to_owned(),
         );
     }

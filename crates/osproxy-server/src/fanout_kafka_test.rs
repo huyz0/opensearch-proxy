@@ -5,8 +5,8 @@
 //! `KafkaWriteQueue` produces an op envelope to a containerized Apache Kafka, and
 //! a krafka consumer reads it back and decodes it — proving the
 //! produce→broker→consume→decode contract the in-process tests cannot. Needs
-//! Docker + the `kafka` feature, so it is `#[ignore]`'d. Run with:
-//!   cargo test -p osproxy-server --features kafka --bin osproxy -- --ignored
+//! Docker + the `fanout` feature, so it is `#[ignore]`'d. Run with:
+//!   cargo test -p osproxy-server --features fanout --bin osproxy -- --ignored
 
 // Test scaffolding: `expect`/`panic` are how the live-container tests fail fast
 // on setup errors, as in `tests/testcontainer.rs`.

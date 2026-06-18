@@ -19,15 +19,20 @@ path = "src/main.rs"
 default = ["non-fips"]
 # The crypto feature also selects the HMAC module the X-Debug-Directive verifier
 # authenticates with, so a FIPS binary never links a non-validated primitive. The
-# weak `osproxy-kafka-krafka?/...` edge forwards the same provider to the capture
-# producer *only when* `kafka` pulled it in, so a FIPS capture build keeps
-# the ring-absent boundary and a default binary never links krafka at all.
+# weak `osproxy-kafka-krafka?/...` edge forwards the same provider to the broker
+# producer *only when* `capture`/`fanout` pulled it in, so a FIPS build keeps the
+# ring-absent boundary and a default binary never links krafka at all.
 non-fips = ["osproxy-transport/non-fips", "dep:ring", "osproxy-kafka-krafka?/non-fips"]
 fips = ["osproxy-transport/fips", "dep:aws-lc-rs", "osproxy-kafka-krafka?/fips"]
-# Opt-in Kafka traffic capture: composes the portable krafka producer behind the
-# `Capture` seam. Off by default so the standard binary carries no broker client.
-# Build with `cargo build -p osproxy-server --features kafka`.
-kafka = ["dep:osproxy-kafka", "dep:osproxy-kafka-krafka", "dep:osproxy-kafka-wal"]
+# The two Kafka integrations are independent opt-ins, each linking only the broker
+# crates it needs (off by default so the standard binary carries no broker client):
+#   capture — full-fidelity traffic capture (`Capture` seam + durable WAL tier).
+#   fanout  — async fan-out write queue (`docs/04` §9; no WAL).
+# Build with e.g. `cargo build -p osproxy-server --features capture` (or `fanout`,
+# or both). `kafka` is a convenience alias enabling both.
+capture = ["dep:osproxy-kafka", "dep:osproxy-kafka-krafka", "dep:osproxy-kafka-wal"]
+fanout = ["dep:osproxy-kafka", "dep:osproxy-kafka-krafka"]
+kafka = ["capture", "fanout"]
 
 [dependencies]
 osproxy-core.workspace = true

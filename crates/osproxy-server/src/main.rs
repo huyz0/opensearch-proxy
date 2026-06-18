@@ -33,7 +33,7 @@ use tokio::net::TcpListener;
 
 mod capture;
 // Async fan-out write queue (docs/04 §9). The Kafka queue + envelope encoder
-// compile under `kafka` (and in the test lane, so the wire contract is
+// compile under `fanout` (and in the test lane, so the wire contract is
 // verified without a broker); `fanout::attach` is always present and binds the
 // queue into the pipeline from config.
 mod fanout;
@@ -71,7 +71,7 @@ async fn run() -> Result<(), String> {
     let directive_store = Arc::new(InMemoryDirectiveStore::new());
     let pipeline = assemble_pipeline(tenancy, sink, directive_store.clone(), &cfg);
     // Bind the async fan-out write queue (docs/04 §9) when configured; without the
-    // `kafka` feature a configured fan-out is a loud startup error.
+    // `fanout` feature a configured fan-out is a loud startup error.
     let pipeline = fanout::attach(pipeline, &cfg).await?;
 
     let tokens: HashMap<String, String> = cfg.tokens.iter().cloned().collect();

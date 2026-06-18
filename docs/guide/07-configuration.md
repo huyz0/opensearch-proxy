@@ -76,7 +76,7 @@ Full-fidelity capture tees every request and response to a Kafka topic for repla
 or audit. The captured stream carries bodies and values verbatim, so it is
 privileged: it stays off until configured, and the `Authorization` header is
 stripped unless you opt out. These keys need a binary built with the
-`kafka` feature (`cargo build -p osproxy-server --features kafka`);
+`capture` feature (`cargo build -p osproxy-server --features capture`);
 setting them on a binary built without it is a loud startup error, not a silent
 no-op.
 
@@ -116,7 +116,7 @@ Async fan-out durably enqueues resolved write ops to a Kafka topic and returns
 fans the topic out to one or more OpenSearch destinations (see
 [request pipeline §9](../04-request-pipeline.md#9-asynchronous-fan-out-write-mode)
 and [async clients](09-async-clients.md)). Like capture, these keys need a binary
-built with the `kafka` feature; setting them without it is a loud startup
+built with the `fanout` feature; setting them without it is a loud startup
 error. Independent of capture — a proxy can run either, both, or neither.
 
 | Key (`OSPROXY_…`) | Default | Description |

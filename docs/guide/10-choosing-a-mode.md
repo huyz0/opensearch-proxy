@@ -14,16 +14,18 @@ This page is the map. Each section links to the page with the full story.
 | Axis | Where you set it | When it binds | Default |
 |------|------------------|---------------|---------|
 | **Tenanted vs tenant-agnostic** | Implement `TenancySpi` (code) → tenanted; `passthrough_cluster` + `passthrough_indices` (config) → agnostic, whole-instance or per-index | compile + startup | Tenanted (you must provide a tenancy) |
-| **Sync vs async writes** | `kafka` feature (build) + `fanout_*` (config baseline) + `X-Write-Mode` (per request) | compile + startup + per-request | Sync |
-| **Capture on/off** | `kafka` feature (build) + `capture_*` (config) + `capture` diagnostics directive (runtime) | compile + startup + **runtime** | Off |
+| **Sync vs async writes** | `fanout` feature (build) + `fanout_*` (config baseline) + `X-Write-Mode` (per request) | compile + startup + per-request | Sync |
+| **Capture on/off** | `capture` feature (build) + `capture_*` (config) + `capture` diagnostics directive (runtime) | compile + startup + **runtime** | Off |
 | **FIPS crypto** | `--no-default-features --features fips` (build) — a separate artifact | compile | Non-FIPS (`ring`) |
 
 Two rules of thumb fall out of this table:
 
 - **A build flag is a property of the binary, not the deployment.** Async fan-out
-  and capture both need the `kafka` feature compiled in. A binary built without it
-  treats a configured `fanout_*`/`capture_*` as a *loud startup error*, never a
-  silent no-op — so you find out at boot, not in production.
+  needs the `fanout` feature and capture needs the `capture` feature, each linking
+  only the broker crates it uses (or `--features kafka` for both). A binary built
+  without the relevant feature treats a configured `fanout_*`/`capture_*` as a
+  *loud startup error*, never a silent no-op — so you find out at boot, not in
+  production.
 - **Tenanted is code; agnostic is config.** Going tenant-agnostic is a config key.
   Going tenanted means implementing `TenancySpi` and compiling it into your own
   binary (the shipped binary's `ReferenceTenancy` is a sample, not a product). If
@@ -58,7 +60,7 @@ passthrough_indices  = legacy-, archive_
 
 Sync is the default and the honest one: a write returns OpenSearch's real result.
 Async durably enqueues the write to Kafka and returns `202` + an `op_id`; a
-downstream component applies it. Async needs the `kafka` feature built in and
+downstream component applies it. Async needs the `fanout` feature built in and
 `fanout_*` configured.
 
 The key design choice: **async is negotiated per request** with `X-Write-Mode:
@@ -70,7 +72,7 @@ client opts in rather than having it flipped on underneath it. See
 ## Capture on/off
 
 Capture tees a full-fidelity copy of each exchange to a stream for replay. It is
-the most dynamic axis on purpose: built in with the `kafka` feature, pointed at a
+the most dynamic axis on purpose: built in with the `capture` feature, pointed at a
 topic with `capture_*`, and then **turned on at runtime, fleet-wide, with no
 restart** via a `capture` diagnostics directive — targeted by tenant/index, sampled,
 and TTL'd. It is observability, not a correctness boundary, so it is safe to flip
