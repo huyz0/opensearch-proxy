@@ -24,7 +24,7 @@ dylibs).
 - Is built to be **observed and debugged by an LLM** with no human source-diving
   required — structured, causal, security-aware traces, togglable at runtime.
 
-## What it explicitly does *not* do (v1)
+## What it explicitly does *not* do
 
 - **No synchronous fan-out / scatter-gather.** Every search resolves to a single
   cluster. A partition's data normally lives in one place.
@@ -129,14 +129,19 @@ deeper rationale.
 | [docs/08-engineering-standards.md](docs/08-engineering-standards.md) | Code structure, no-god-module rules, folder layout |
 | [docs/09-testing-and-quality.md](docs/09-testing-and-quality.md) | Test strategy, **≥90% semantic coverage**, test quality |
 | [docs/10-review-process.md](docs/10-review-process.md) | Design & code review gates |
-| [docs/11-roadmap.md](docs/11-roadmap.md) | Milestones and the first vertical slice |
+| [docs/11-roadmap.md](docs/11-roadmap.md) | Delivery history & status (what shipped, what's intentionally out of scope) |
 | [docs/12-quality-system.md](docs/12-quality-system.md) | Two-tier quality: deterministic gates + LLM semantic review |
 | [docs/specs/](docs/specs/) | Vendored external specs & references (OpenSearch API, FIPS, OTel) |
 
 ## Status
 
-Design phase. No code yet. The first vertical slice is defined in
-[docs/11-roadmap.md](docs/11-roadmap.md).
+**Feature-complete and CI-green.** All planned milestones (M0–M7) plus the
+post-plan additions — async fan-out, traffic capture, tenant-agnostic passthrough,
+live scroll/PIT affinity, a reference etcd directive store, and the fleet-coherent
+diagnostic sink — have shipped on the seams the milestones established. No code-side
+gaps remain; the only outstanding items are external (the AWS-LC CMVP certificate
+award and authoritative NFR-P thresholds on reference hardware). See
+[docs/11-roadmap.md](docs/11-roadmap.md) for the full delivery record.
 
 ## License
 

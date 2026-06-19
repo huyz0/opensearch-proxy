@@ -4,7 +4,7 @@ Every requirement here is testable, and the build gates on it. This page is the
 summary; the source of truth is [`docs/00-goals.md`](../00-goals.md) and the NFR tables
 in [`docs/01-architecture.md`](../01-architecture.md) §5.
 
-## Functional scope (v1)
+## Functional scope
 
 - **Ingress**: HTTP/1.1, HTTP/2, and gRPC; cleartext and TLS; optional FIPS build.
 - **Single-target routing** for **all** request types (read and write).

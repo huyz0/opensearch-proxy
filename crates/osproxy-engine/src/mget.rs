@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 use crate::error::RequestError;
 use crate::pipeline::PipelineResponse;
 use crate::read::{build_read_op, not_found_body, shape_found, ReadShape};
+use crate::retry::with_retry;
 
 /// The most concurrent in-flight upstream gets, bounding a wide `_mget` fan-out
 /// just as the bulk dispatch bounds its per-target writes (NFR-P, `docs/04` §5).
@@ -39,6 +40,7 @@ pub(crate) async fn multi_get<R: Router, S: Reader>(
     router: &R,
     sink: &S,
     ctx: &RequestCtx<'_>,
+    retry: crate::RetryPolicy,
 ) -> Result<PipelineResponse, RequestError> {
     let items = parse_mget(ctx.body())?;
     let n = items.len();
@@ -52,7 +54,7 @@ pub(crate) async fn multi_get<R: Router, S: Reader>(
     let mut cache: HashMap<String, Resolved> = HashMap::new();
 
     for (ordinal, item) in items.into_iter().enumerate() {
-        match prepare(router, ctx, &partition, &mut cache, &item).await {
+        match prepare(router, ctx, &partition, &mut cache, &item, retry).await {
             Ok(p) => prepared[ordinal] = Some(p),
             Err(line) => docs[ordinal] = line,
         }
@@ -85,6 +87,7 @@ async fn prepare<R: Router>(
     partition: &osproxy_core::PartitionId,
     cache: &mut HashMap<String, Resolved>,
     item: &MgetItem,
+    retry: crate::RetryPolicy,
 ) -> Result<Prepared, Value> {
     let logical_index = item
         .index
@@ -94,10 +97,13 @@ async fn prepare<R: Router>(
     let resolved = if let Some(r) = cache.get(&logical_index) {
         r.clone()
     } else {
-        let r = router
-            .resolve_placement(ctx, partition.clone(), &logical_index)
-            .await
-            .map_err(|_| error_doc(&logical_index, &item.id, "placement_missing"))?;
+        // Retry a momentarily-unavailable placement backend with bounded backoff,
+        // matching the single-doc/bulk resolve paths (`docs/06` §3a).
+        let r = with_retry(retry, || {
+            router.resolve_placement(ctx, partition.clone(), &logical_index)
+        })
+        .await
+        .map_err(|_| error_doc(&logical_index, &item.id, "placement_missing"))?;
         cache.insert(logical_index.clone(), r.clone());
         r
     };

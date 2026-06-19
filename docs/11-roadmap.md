@@ -1,15 +1,18 @@
-# 11 — Roadmap & Milestones
+# 11 — Delivery History & Status
 
-Built as thin vertical slices: each milestone is shippable, tested to the docs/09
-bar, and exercises real architectural seams rather than building horizontal
-layers that can't be validated until the end.
+The project was built as thin vertical slices: each milestone shippable, tested to
+the docs/09 bar, and exercising real architectural seams rather than horizontal
+layers that can't be validated until the end. This doc is now a **record** of that
+delivery, not a forward plan.
 
-> **Status (2026-06-19): M0–M7 are all complete and CI-green** (build/fips,
-> clippy `-D warnings`, coverage ≥90%, deterministic perf, supply-chain, and a
-> live-Docker integration lane). The milestone descriptions below are the original
-> plan, kept for provenance. The only remaining items are *external*: the AWS-LC
-> CMVP certificate award (docs/07 §5) and authoritative NFR-P thresholds on
-> reference hardware — no code-side v1 gaps remain.
+> **Status (2026-06-19): feature-complete and CI-green.** M0–M7 are all done
+> (build/fips, clippy `-D warnings`, coverage ≥90%, deterministic perf,
+> supply-chain, and a live-Docker integration lane), and the post-plan additions
+> below have shipped on the seams the milestones established. **No code-side gaps
+> remain.** The only outstanding items are *external* and require no engineering:
+> the AWS-LC CMVP certificate award (docs/07 §5) and authoritative NFR-P thresholds
+> measured on reference hardware. The milestone descriptions below are the original
+> plan, kept for provenance.
 >
 > **Shipped beyond the original plan**, on the seams the milestones established:
 > - **Async fan-out write mode** (ADR-010, docs/04 §9): per-request `X-Write-Mode`,
@@ -20,6 +23,14 @@ layers that can't be validated until the end.
 >   prefix so one instance serves tenanted and legacy/agnostic traffic at once.
 > - **Traffic capture** (docs/guide/08): full-fidelity tee to Kafka behind the
 >   `Capture` seam (`capture` feature), runtime on-demand via diagnostics directives.
+> - **Live scroll/PIT cursor affinity** end to end, with the PIT shape aligned to
+>   OpenSearch (`_search/point_in_time`, `pit_id`), verified against a real cluster.
+> - **Reference distributed directive store over etcd** (ADR-013, `osproxy-etcd`,
+>   `etcd` feature): watch-and-cache `DirectiveStore` so directive flips reach a
+>   fleet with no restart — the seam proven, not the infra mandated.
+> - **Fleet-coherent diagnostic sink** (docs/05 §5): directive-selected break-glass
+>   captures pushed off-instance keyed by `trace_id`, so an aggregator can serve
+>   them across a fleet (`DiagnosticSink` seam + stdout reference).
 > - **Modes-UX pass**: SPI collapsed to one `resolve_partition`; `capture`/`fanout`
 >   features split; optional `[section]` config grouping; docs/guide/10 mode map.
 
@@ -97,29 +108,36 @@ rewrite.
 
 ## M7 — Fleet observability & control plane
 
-- **The proxy is store-agnostic.** It does not ship a specific control store
-  (etcd/Consul/Redis/OS index); those are the operator's backend, bound through
-  the existing seams — `TenancySpi`/placement lookup for reads, `MigrationStore`
-  (`osproxy-control`) for migration transitions. The proxy provides the seams,
-  the fleet-safe protocol (poll-fresh + drain barrier, `docs/06` §3a), and an
-  in-memory reference impl; concrete bindings are consumer-provided. So M7 is
-  *not* "implement etcd" — it is fleet-wide directive propagation, TTL expiry,
-  and the observability below, on top of seams that already exist.
+- **The proxy is store-agnostic.** A specific control store is never *mandated*;
+  it is the operator's backend, bound through the existing seams —
+  `TenancySpi`/placement lookup for reads, `MigrationStore` (`osproxy-control`) for
+  migration transitions, `DirectiveStore` (`osproxy-observe`) for directives. The
+  proxy provides the seams, the fleet-safe protocol (poll-fresh + drain barrier,
+  `docs/06` §3a), an in-memory reference impl, and an **opt-in reference etcd
+  binding for the directive plane** (ADR-013). So M7 was *not* "implement etcd" — it
+  is fleet-wide directive propagation, TTL expiry, and the observability below, on
+  top of seams that already exist (with etcd as one shipped reference, not a core
+  dependency).
 - OTLP export; aggregation integration; ring-buffer break-glass.
 - **Exit**: directive flips fleet-wide without restart (against a reference
   store binding); blind-diagnosis across the full failure catalogue.
 
-## Deferred (post-v1, behind existing seams)
+## Intentionally out of scope (behind existing seams)
 
-- **Queue-based redundancy** — ✅ delivered as the **async fan-out write mode**
-  (ADR-010, docs/04 §9): writes are durably enqueued to Kafka behind the
-  `WriteQueue` seam and a downstream component fans them out to 1..N destinations.
-  This covers the dual/triple-write intent as honest async enqueue (`202`/`op_id`),
-  not synchronous fan-out (still excluded — ADR-002).
-- Concrete distributed control-store bindings (etcd/Consul/Redis/OS-index) behind
-  the `DirectiveStore`/`MigrationStore` seams — operator-provided; the proxy ships
-  the seams + in-memory reference impls, not the infra.
-- Richer admin tooling; the larger `capture`/`fanout` packaging refinements.
+These are not gaps — they are deliberate boundaries. The seams exist; the
+implementations are operator infrastructure or excluded by an ADR.
+
+- **Synchronous fan-out / quorum writes** — excluded (ADR-002). The dual/triple-write
+  intent is served instead by the **async fan-out write mode** (ADR-010, docs/04 §9):
+  writes durably enqueued behind the `WriteQueue` seam, fanned out downstream as
+  honest async enqueue (`202`/`op_id`).
+- **Concrete distributed control stores beyond the etcd reference** (Consul/Redis/
+  OS-index, and a `MigrationStore` binding) — operator-provided behind the
+  `DirectiveStore`/`MigrationStore` seams. A reference etcd directive binding ships
+  (ADR-013); migration-over-etcd awaits an async + fallible `MigrationStore` seam.
+- **The external aggregator and AI agent** that consume the diagnostic plane — out
+  of scope by design (docs/05); the proxy ships the emission seams, not the consumer.
+- Richer admin tooling and `capture`/`fanout` packaging refinements.
 
 ## Cross-cutting, every milestone
 

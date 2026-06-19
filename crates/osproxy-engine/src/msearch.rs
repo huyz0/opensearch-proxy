@@ -23,6 +23,7 @@ use serde_json::{json, Value};
 use crate::error::RequestError;
 use crate::pipeline::PipelineResponse;
 use crate::read::{shape_hits, ReadShape};
+use crate::retry::with_retry;
 
 /// The most concurrent in-flight upstream searches, bounding a wide `_msearch`
 /// fan-out just as the bulk dispatch bounds its per-target writes (NFR-P).
@@ -40,6 +41,7 @@ pub(crate) async fn multi_search<R: Router, S: Reader>(
     router: &R,
     sink: &S,
     ctx: &RequestCtx<'_>,
+    retry: crate::RetryPolicy,
 ) -> Result<PipelineResponse, RequestError> {
     let items = parse_msearch(ctx.body())?;
     let n = items.len();
@@ -53,7 +55,7 @@ pub(crate) async fn multi_search<R: Router, S: Reader>(
     let mut cache: HashMap<String, Resolved> = HashMap::new();
 
     for (ordinal, item) in items.into_iter().enumerate() {
-        match prepare(router, ctx, &partition, &mut cache, &item).await {
+        match prepare(router, ctx, &partition, &mut cache, &item, retry).await {
             Ok(p) => prepared[ordinal] = Some(p),
             Err(line) => responses[ordinal] = line,
         }
@@ -86,6 +88,7 @@ async fn prepare<R: Router>(
     partition: &osproxy_core::PartitionId,
     cache: &mut HashMap<String, Resolved>,
     item: &MsearchItem,
+    retry: crate::RetryPolicy,
 ) -> Result<Prepared, Value> {
     let logical_index = item
         .index
@@ -95,10 +98,13 @@ async fn prepare<R: Router>(
     let resolved = if let Some(r) = cache.get(&logical_index) {
         r.clone()
     } else {
-        let r = router
-            .resolve_placement(ctx, partition.clone(), &logical_index)
-            .await
-            .map_err(|_| error_response(400, "placement_missing"))?;
+        // Retry a momentarily-unavailable placement backend with bounded backoff,
+        // matching the single-doc/bulk resolve paths (`docs/06` §3a).
+        let r = with_retry(retry, || {
+            router.resolve_placement(ctx, partition.clone(), &logical_index)
+        })
+        .await
+        .map_err(|_| error_response(400, "placement_missing"))?;
         cache.insert(logical_index.clone(), r.clone());
         r
     };

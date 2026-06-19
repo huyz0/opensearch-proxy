@@ -155,7 +155,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         ctx: &RequestCtx<'_>,
         _trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
-        crate::mget::multi_get(&self.router, &self.sink, ctx).await
+        crate::mget::multi_get(&self.router, &self.sink, ctx, self.retry).await
     }
 
     /// The delete-by-id path (`docs/04` §5): resolve the partition, map the
@@ -270,7 +270,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         ctx: &RequestCtx<'_>,
         _trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
-        crate::msearch::multi_search(&self.router, &self.sink, ctx).await
+        crate::msearch::multi_search(&self.router, &self.sink, ctx, self.retry).await
     }
 
     /// The count path (`docs/04` §4): same mandatory partition filter as search,

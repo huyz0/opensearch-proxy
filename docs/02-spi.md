@@ -25,7 +25,7 @@ Two layers:
 /// Decides where and how a single request is routed.
 ///
 /// # Invariants
-/// - MUST resolve to exactly one [`Target`] (no synchronous fan-out in v1).
+/// - MUST resolve to exactly one [`Target`] (no synchronous fan-out — ADR-002).
 /// - MUST NOT block; use async for any lookup. Long lookups risk NFR-P latency.
 /// - MUST NOT panic. Return [`SpiError`] for every failure.
 /// - The returned [`RouteDecision::epoch`] MUST come from the placement table

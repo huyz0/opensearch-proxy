@@ -59,7 +59,7 @@ flowchart TB
     class wk store;
 ```
 
-## What it does not do (v1)
+## What it does not do
 
 These are deliberate cuts, each with a home elsewhere.
 

@@ -36,8 +36,14 @@ impl TenancySpi for FlakyTenancy {
         ctx: &osproxy_spi::RequestCtx<'_>,
         doc: Option<&serde_json::Value>,
     ) -> Result<osproxy_core::PartitionId, osproxy_spi::SpiError> {
+        // Header-or-body: ingest carries the tenant in the doc; a bodyless read
+        // (`_mget`/`_msearch`) carries it in `x-tenant`. Order is BodyField first so
+        // existing ingest tests (no header) resolve exactly as before.
         osproxy_tenancy::resolve_partition_spec(
-            &PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
+            &PartitionKeySpec::AnyOf(vec![
+                PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
+                PartitionKeySpec::Header("x-tenant".to_owned()),
+            ]),
             ctx,
             doc,
         )
@@ -141,4 +147,34 @@ async fn a_persistently_unavailable_backend_surfaces_a_retryable_error() {
     assert_eq!(err.code(), ErrorCode::PlacementBackendUnavailable);
     assert!(err.retryable());
     assert!(p.sink().recorded().is_empty(), "nothing committed");
+}
+
+#[tokio::test]
+async fn the_mget_per_item_resolve_retries_a_transient_blip() {
+    // The demux read paths resolve each item's placement, and that per-item resolve
+    // retries a transient backend blip too (symmetry with single-doc/bulk; `_msearch`
+    // uses the identical `with_retry` construct). Two failures then success: the doc
+    // resolves (no positioned `placement_missing`) rather than failing on the blip.
+    let p = pipeline(2);
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r");
+    let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
+    let body = serde_json::to_vec(&json!({ "docs": [{ "_id": "7" }] })).unwrap();
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::MultiGet,
+        Protocol::Http1,
+        "orders-logical",
+        HeaderView::new(&headers),
+        &body,
+    );
+    let resp = p.handle(&ctx).await.unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    let entry = &doc["docs"][0];
+    assert_ne!(
+        entry["error"]["type"], "placement_missing",
+        "the per-item resolve retried the blip rather than failing the item: {entry}"
+    );
 }

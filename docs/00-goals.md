@@ -19,7 +19,7 @@ crypto build.
 3. **Operational agility** — partitions can be migrated between placements with
    the proxy guaranteeing write correctness across the cutover.
 
-## 3. In scope (v1)
+## 3. In scope
 
 - Ingress: HTTP/1.1, HTTP/2, gRPC; cleartext and TLS; optional FIPS build.
 - Single-target routing for **all** request types (read and write).
@@ -37,7 +37,7 @@ crypto build.
   later drop-in).
 - Runtime-togglable, security-aware, LLM-consumable observability.
 
-## 4. Explicit non-goals (v1)
+## 4. Explicit non-goals
 
 | Non-goal | Why / where it goes |
 |----------|---------------------|
