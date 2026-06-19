@@ -317,11 +317,18 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
                 reason: "cursor affinity is not enabled",
             });
         };
-        // A cursor request with a logical index is a PIT create (`/{index}/_pit`):
-        // it resolves the index's cluster and wraps the returned id, rather than
-        // recovering a cluster from an existing cursor.
+        // A cursor request with a logical index is a PIT create
+        // (`/{index}/_search/point_in_time`): it resolves the index's cluster and
+        // wraps the returned `pit_id`, rather than recovering a cluster from an
+        // existing cursor.
         if !ctx.logical_index().is_empty() {
             return self.pit_create(ctx, trace).await;
+        }
+        // A `pit_id` array in the body is a PIT close (`DELETE
+        // /_search/point_in_time`): each id may pin a different cluster, so it is
+        // grouped and fanned out rather than routed as one scroll cursor.
+        if let Some(pit_ids) = crate::cursor::pit_ids_in_delete_body(ctx.body()) {
+            return self.pit_delete(ctx, trace, &pit_ids).await;
         }
         let req = cursor_request(ctx).ok_or(RequestError::Cursor {
             reason: "no cursor id in the request",

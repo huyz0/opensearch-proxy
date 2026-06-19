@@ -36,7 +36,7 @@ See docs/02 §5 for the class definitions. Default for unmatched: **reject**
 | `POST /{index}/_delete_by_query` | DeleteByQuery | reject by default; **async opt-in** expansion (`fanout_expand_delete_by_query`) runs the partition-scoped query and enqueues a delete per matched id | docs/04 §9 |
 | `POST /{index}/_update_by_query` | (unsupported) | not classified → `Unknown` → reject | needs read-modify-write |
 | `POST /{index}/_search/scroll`, `_search/scroll` | Cursor | affinity pin | |
-| `POST /_search/point_in_time`, PIT use | Cursor | affinity pin | |
+| `POST /{index}/_search/point_in_time` (create), `POST /_search` w/ body `pit.id` (search), `DELETE /_search/point_in_time` w/ `pit_id[]` (close) | Cursor | affinity pin | OpenSearch PIT shape (not ES `_pit`); create/search re-wrap `pit_id`, close groups by cluster |
 | `_sql`, scripted/`_render` | (unsupported) | reject in shared mode unless allow-listed | isolation risk |
 | `_cat/*`, `_cluster/*`, `_nodes/*` | Admin | pass-through allow-list or reject | no tenancy semantics |
 | index create/mapping/settings | Admin | policy-dependent | usually operator-only |

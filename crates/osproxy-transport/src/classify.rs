@@ -55,17 +55,21 @@ pub fn classify(method: HttpMethod, path: &str) -> Classified {
         // Cursor lifecycle — scroll & PIT, bound to the cluster that created them
         // (`docs/03` §6). These carry a wrapped cursor the engine unwraps to route
         // to the pinned cluster; the path-form scroll id rides in `doc_id`.
-        //   /_search/scroll (body-form scroll continue/clear) and /_pit (PIT
-        //   delete) — both carry the wrapped cursor in the body, no logical index.
-        ["_search", "scroll"] | ["_pit"] => classified(EndpointKind::Cursor, ""),
+        //   /_search/scroll (body-form scroll continue/clear) and
+        //   /_search/point_in_time (PIT delete) — both carry the wrapped cursor in
+        //   the body, no logical index. (OpenSearch's PIT endpoint is
+        //   `_search/point_in_time`, not Elasticsearch's `_pit` — see
+        //   `docs/specs/opensearch-endpoints.md`.)
+        ["_search", "scroll" | "point_in_time"] => classified(EndpointKind::Cursor, ""),
         //   /_search/scroll/{scroll_id} (path-form continue/clear)
         ["_search", "scroll", scroll_id] => Classified {
             endpoint: EndpointKind::Cursor,
             logical_index: String::new(),
             doc_id: Some((*scroll_id).to_owned()),
         },
-        //   /{index}/_pit (create — resolves the index's cluster, wraps the id)
-        [index, "_pit"] => classified(EndpointKind::Cursor, index),
+        //   /{index}/_search/point_in_time (PIT create — resolves the index's
+        //   cluster, wraps the returned `pit_id`).
+        [index, "_search", "point_in_time"] => classified(EndpointKind::Cursor, index),
         // /_search with no index — a PIT search (the PIT defines the index set);
         // the engine reads the `pit` in the body and routes to its pinned cluster.
         ["_search"] => classified(EndpointKind::Search, ""),
@@ -227,10 +231,11 @@ mod tests {
             "scroll clear carries no logical index"
         );
         // PIT create resolves the named index's cluster; PIT delete does not.
-        let pit_create = classify(HttpMethod::Post, "/orders/_pit");
+        // OpenSearch's PIT endpoint is `_search/point_in_time`, not ES's `_pit`.
+        let pit_create = classify(HttpMethod::Post, "/orders/_search/point_in_time");
         assert_eq!(pit_create.endpoint, EndpointKind::Cursor);
         assert_eq!(pit_create.logical_index, "orders");
-        let pit_delete = classify(HttpMethod::Delete, "/_pit");
+        let pit_delete = classify(HttpMethod::Delete, "/_search/point_in_time");
         assert_eq!(pit_delete.endpoint, EndpointKind::Cursor);
         assert!(pit_delete.logical_index.is_empty());
     }

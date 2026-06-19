@@ -615,3 +615,79 @@ async fn scroll_create_and_continue_round_trip_through_the_proxy() {
         "second page has one hit: {body}"
     );
 }
+
+/// The full point-in-time loop against real OpenSearch (2.11): create on the
+/// resolved cluster returns a *wrapped* `pit_id` (proving the OpenSearch
+/// `_search/point_in_time` endpoint was hit), a PIT search routes back there and
+/// stays partition-isolated, and a close with the wrapped id succeeds. This is the
+/// regression guard for the ES→OpenSearch PIT shape (`_search/point_in_time`,
+/// `pit_id` array) — see `docs/specs/opensearch-endpoints.md`.
+#[tokio::test]
+#[ignore = "requires Docker; run with --ignored"]
+async fn pit_create_search_and_close_round_trip_through_the_proxy() {
+    let client: HttpClient = Client::builder(TokioExecutor::new()).build_http();
+    let (_container, os_base) = start_opensearch().await;
+    assert!(wait_ready(&client, &os_base).await, "opensearch not ready");
+    let proxy = spawn_proxy_with_affinity(os_base.clone()).await;
+    seed_acme_docs(&client, &proxy, &os_base).await;
+
+    // Create a PIT on the orders index (resolves acme's cluster, wraps the id).
+    let (status, body) = request_with_tenant(
+        &client,
+        Method::POST,
+        &format!("{proxy}/orders/_search/point_in_time?keep_alive=5m"),
+        "acme",
+        Bytes::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, 200, "pit create: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let pit_id = v["pit_id"].as_str().expect("create returns a pit_id");
+    assert!(
+        pit_id.contains('.'),
+        "the pit id must be a wrapped envelope, not the raw upstream id: {pit_id}"
+    );
+
+    // Search the PIT (no index in the path — the PIT defines the index set). It
+    // must route to the pinned cluster yet stay scoped to acme's partition.
+    let (status, body) = request_with_tenant(
+        &client,
+        Method::POST,
+        &format!("{proxy}/_search"),
+        "acme",
+        Bytes::from(format!(
+            r#"{{"query":{{"match_all":{{}}}},"pit":{{"id":"{pit_id}","keep_alive":"5m"}}}}"#
+        )),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, 200, "pit search: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        v["hits"]["total"]["value"].as_u64(),
+        Some(3),
+        "pit search sees acme's three docs, partition-scoped: {body}"
+    );
+    assert!(
+        v["pit_id"].as_str().is_some_and(|s| s.contains('.')),
+        "the search response re-wraps the refreshed pit_id: {body}"
+    );
+
+    // Close the PIT with the wrapped id (the OpenSearch `pit_id` array shape).
+    let (status, body) = send(
+        &client,
+        Method::DELETE,
+        &format!("{proxy}/_search/point_in_time"),
+        Bytes::from(format!(r#"{{"pit_id":["{pit_id}"]}}"#)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, 200, "pit close: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        v["pits"][0]["successful"].as_bool(),
+        Some(true),
+        "the pit was closed on its pinned cluster: {body}"
+    );
+}

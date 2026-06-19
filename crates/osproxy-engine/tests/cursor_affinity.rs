@@ -87,12 +87,16 @@ impl Reader for RecordingSink {
         self.inner.count(op).await
     }
     async fn cursor(&self, op: CursorOp) -> Result<CursorOutcome, SinkError> {
-        // The upstream response shape depends on the op: a PIT create returns a
-        // raw `id`, a PIT search returns hits, a scroll continue a `_scroll_id`.
-        let resp: &[u8] = if op.path.ends_with("/_pit") {
-            br#"{"id":"RAWPIT"}"#
+        // The upstream response shape depends on the op (OpenSearch shapes): a PIT
+        // create returns a raw `pit_id`, a PIT close a `pits[]` array, a PIT search
+        // hits, a scroll continue a `_scroll_id`.
+        let resp: &[u8] = if op.path.ends_with("/_search/point_in_time") {
+            match op.method {
+                HttpMethod::Delete => br#"{"pits":[{"successful":true,"pit_id":"RAWPIT"}]}"#,
+                _ => br#"{"pit_id":"RAWPIT","_shards":{"total":1}}"#,
+            }
         } else if op.path == "/_search" {
-            br#"{"hits":{"total":{"value":0},"hits":[]}}"#
+            br#"{"pit_id":"RAWPIT","hits":{"total":{"value":0},"hits":[]}}"#
         } else {
             br#"{"_scroll_id":"NEXTPAGE","hits":{"hits":[]}}"#
         };
@@ -314,19 +318,23 @@ async fn a_scroll_continue_re_wraps_the_next_page_scroll_id() {
 
 #[tokio::test]
 async fn a_pit_close_routes_to_its_pinned_cluster_via_the_pit_endpoint() {
-    // `DELETE /_pit {"id": <wrapped>}` recovers the cluster from the body `id` and
-    // forwards the close to the pinned cluster at `/_pit` with the real id.
+    // `DELETE /_search/point_in_time {"pit_id":[<wrapped>]}` recovers the cluster
+    // from the envelope and forwards the close to the pinned cluster at
+    // `/_search/point_in_time` with the real id (the OpenSearch close shape).
     let signer = Arc::new(FnvSigner(3));
     let token = cursor::wrap(signer.as_ref(), &ClusterId::from("eu-1"), REAL_ID);
     let (p, seen) = pipeline(Some(signer));
 
-    let body = format!(r#"{{"id":"{token}"}}"#);
+    let body = format!(r#"{{"pit_id":["{token}"]}}"#);
     run(&p, HttpMethod::Delete, body.as_bytes(), None)
         .await
         .expect("pit close routes");
     let op = seen.lock().unwrap().clone().unwrap();
     assert_eq!(op.cluster, ClusterId::from("eu-1"));
-    assert_eq!(op.path, "/_pit", "pit close targets the _pit endpoint");
+    assert_eq!(
+        op.path, "/_search/point_in_time",
+        "pit close targets the OpenSearch point_in_time endpoint"
+    );
     let forwarded = String::from_utf8(op.body).unwrap();
     assert!(
         forwarded.contains(REAL_ID),
@@ -367,8 +375,8 @@ async fn a_pit_create_resolves_the_index_cluster_and_wraps_the_returned_id() {
         "opened on the resolved cluster"
     );
     assert_eq!(
-        op.path, "/shared/_pit",
-        "the physical index's _pit endpoint"
+        op.path, "/shared/_search/point_in_time",
+        "the physical index's point_in_time endpoint"
     );
     assert_eq!(
         op.query.as_deref(),
@@ -377,7 +385,7 @@ async fn a_pit_create_resolves_the_index_cluster_and_wraps_the_returned_id() {
     );
     // The returned id is wrapped with the cluster it was opened on.
     let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
-    let id = v["id"].as_str().expect("pit create returns an id");
+    let id = v["pit_id"].as_str().expect("pit create returns a pit_id");
     assert_ne!(id, "RAWPIT", "the raw pit id must not leak");
     let (cluster, real) = cursor::unwrap(signer.as_ref(), id).expect("wrapped id verifies");
     assert_eq!(cluster, ClusterId::from("eu-1"));
