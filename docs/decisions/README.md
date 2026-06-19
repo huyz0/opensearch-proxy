@@ -17,3 +17,5 @@ intent can be re-derived, not guessed (docs/10 §5).
 | [008](008-sink-trait-deferred-redundancy.md) | Write `Sink` trait; queue-based redundancy deferred behind it |
 | [009](009-m1-tls-ring-provider.md) | M1 TLS uses the `ring` provider; aws-lc-rs/FIPS at M6 behind the seam |
 | [010](010-async-fanout-write-mode.md) | Async fan-out write mode: same endpoints, `202`/`op_id`, refuse-don't-lie, no proxy status surface |
+| [011](011-traffic-capture-model.md) | Traffic capture: tenant-agnostic tee behind a `Capture` seam, durable at-least-once WAL tier, on-demand via directive |
+| [012](012-modes-dynamism-by-blast-radius.md) | Proxy modes: dynamism rationed by blast radius; tenant isolation is a fail-closed per-request routing decision, never a global switch |

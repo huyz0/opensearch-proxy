@@ -128,6 +128,9 @@ fixed even where the threshold is tuned later.
 | NFR-S4 | Partition isolation enforced on the read path (query filter cannot be bypassed by client-supplied query) — see [03](03-tenancy-and-placement.md) §isolation for the isolation guarantee level. |
 | NFR-S5 | FIPS build negotiates only FIPS-approved TLS versions and cipher suites. |
 
+The consolidated threat model — actors, trust boundaries, and where each control
+lives — is in [13 — Security Model](13-security-model.md).
+
 ### 5.5 Maintainability / quality
 
 | ID | Requirement |
