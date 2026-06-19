@@ -18,13 +18,13 @@ use osproxy_config::{
 };
 use osproxy_core::{ClusterId, IndexName, SystemClock};
 use osproxy_engine::{AdminPolicy, PassthroughPolicy, Pipeline};
-use osproxy_observe::{DiagLevel, InMemoryDirectiveStore};
+use osproxy_observe::{DiagLevel, DirectiveStore};
 use osproxy_otlp::OtlpHttpExporter;
 use osproxy_server::auth::ReferenceAuthenticator;
 use osproxy_server::cursor::HmacCursorSigner;
 use osproxy_server::directive::HmacDirectiveVerifier;
 use osproxy_server::handler::AppHandler;
-use osproxy_server::log::{NoLog, RequestLog, StdoutJsonLog};
+use osproxy_server::log::{NoLog, RequestLog, StdoutDiagnosticSink, StdoutJsonLog};
 use osproxy_server::tenancy::ReferenceTenancy;
 use osproxy_sink::{OpenSearchSink, Reader, Sink};
 use osproxy_tenancy::{Router, TenancyRouter};
@@ -32,6 +32,8 @@ use osproxy_transport::{DefaultCryptoProvider, IngressHandler};
 use tokio::net::TcpListener;
 
 mod capture;
+mod directive_wiring;
+use directive_wiring::{directive_store, with_directive_admin};
 // Async fan-out write queue (docs/04 §9). The Kafka queue + envelope encoder
 // compile under `fanout` (and in the test lane, so the wire contract is
 // verified without a broker); `fanout::attach` is always present and binds the
@@ -67,9 +69,10 @@ async fn run() -> Result<(), String> {
         IndexName::from(cfg.index.as_str()),
         cfg.upstream.clone(),
     );
-    // The fleet directive store the pipeline reads and the admin endpoint writes.
-    let directive_store = Arc::new(InMemoryDirectiveStore::new());
-    let pipeline = assemble_pipeline(tenancy, sink, directive_store.clone(), &cfg);
+    // The fleet directive store: etcd (watch-fed, fleet-wide) when configured,
+    // else the in-memory store fed by the admin publish endpoint.
+    let (directive_read, directive_admin) = directive_store(&cfg).await?;
+    let pipeline = assemble_pipeline(tenancy, sink, directive_read, &cfg);
     // Bind the async fan-out write queue (docs/04 §9) when configured; without the
     // `fanout` feature a configured fan-out is a loud startup error.
     let pipeline = fanout::attach(pipeline, &cfg).await?;
@@ -87,7 +90,7 @@ async fn run() -> Result<(), String> {
     let app = capture::attach(app, &cfg).await?;
     let handler = Arc::new(with_directive_admin(
         app,
-        directive_store,
+        directive_admin,
         cfg.observability.directive_admin_token.as_deref(),
     ));
 
@@ -209,6 +212,20 @@ fn with_otlp_export<R: Router, S: Sink + Reader>(
         .with_service_name(service)
 }
 
+/// Pushes directive-selected break-glass captures off-instance as tagged JSON
+/// lines when `enabled` (`log_diagnostic_captures`), so a fleet aggregator can
+/// serve them by `trace_id`. Off ⇒ captures stay in the local break-glass ring.
+fn with_diagnostic_capture_log<R: Router, S: Sink + Reader>(
+    pipeline: Pipeline<R, S>,
+    enabled: bool,
+) -> Pipeline<R, S> {
+    if !enabled {
+        return pipeline;
+    }
+    println!("osproxy diagnostic captures -> stdout (kind=diagnostic_capture)");
+    pipeline.with_diagnostic_sink(Arc::new(StdoutDiagnosticSink))
+}
+
 /// Sets the pipeline's baseline diagnostics level from the validated config
 /// (`diag_baseline`, default `shape`). Set it to `off` so nothing is exported
 /// until a directive — fleet store or signed `X-Debug-Directive` header — selects
@@ -252,7 +269,7 @@ fn with_debug_directive<R: Router, S: Sink + Reader>(
 fn assemble_pipeline(
     tenancy: ReferenceTenancy,
     sink: OpenSearchSink,
-    directive_store: Arc<InMemoryDirectiveStore>,
+    directive_store: Arc<dyn DirectiveStore>,
     cfg: &Config,
 ) -> Pipeline<TenancyRouter<ReferenceTenancy>, OpenSearchSink> {
     let base =
@@ -265,6 +282,7 @@ fn assemble_pipeline(
         cfg.observability.debug_directive_key.as_deref(),
     )
     .with_directive_store(directive_store);
+    let observed = with_diagnostic_capture_log(observed, cfg.observability.log_diagnostic_captures);
     let routed = with_admin_passthrough(
         with_cursor_affinity(observed, cfg.cursor_affinity_key.as_deref()),
         cfg.admin_passthrough.as_ref(),
@@ -345,18 +363,6 @@ fn with_cursor_affinity<R: Router, S: Sink + Reader>(
 /// `OSPROXY_DIRECTIVE_ADMIN_TOKEN` is set (the shared bearer token an operator
 /// presents to publish a fleet directive set into `store`); otherwise the
 /// endpoint stays disabled (reports `not_enabled`).
-fn with_directive_admin<A: osproxy_spi::Authenticator>(
-    handler: AppHandler<A>,
-    store: Arc<InMemoryDirectiveStore>,
-    token: Option<&str>,
-) -> AppHandler<A> {
-    let Some(token) = token else {
-        return handler;
-    };
-    println!("osproxy fleet directive admin: on (POST /admin/directives)");
-    handler.with_directive_admin(store, token.to_owned(), Arc::new(SystemClock))
-}
-
 /// Builds a TLS provider from `OSPROXY_TLS_CERT`/`OSPROXY_TLS_KEY` (PEM file
 /// paths). Returns `None` if neither is set (cleartext), or an error if one is
 /// set without the other or the files cannot be read/parsed. If

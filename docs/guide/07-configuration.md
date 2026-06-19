@@ -74,6 +74,7 @@ topic         = osproxy.capture
 | `debug_directive_key` | *(unset)* | Shared HMAC key that verifies signed `X-Debug-Directive` headers. Unset ⇒ that channel rejects everything. |
 | `directive_admin_token` | *(unset → disabled)* | Bearer token gating `POST`/`GET /admin/directives`. Unset ⇒ the endpoint reports `not_enabled`. |
 | `debug_endpoints` | `true` | Whether the pre-auth `/debug/explain` and `/debug/breakglass` surfaces are served. **Set `false` in production** so operational metadata is not exposed unauthenticated. `/metrics` stays on regardless. |
+| `log_diagnostic_captures` | `false` | Push directive-selected break-glass captures off-instance as tagged JSON lines (`"kind":"diagnostic_capture"`, keyed by `trace_id`) so a fleet aggregator can serve them — the fleet-coherent counterpart of the local `/debug/breakglass` ring (`docs/05` §5). Only requests a `ring_buffer`/`capture` directive selects are emitted. |
 
 ### Control plane & routing
 
@@ -86,6 +87,8 @@ topic         = osproxy.capture
 | `passthrough_cluster` | *(unset → tenancy mode)* | Tenant-agnostic mode: forward matching requests verbatim to this cluster id with no tenancy rewrite (a transparent / capture / migration proxy). Requires `passthrough_endpoint`. |
 | `passthrough_endpoint` | *(unset)* | The passthrough cluster's base URL. Both-or-neither with `passthrough_cluster`. |
 | `passthrough_indices` | *(unset → all requests)* | Comma-separated logical-index prefixes that pass through verbatim; every other index stays tenant-isolated (fail-closed). Empty ⇒ the whole instance is a transparent proxy. Lets one proxy serve legacy (not-yet-onboarded) and tenanted indices at once. |
+| `etcd_endpoints` | *(unset → in-memory store)* | Comma-separated etcd endpoints backing a **distributed** directive store (`docs/05` §3, ADR-013). Set ⇒ the pipeline reads a watch-fed snapshot of the etcd key (fleet-wide flips, no restart) and the local `POST /admin/directives` publish path is disabled (operators publish to the key). Requires the binary be built with the `etcd` feature; configured without it is a loud startup error. |
+| `etcd_directives_key` | `osproxy/directives` | The etcd key the fleet directive set is published to and watched at. Only meaningful with `etcd_endpoints`. |
 
 ### Traffic capture (Kafka)
 

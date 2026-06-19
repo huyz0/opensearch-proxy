@@ -82,21 +82,18 @@ fn a_relative_ttl_resolves_to_an_absolute_expiry_on_the_clock() {
     )
     .unwrap();
     // Evaluated before expiry: applies. After advancing past the TTL: gone.
-    let attrs = osproxy_observe::RequestAttrs {
+    let attrs = crate::RequestAttrs {
         tenant: None,
         index: "i",
         principal: &osproxy_core::PrincipalId::from("svc"),
         endpoint: osproxy_core::EndpointKind::Search,
     };
     let rid = osproxy_core::RequestId::from("r");
-    assert_eq!(
-        set.evaluate(&attrs, clock.now(), &rid),
-        osproxy_observe::DiagLevel::Shape
-    );
+    assert_eq!(set.evaluate(&attrs, clock.now(), &rid), DiagLevel::Shape);
     clock.advance(std::time::Duration::from_secs(601));
     assert_eq!(
         set.evaluate(&attrs, clock.now(), &rid),
-        osproxy_observe::DiagLevel::Off,
+        DiagLevel::Off,
         "the TTL-resolved expiry applies"
     );
 }

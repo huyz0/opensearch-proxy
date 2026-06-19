@@ -10,6 +10,7 @@ members = [
     "crates/osproxy-control",
     "crates/osproxy-observe",
     "crates/osproxy-otlp",
+    "crates/osproxy-etcd",
     "crates/osproxy-engine",
     "crates/osproxy-config",
     "crates/osproxy-capture",
@@ -49,6 +50,7 @@ osproxy-sink = { path = "crates/osproxy-sink" }
 osproxy-control = { path = "crates/osproxy-control" }
 osproxy-observe = { path = "crates/osproxy-observe" }
 osproxy-otlp = { path = "crates/osproxy-otlp" }
+osproxy-etcd = { path = "crates/osproxy-etcd" }
 osproxy-engine = { path = "crates/osproxy-engine" }
 osproxy-config = { path = "crates/osproxy-config" }
 osproxy-capture = { path = "crates/osproxy-capture" }
@@ -75,6 +77,11 @@ hyper-util = { version = "0.1", default-features = false }
 tower-service = { version = "0.3", default-features = false }
 http-body-util = "0.1"
 bytes = "1"
+# etcd v3 client for the reference distributed `DirectiveStore` (osproxy-etcd).
+# default-features off keeps its TLS feature out, so this control-plane adapter
+# pulls no second crypto provider into a FIPS build (TLS-to-etcd is a documented
+# opt-in over the operator's trusted control network).
+etcd-client = { version = "0.19", default-features = false }
 # Stream combinators for bounded-concurrency demux dispatch (buffer_unordered).
 # Already in the tree via hyper-util; no runtime/spawn needed — just polling.
 futures-util = { version = "0.3", default-features = false, features = ["std"] }

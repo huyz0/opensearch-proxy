@@ -1,30 +1,33 @@
-//! Decoding an operator-published fleet directive set from the
-//! `POST /admin/directives` JSON body (`docs/05` §3).
+//! Decoding an operator-published fleet [`DirectiveSet`] from JSON (`docs/05` §3).
+//!
+//! One fail-closed decoder shared by every publish channel — the
+//! `POST /admin/directives` admin endpoint and a distributed `DirectiveStore`
+//! (e.g. etcd) — so a directive means the same thing however it arrives, and a
+//! typo can never silently widen its blast radius.
 //!
 //! **Fail-closed**: any malformed or out-of-range field rejects the *whole* set
-//! rather than publishing a partial or surprising directive. The same vocabulary
-//! as the signed `X-Debug-Directive` token ([`crate::directive`]) — `level`,
-//! optional `tenant`/`index`/`principal` targeting, `sample_per_mille`,
-//! `ring_buffer` — but expressed with a relative `ttl_secs` (resolved against the
-//! injected clock) so an operator says "for N seconds" and a forgotten "on" still
-//! self-expires.
+//! rather than publishing a partial or surprising directive. The vocabulary
+//! matches the signed `X-Debug-Directive` token (`level`, optional
+//! `tenant`/`index`/`principal`/`endpoint` targeting, `sample_per_mille`,
+//! `ring_buffer`, `capture`) but with a relative `ttl_secs` resolved against the
+//! injected clock, so a forgotten "on" still self-expires.
 //!
 //! Body shape: `{"directives": [ {"id","level","ttl_secs", ...}, ... ]}`.
 
 use std::time::Duration;
 
 use osproxy_core::{Clock, EndpointKind, IndexName, PartitionId, PrincipalId};
-use osproxy_observe::{DiagnosticsDirective, DirectiveMatch, DirectiveSet};
 use serde_json::Value;
 
-use crate::directive::parse_level;
+use crate::directive::{DiagLevel, DiagnosticsDirective, DirectiveMatch, DirectiveSet};
 
-/// Decodes the publish body into a [`DirectiveSet`], or a stable value-free
-/// reason slug on the first malformed field.
-pub(crate) fn decode_directive_set(
-    body: &[u8],
-    clock: &dyn Clock,
-) -> Result<DirectiveSet, &'static str> {
+/// Decodes a publish body into a [`DirectiveSet`], or a stable value-free reason
+/// slug on the first malformed field.
+///
+/// # Errors
+/// A `&'static str` slug (e.g. `"unknown_field"`, `"zero_ttl"`) naming the first
+/// rejection, suitable for a log or an HTTP reason — never echoes a value.
+pub fn decode_directive_set(body: &[u8], clock: &dyn Clock) -> Result<DirectiveSet, &'static str> {
     let v: Value = serde_json::from_slice(body).map_err(|_| "invalid_json")?;
     reject_unknown_keys(&v, &["directives"])?;
     let items = v
@@ -74,7 +77,7 @@ fn decode_one(v: &Value, clock: &dyn Clock) -> Result<DiagnosticsDirective, &'st
         .and_then(Value::as_str)
         .ok_or("missing_id")?
         .to_owned();
-    let level = parse_level(
+    let level = DiagLevel::from_name(
         v.get("level")
             .and_then(Value::as_str)
             .ok_or("missing_level")?,
@@ -132,5 +135,5 @@ fn decode_one(v: &Value, clock: &dyn Clock) -> Result<DiagnosticsDirective, &'st
 }
 
 #[cfg(test)]
-#[path = "directives_api_tests.rs"]
+#[path = "decode_tests.rs"]
 mod tests;

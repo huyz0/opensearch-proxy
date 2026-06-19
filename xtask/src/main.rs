@@ -76,6 +76,9 @@ fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'static str]> {
         "osproxy-control" => &["osproxy-core", "osproxy-spi", "osproxy-tenancy"],
         "osproxy-observe" => &["osproxy-core"],
         "osproxy-otlp" => &["osproxy-observe"],
+        // Reference distributed DirectiveStore: implements the observe seam over
+        // etcd. A leaf adapter, like otlp — nothing depends upward on it.
+        "osproxy-etcd" => &["osproxy-core", "osproxy-observe"],
         "osproxy-config" => &["osproxy-core"],
         // The traffic-capture seam (a low leaf) and the queue writer that
         // implements it; the broker client is opt-in and not a workspace edge.
@@ -114,6 +117,8 @@ fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'static str]> {
             "osproxy-tenancy",
             "osproxy-sink",
             "osproxy-otlp",
+            // optional (feature `etcd`): the reference distributed directive store.
+            "osproxy-etcd",
             // optional (feature `fanout`): the queue-writer seam and the
             // portable krafka producer it composes for traffic capture.
             "osproxy-kafka",

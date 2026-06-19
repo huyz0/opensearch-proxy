@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use osproxy_core::{Clock, ErrorCode, RequestId};
 use osproxy_engine::{Pipeline, RequestError};
-use osproxy_observe::{DirectiveStore, InMemoryDirectiveStore, Metrics, PoolSnapshot};
+use osproxy_observe::{
+    decode_directive_set, DirectiveStore, InMemoryDirectiveStore, Metrics, PoolSnapshot,
+};
 use osproxy_sink::OpenSearchSink;
 use osproxy_spi::{
     Action, AuthError, Authenticator, Authorizer, ClientCredentials, HeaderView, HttpMethod,
@@ -21,7 +23,6 @@ use osproxy_tenancy::TenancyRouter;
 use osproxy_transport::{IngressHandler, IngressRequest, IngressResponse};
 
 use crate::auth::AllowAllAuthorizer;
-use crate::directives_api::decode_directive_set;
 use crate::log::{NoLog, RequestLog};
 use crate::tenancy::ReferenceTenancy;
 use osproxy_capture::{Capture, CaptureRecord, NoCapture};

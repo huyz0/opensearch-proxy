@@ -18,9 +18,9 @@ use std::sync::Arc;
 
 use osproxy_core::{Clock, CursorSigner, EndpointKind, RequestId, SystemClock};
 use osproxy_observe::{
-    explain_json, resource_spans, BreakGlassBuffer, ClassifyInfo, DiagLevel, DirectiveSet,
-    DirectiveStore, DirectiveVerifier, EgressInfo, ExplainStore, NoVerifier, NoopExporter,
-    RequestAttrs, RequestTrace, SpanExporter,
+    explain_json, resource_spans, BreakGlassBuffer, ClassifyInfo, DiagLevel, DiagnosticSink,
+    DirectiveSet, DirectiveStore, DirectiveVerifier, EgressInfo, ExplainStore, NoVerifier,
+    NoopDiagnosticSink, NoopExporter, RequestAttrs, RequestTrace, SpanExporter,
 };
 use osproxy_sink::{Reader, Sink};
 use osproxy_spi::{RequestCtx, SpiError};
@@ -78,6 +78,11 @@ pub struct Pipeline<R, S> {
     /// The break-glass tape, captured into only when a `ring_buffer` directive
     /// applies to a request. Empty (near-zero cost) until then.
     break_glass: Arc<BreakGlassBuffer>,
+    /// The fleet-coherent diagnostic sink: a directive-selected capture is pushed
+    /// here (keyed by `trace_id`) as well as into the local break-glass ring, so an
+    /// aggregator can serve it fleet-wide. Default [`NoopDiagnosticSink`] (off): the
+    /// capture stays in the local ring only.
+    diagnostic_sink: Arc<dyn DiagnosticSink>,
     /// Signs/verifies scroll & PIT affinity envelopes (`docs/03` §6). `None` =
     /// affinity **off** (the opt-in default): cursor requests fail closed with a
     /// `CursorUnresolvable` error rather than route blindly.
@@ -146,6 +151,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             directive_store: Arc::new(Arc::new(DirectiveSet::new())),
             verifier: Arc::new(NoVerifier),
             break_glass: Arc::new(BreakGlassBuffer::new(BREAK_GLASS_CAPACITY)),
+            diagnostic_sink: Arc::new(NoopDiagnosticSink),
             cursor_signer: None,
             admin_policy: None,
             passthrough: None,
@@ -300,6 +306,15 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         self
     }
 
+    /// Sets the fleet-coherent diagnostic sink (builder style): a directive-selected
+    /// capture is pushed here (keyed by `trace_id`) in addition to the local
+    /// break-glass ring, so an aggregator can serve it fleet-wide (`docs/05` §5).
+    #[must_use]
+    pub fn with_diagnostic_sink(mut self, sink: Arc<dyn DiagnosticSink>) -> Self {
+        self.diagnostic_sink = sink;
+        self
+    }
+
     /// The assembled `/debug/explain` document for a past request, if retained.
     #[must_use]
     pub fn explain(&self, request_id: &RequestId) -> Option<Value> {
@@ -370,12 +385,17 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
 
         let diag = self.diagnostics(ctx, &trace);
 
-        // Break-glass: capture the explanation into the bounded tape when a
-        // `ring_buffer` directive selected this request (`docs/05` §5). Off by
-        // default, so this stays empty until an operator flips it on.
+        // Break-glass: capture the explanation when a `ring_buffer`/`capture`
+        // directive selected this request (`docs/05` §5). Off by default, so this
+        // stays empty until an operator flips it on. The doc is built once and both
+        // retained in the local ring and pushed to the fleet diagnostic sink
+        // (keyed by `trace_id`) so it is reachable on any instance.
         if diag.capture {
-            self.break_glass
-                .capture(explain_json(ctx.request_id(), &trace));
+            let doc = explain_json(ctx.request_id(), &trace);
+            if self.diagnostic_sink.enabled() {
+                self.diagnostic_sink.emit(doc.clone());
+            }
+            self.break_glass.capture(doc);
         }
 
         // Export the span when an exporter is active AND the diagnostics level for

@@ -19,3 +19,4 @@ intent can be re-derived, not guessed (docs/10 §5).
 | [010](010-async-fanout-write-mode.md) | Async fan-out write mode: same endpoints, `202`/`op_id`, refuse-don't-lie, no proxy status surface |
 | [011](011-traffic-capture-model.md) | Traffic capture: tenant-agnostic tee behind a `Capture` seam, durable at-least-once WAL tier, on-demand via directive |
 | [012](012-modes-dynamism-by-blast-radius.md) | Proxy modes: dynamism rationed by blast radius; tenant isolation is a fail-closed per-request routing decision, never a global switch |
+| [013](013-etcd-directive-store.md) | Reference distributed `DirectiveStore` over etcd (watch-and-cache); directive plane only, migration-over-etcd deferred to an async/fallible seam |

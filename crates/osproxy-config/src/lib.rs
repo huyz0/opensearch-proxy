@@ -70,6 +70,20 @@ pub struct Config {
     /// `fanout` feature; a configured fan-out on a binary without it is a
     /// loud startup error rather than a silent no-op.
     pub fanout: Option<FanoutConfig>,
+    /// etcd-backed distributed directive store (`docs/05` §3), or `None` to use
+    /// the in-memory store + admin publish endpoint. Requires the `etcd` feature;
+    /// a configured etcd on a binary without it is a loud startup error.
+    pub etcd: Option<EtcdConfig>,
+}
+
+/// etcd connection settings for the distributed directive store. Plain data (no
+/// etcd client types), so the config crate stays free of the etcd dependency.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EtcdConfig {
+    /// The etcd endpoints (`host:port` or full URLs), at least one.
+    pub endpoints: Vec<String>,
+    /// The key the fleet directive set is published to and watched at.
+    pub directives_key: String,
 }
 
 /// Async fan-out write queue settings: where resolved write ops are enqueued for
@@ -182,6 +196,11 @@ pub struct ObservabilityConfig {
     /// served (default `true`). Set `false` in production so operational metadata
     /// is not exposed unauthenticated; `/metrics` stays on regardless.
     pub debug_endpoints: bool,
+    /// Whether directive-selected break-glass captures are also pushed off-instance
+    /// as structured JSON lines (default `false`), so a fleet aggregator can serve
+    /// them by `trace_id` rather than only the local per-instance ring (`docs/05`
+    /// §5). The fleet-coherent counterpart of the break-glass tape.
+    pub log_diagnostic_captures: bool,
 }
 
 /// The admin pass-through policy: the cluster that answers admin requests and the

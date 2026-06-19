@@ -30,6 +30,7 @@ pub(crate) const KEYS: &[&str] = &[
     "diag_baseline",
     "debug_directive_key",
     "directive_admin_token",
+    "log_diagnostic_captures",
     "admin_passthrough_cluster",
     "admin_passthrough_prefixes",
     "admin_passthrough_endpoint",
@@ -57,6 +58,8 @@ pub(crate) const KEYS: &[&str] = &[
     "fanout_body_encoding",
     "fanout_async_default",
     "fanout_expand_delete_by_query",
+    "etcd_endpoints",
+    "etcd_directives_key",
 ];
 
 /// The environment variable name for a canonical key: `OSPROXY_` + the

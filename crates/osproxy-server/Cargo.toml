@@ -33,6 +33,10 @@ fips = ["osproxy-transport/fips", "dep:aws-lc-rs", "osproxy-kafka-krafka?/fips"]
 capture = ["dep:osproxy-kafka", "dep:osproxy-kafka-krafka", "dep:osproxy-kafka-wal"]
 fanout = ["dep:osproxy-kafka", "dep:osproxy-kafka-krafka"]
 kafka = ["capture", "fanout"]
+# etcd — back the fleet directive store with a distributed, watch-fed store
+# instead of the in-memory store + admin publish. Off by default so the standard
+# binary links no etcd/tonic client.
+etcd = ["dep:osproxy-etcd"]
 
 [dependencies]
 osproxy-core.workspace = true
@@ -42,6 +46,7 @@ osproxy-engine.workspace = true
 osproxy-observe.workspace = true
 osproxy-transport = { workspace = true, default-features = false }
 osproxy-otlp.workspace = true
+osproxy-etcd = { workspace = true, optional = true }
 osproxy-spi.workspace = true
 osproxy-tenancy.workspace = true
 osproxy-sink.workspace = true

@@ -41,6 +41,20 @@ impl DiagLevel {
             Self::ShapeRewriteDiff => "ShapeRewriteDiff",
         }
     }
+
+    /// Parses a level's wire name back to the level — the inverse of
+    /// [`DiagLevel::as_str`], so the publish/header/etcd vocabularies share one
+    /// source of truth. `None` if the name is not a known level (fail-closed).
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "Off" => Some(Self::Off),
+            "Shape" => Some(Self::Shape),
+            "ShapeTiming" => Some(Self::ShapeTiming),
+            "ShapeRewriteDiff" => Some(Self::ShapeRewriteDiff),
+            _ => None,
+        }
+    }
 }
 
 /// What a directive targets. A request matches when **every set field** equals

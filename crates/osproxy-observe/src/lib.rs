@@ -16,6 +16,8 @@
 #![deny(missing_docs)]
 
 mod breakglass;
+mod decode;
+mod diagnostic_sink;
 mod directive;
 mod explain;
 mod export;
@@ -25,6 +27,8 @@ mod store;
 mod trace;
 
 pub use breakglass::BreakGlassBuffer;
+pub use decode::decode_directive_set;
+pub use diagnostic_sink::{DiagnosticSink, NoopDiagnosticSink};
 pub use directive::{
     DiagLevel, DiagnosticsDirective, DirectiveMatch, DirectiveSet, DirectiveVerifier, NoVerifier,
     RequestAttrs,

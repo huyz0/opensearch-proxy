@@ -11,7 +11,6 @@ mod bearer;
 pub use osproxy_capture as capture;
 pub mod cursor;
 pub mod directive;
-pub mod directives_api;
 pub mod handler;
 pub mod log;
 pub mod tenancy;

@@ -92,12 +92,25 @@ across them (W3C trace-context is propagated to every upstream call).
   `DirectiveSet` to the fleet `DirectiveStore` (polled fresh per request → flips
   fleet-wide with no restart); `GET` introspects the active set as shape-only JSON
   that round-trips back to a publish. This is the store-agnostic control-plane
-  seam (the proxy ships the seam + an in-memory reference impl, not a distributed
-  store).
+  seam: the proxy ships the seam + an in-memory reference impl, plus an **optional
+  etcd-backed `DirectiveStore`** (`osproxy-etcd`, behind the `etcd` feature) that
+  keeps a locally-cached snapshot fresh by an etcd watch — fleet-wide propagation
+  with no shared in-process state and no restart (ADR-013). Under etcd the etcd key
+  is the control plane, so the local `POST` publish path is disabled (operators
+  publish to the key); the same fail-closed decoder validates both paths.
 - **Break-glass ring buffer** — populated only when a matching `ring_buffer: true`
   directive is active: a short-lived in-memory ring of the last N request
   explanations on one instance, served at `/debug/breakglass`. Single-instance
   local debugging; explicitly marginal in a fleet and documented as such.
+- **Diagnostic sink (fleet-coherent break-glass)** — the `DiagnosticSink` seam
+  addresses that single-instance limit: when a `ring_buffer`/`capture` directive
+  selects a request, the same shape-only explain doc is also handed to the sink,
+  which pushes it **off the instance keyed by `trace_id`** so a fleet aggregator
+  can serve it regardless of which instance served the request. Default
+  `NoopDiagnosticSink` (off → local ring only); the reference `StdoutDiagnosticSink`
+  emits a tagged JSON line (`"kind":"diagnostic_capture"`) the platform's log
+  collector scrapes (`log_diagnostic_captures`). Distinct from the per-request log
+  (all-or-none): only directive-selected captures are pushed.
 
 ## 6. `/debug/explain/{request_id}`
 

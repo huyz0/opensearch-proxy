@@ -10,6 +10,7 @@
 //! `false`, so the handler skips even fetching the document — "off" is near-zero
 //! cost.
 
+use osproxy_observe::DiagnosticSink;
 use serde_json::Value;
 
 /// Receives one structured record per handled request.
@@ -52,6 +53,23 @@ impl RequestLog for StdoutJsonLog {
     }
 }
 
+/// A [`DiagnosticSink`] that writes each directive-selected capture as one tagged
+/// JSON line to stdout — the fleet-coherent counterpart of the local break-glass
+/// ring. The platform's log collector scrapes it, so an aggregator can serve the
+/// capture by the `trace_id` the explain doc carries, on any instance. Tagged
+/// `"kind":"diagnostic_capture"` so it is distinguishable from a request log line.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StdoutDiagnosticSink;
+
+impl DiagnosticSink for StdoutDiagnosticSink {
+    fn emit(&self, doc: Value) {
+        println!(
+            "{}",
+            serde_json::json!({ "kind": "diagnostic_capture", "capture": doc })
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,5 +78,11 @@ mod tests {
     fn the_default_logger_is_disabled() {
         assert!(!NoLog.enabled());
         NoLog.emit(&serde_json::json!({})); // no panic, no output
+    }
+
+    #[test]
+    fn the_stdout_diagnostic_sink_is_enabled_and_does_not_panic() {
+        assert!(StdoutDiagnosticSink.enabled());
+        StdoutDiagnosticSink.emit(serde_json::json!({"trace_id": "abc"}));
     }
 }

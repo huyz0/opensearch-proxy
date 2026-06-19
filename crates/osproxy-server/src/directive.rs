@@ -133,16 +133,11 @@ impl DirectiveVerifier for HmacDirectiveVerifier {
     }
 }
 
-/// Maps a [`DiagLevel`] name to the level. The inverse of the variant names, so
-/// the token vocabulary tracks the enum. Shared with the directive-admin decoder.
+/// Maps a [`DiagLevel`] name to the level, for the signed-token vocabulary. A thin
+/// alias over [`DiagLevel::from_name`] so the token, the admin decoder, and the
+/// etcd store all parse levels through one source of truth.
 pub(crate) fn parse_level(name: &str) -> Option<DiagLevel> {
-    match name {
-        "Off" => Some(DiagLevel::Off),
-        "Shape" => Some(DiagLevel::Shape),
-        "ShapeTiming" => Some(DiagLevel::ShapeTiming),
-        "ShapeRewriteDiff" => Some(DiagLevel::ShapeRewriteDiff),
-        _ => None,
-    }
+    DiagLevel::from_name(name)
 }
 
 /// Decodes a lowercase/uppercase hex string into bytes, or `None` if it is not

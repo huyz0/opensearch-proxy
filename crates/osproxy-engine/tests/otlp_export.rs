@@ -4,6 +4,10 @@
 //! configured nothing is exported (and the request still succeeds).
 
 #![allow(clippy::unwrap_used)]
+// JUSTIFY(file-length): one cohesive diagnostics-pipeline integration suite (OTLP
+// export, fleet directive flips, break-glass, the diagnostic sink, and the signed
+// header) sharing one tenancy/sink/ingest harness; splitting would duplicate the
+// scaffolding across files rather than improve cohesion.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,8 +18,8 @@ use osproxy_core::{
 };
 use osproxy_engine::Pipeline;
 use osproxy_observe::{
-    BreakGlassBuffer, DiagLevel, DiagnosticsDirective, DirectiveMatch, DirectiveSet,
-    DirectiveVerifier, InMemoryDirectiveStore, SpanExporter,
+    BreakGlassBuffer, DiagLevel, DiagnosticSink, DiagnosticsDirective, DirectiveMatch,
+    DirectiveSet, DirectiveVerifier, InMemoryDirectiveStore, SpanExporter,
 };
 use osproxy_sink::MemorySink;
 use osproxy_spi::{
@@ -295,6 +299,60 @@ async fn an_expired_directive_does_not_re_enable_export() {
     assert!(
         exporter.0.lock().unwrap().is_empty(),
         "an expired directive does not export"
+    );
+}
+
+/// A diagnostic sink that records the docs it is handed (the off-instance push).
+#[derive(Clone, Default)]
+struct RecordingDiagnosticSink(Arc<Mutex<Vec<Value>>>);
+
+impl DiagnosticSink for RecordingDiagnosticSink {
+    fn emit(&self, doc: Value) {
+        self.0.lock().unwrap().push(doc);
+    }
+}
+
+#[tokio::test]
+async fn a_capture_directive_pushes_the_explain_doc_to_the_diagnostic_sink() {
+    // The fleet-coherent counterpart of the break-glass tape: a directive-selected
+    // capture is pushed off-instance, keyed by the same trace_id /debug/explain
+    // shows — so an aggregator can serve it regardless of which instance served it.
+    let clock = Arc::new(ManualClock::new());
+    let sink = RecordingDiagnosticSink::default();
+    let store = Arc::new(InMemoryDirectiveStore::new());
+    let p = pipeline()
+        .with_clock(clock.clone())
+        .with_baseline_level(DiagLevel::Off)
+        .with_directive_store(store.clone())
+        .with_diagnostic_sink(Arc::new(sink.clone()));
+
+    // No directive: nothing is pushed off-instance.
+    ingest(&p, &RequestId::from("r0")).await;
+    assert!(
+        sink.0.lock().unwrap().is_empty(),
+        "no capture directive → nothing pushed to the sink"
+    );
+
+    // A ring_buffer directive selects the request: the doc is pushed.
+    store.publish(DirectiveSet::from_directives(vec![DiagnosticsDirective {
+        id: "capture".to_owned(),
+        match_: DirectiveMatch::all(),
+        level: DiagLevel::Off, // capture does not require a raised export level
+        sample_per_mille: 1000,
+        expires_at: clock.now().saturating_add(Duration::from_secs(3600)),
+        ring_buffer: true,
+        capture: false,
+    }]));
+    let rid = RequestId::from("r1");
+    ingest(&p, &rid).await;
+
+    let pushed = sink.0.lock().unwrap();
+    assert_eq!(pushed.len(), 1, "the selected capture is pushed once");
+    assert_eq!(pushed[0]["request_id"], "r1");
+    let explain_trace_id = p.explain(&rid).unwrap()["trace_id"].clone();
+    assert_eq!(
+        pushed[0]["trace_id"], explain_trace_id,
+        "the pushed doc is keyed by the same trace_id as /debug/explain"
     );
 }
 

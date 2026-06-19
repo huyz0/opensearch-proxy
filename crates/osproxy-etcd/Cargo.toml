@@ -1,0 +1,23 @@
+[package]
+name = "osproxy-etcd"
+description = "Reference distributed DirectiveStore backed by etcd v3: a watch-fed, locally-cached fleet directive set."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+osproxy-core.workspace = true
+osproxy-observe.workspace = true
+etcd-client.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+testcontainers.workspace = true
+
+[lints]
+workspace = true

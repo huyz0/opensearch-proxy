@@ -19,6 +19,7 @@ flowchart TB
     observe["osproxy-observe<br/><i>traces, directives, /debug/explain</i>"]
     control["osproxy-control<br/><i>watched-store seams, epochs</i>"]
     otlp["osproxy-otlp<br/><i>OTLP HTTP exporter</i>"]
+    etcd["osproxy-etcd<br/><i>etcd-backed DirectiveStore</i>"]
     config["osproxy-config<br/><i>typed config load/validate</i>"]
     spi["osproxy-spi<br/><i>public traits you implement</i>"]
     core["osproxy-core<br/><i>types, model, error taxonomy · no I/O</i>"]
@@ -57,9 +58,10 @@ flowchart TB
 | **osproxy-sink** | The `Sink` (write) and `Reader` (get/search/count/cursor) traits + `OpenSearchSink` (and `MemorySink` for tests). Per-cluster pools live here, built lazily from the endpoint each placement reports (no static catalog). | spi, core |
 | **osproxy-transport** | h1/h2/gRPC ingress, admission control (413/429), the upstream connection pools, TLS/mTLS, the `CryptoProvider` seam and the build-time `DefaultCryptoProvider`. | spi, core |
 | **osproxy-engine** | The request **pipeline**: dispatch by endpoint, resolve → write-gate → transform → dispatch → reverse-transform, and the per-request trace. Generic over `Router` + `Sink`. | tenancy, sink, rewrite, observe, spi, core |
-| **osproxy-observe** | Shape-only causal traces, the diagnostics **directive** model (level/targeting/TTL/sampling), `/debug/explain` assembly, break-glass tape, the OTLP `resource_spans` encoder, `/metrics` snapshot, the `DirectiveStore`/`SpanExporter`/`DirectiveVerifier` seams. | core |
+| **osproxy-observe** | Shape-only causal traces, the diagnostics **directive** model (level/targeting/TTL/sampling), `/debug/explain` assembly, break-glass tape, the OTLP `resource_spans` encoder, `/metrics` snapshot, the `DirectiveStore`/`SpanExporter`/`DiagnosticSink`/`DirectiveVerifier` seams. | core |
 | **osproxy-control** | The watched-store **client seams** for the placement table and diagnostics directives (epoch-aware). Ships seams + reference impls, not a concrete distributed store. | core |
 | **osproxy-otlp** | `OtlpHttpExporter`, which POSTs encoded spans to an OTLP collector, fire-and-forget hardened. | observe, core |
+| **osproxy-etcd** | Reference distributed `DirectiveStore` (`EtcdDirectiveStore`): a watch-fed, locally-cached fleet directive set over etcd v3. A leaf adapter, opt-in behind the server's `etcd` feature. | observe, core |
 | **osproxy-capture** | The `Capture` seam for tenant-agnostic, full-fidelity traffic capture (`CaptureRecord`, `NoCapture`, the `RedactingCapture` decorator, `MemoryCapture`). A low leaf with no broker dependency, so an external recorder can implement it. | spi |
 | **osproxy-kafka** | Queue-backed capture: the `CaptureEnvelope` replay format, a `Producer` seam, `KafkaCapture`, and an in-memory producer. The actual Kafka client composes in as a `Producer` impl, so no broker dependency lives in the tree. | capture |
 | **osproxy-kafka-krafka** | The **portable** `Producer`: pure-Rust krafka + rustls, no native build, one client for both deployment targets. The TLS crypto provider is build-selected and krafka feature-gates its rustls provider, so a FIPS build links **only** the validated aws-lc-rs module (ring is never linked). Also implements `AckProducer` for the durable buffer. | kafka |
