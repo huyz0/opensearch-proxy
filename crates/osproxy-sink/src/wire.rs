@@ -6,7 +6,6 @@
 //! `_id`/`result` back out of a single-doc response.
 
 use bytes::Bytes;
-use http_body_util::Full;
 use hyper::{Method, Request};
 use osproxy_core::IndexName;
 use serde_json::Value;
@@ -14,6 +13,7 @@ use serde_json::Value;
 use crate::ack::OpResult;
 use crate::batch::DocOp;
 use crate::error::SinkError;
+use crate::opensearch::{buffered, UpstreamBody};
 
 /// Builds the upstream request for a document op, returning it together with the
 /// id to fall back to if the response omits `_id`.
@@ -21,14 +21,14 @@ pub(crate) fn build_request(
     base: &str,
     index: &IndexName,
     doc: &DocOp,
-) -> Result<(Request<Full<Bytes>>, String), SinkError> {
+) -> Result<(Request<UpstreamBody>, String), SinkError> {
     let (method, uri, body, fallback_id) = request_parts(base, index, doc);
 
     let req = Request::builder()
         .method(method)
         .uri(uri)
         .header("content-type", "application/json")
-        .body(Full::new(Bytes::from(body)))
+        .body(buffered(Bytes::from(body)))
         .map_err(|_| SinkError::Transport {
             kind: "building upstream request",
         })?;

@@ -19,6 +19,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use bytes::Bytes;
+use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::{Method, Request, Response};
@@ -40,7 +41,23 @@ use crate::read::{
 use crate::sink::Sink;
 use crate::wire::{build_request, doc_uri, parse_result};
 
-type HttpClient = Client<CountingConnector<HttpConnector>, Full<Bytes>>;
+/// The error type the upstream body may surface. A buffered body never errors
+/// (`Infallible`); a streamed verbatim-forward body (a later stage) surfaces the
+/// downstream read error here. Boxed so both fit one client type.
+pub(crate) type BodyError = Box<dyn std::error::Error + Send + Sync>;
+
+/// The upstream request body type. Boxed so a request can carry buffered bytes
+/// today and a streamed (or head + stream-tail) body in a later stage without
+/// changing the pooled client's type (ADR-014).
+pub(crate) type UpstreamBody = BoxBody<Bytes, BodyError>;
+
+/// Wraps fully-buffered bytes as an [`UpstreamBody`]. The buffered body is
+/// infallible; `match never {}` discharges its `Infallible` error into [`BodyError`].
+pub(crate) fn buffered(bytes: Bytes) -> UpstreamBody {
+    Full::new(bytes).map_err(|never| match never {}).boxed()
+}
+
+type HttpClient = Client<CountingConnector<HttpConnector>, UpstreamBody>;
 
 /// One cluster's base URL plus its own pooled HTTP/1.1 and HTTP/2 clients.
 ///
@@ -265,7 +282,7 @@ impl OpenSearchSink {
         &self,
         pool: &ClusterPool,
         protocol: Protocol,
-        mut req: Request<Full<Bytes>>,
+        mut req: Request<UpstreamBody>,
         trace: Option<&TraceContext>,
         fail_kind: &'static str,
     ) -> Result<(Response<Incoming>, bool), SinkError> {
@@ -318,7 +335,7 @@ impl OpenSearchSink {
             .method(Method::POST)
             .uri(uri)
             .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(op.body.clone())))
+            .body(buffered(Bytes::from(op.body.clone())))
             .map_err(|_| SinkError::Transport {
                 kind: "building upstream query request",
             })?;
@@ -388,7 +405,7 @@ impl Reader for OpenSearchSink {
         let req = Request::builder()
             .method(Method::GET)
             .uri(uri)
-            .body(Full::new(Bytes::new()))
+            .body(buffered(Bytes::new()))
             .map_err(|_| SinkError::Transport {
                 kind: "building upstream read request",
             })?;
@@ -456,7 +473,7 @@ impl Reader for OpenSearchSink {
             .method(hyper_method(op.method))
             .uri(uri)
             .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(op.body.clone())))
+            .body(buffered(Bytes::from(op.body.clone())))
             .map_err(|_| SinkError::Transport {
                 kind: "building upstream cursor request",
             })?;
