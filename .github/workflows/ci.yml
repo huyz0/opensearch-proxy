@@ -147,12 +147,15 @@ jobs:
       # containerized etcd and watch the cached snapshot flip with no restart.
       - name: etcd directive-store round-trip
         run: cargo test -p osproxy-etcd --test etcd_live -- --ignored --nocapture --test-threads=1
-      # No-Docker concurrency micro-benchmarks (docs/14): the multicore contention
-      # of the per-request shared-state ops and the connection-establishment cost.
+      # No-Docker performance benchmarks (docs/guide/11-performance): the load matrix
+      # (payload × connections × write mode), the multicore contention of the
+      # per-request shared-state ops, and the connection-establishment cost.
       # Host-bound on a shared runner — recorded into the summary, not gated.
-      - name: Concurrency micro-benchmarks
+      - name: Performance benchmarks
         if: always()
         run: |
+          cargo test -p osproxy-server --test load_matrix \
+            -- --ignored --nocapture | tee /tmp/matrix.txt
           cargo test -p osproxy-observe --test contention \
             -- --ignored --nocapture --test-threads=1 | tee /tmp/contention.txt
           cargo test -p osproxy-server --test connection_load \
@@ -169,6 +172,10 @@ jobs:
             echo
             cat target/**/nfr-*.md 2>/dev/null || echo "_no NFR-P briefs emitted_"
             echo
+            echo "## Load matrix — payload × connections × mode (CI host, indicative)"
+            echo '```'
+            grep -hE 'payload|256B|4KB|64KB' /tmp/matrix.txt 2>/dev/null || echo "(none)"
+            echo '```'
             echo "## Concurrency micro-benchmarks (CI host, indicative)"
             echo '```'
             grep -hE 'throughput|threads=|single-conn|fresh-conn' \
