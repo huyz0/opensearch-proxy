@@ -147,16 +147,33 @@ jobs:
       # containerized etcd and watch the cached snapshot flip with no restart.
       - name: etcd directive-store round-trip
         run: cargo test -p osproxy-etcd --test etcd_live -- --ignored --nocapture --test-threads=1
+      # No-Docker concurrency micro-benchmarks (docs/14): the multicore contention
+      # of the per-request shared-state ops and the connection-establishment cost.
+      # Host-bound on a shared runner — recorded into the summary, not gated.
+      - name: Concurrency micro-benchmarks
+        if: always()
+        run: |
+          cargo test -p osproxy-observe --test contention \
+            -- --ignored --nocapture --test-threads=1 | tee /tmp/contention.txt
+          cargo test -p osproxy-server --test connection_load \
+            single_connection_request_latency_microbench \
+            -- --ignored --nocapture | tee /tmp/connload.txt
       # Render the Markdown briefs the runners emit into the job summary, so the
       # latency / scalability / footprint tables and verdicts show up on the run
       # page itself — the consolidated view an operator (or an LLM) reads.
-      - name: NFR-P brief to job summary
+      - name: Performance briefs to job summary
         if: always()
         run: |
           {
             echo "## NFR-P brief (live OpenSearch)"
             echo
             cat target/**/nfr-*.md 2>/dev/null || echo "_no NFR-P briefs emitted_"
+            echo
+            echo "## Concurrency micro-benchmarks (CI host, indicative)"
+            echo '```'
+            grep -hE 'throughput|threads=|single-conn|fresh-conn' \
+              /tmp/contention.txt /tmp/connload.txt 2>/dev/null || echo "(none)"
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       # Publish the machine-readable profile/verdict JSON and the briefs the runners
       # emit (the substrate an operator or an LLM judges) as a downloadable artifact.

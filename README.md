@@ -131,6 +131,8 @@ deeper rationale.
 | [docs/10-review-process.md](docs/10-review-process.md) | Design & code review gates |
 | [docs/11-roadmap.md](docs/11-roadmap.md) | Delivery history & status (what shipped, what's intentionally out of scope) |
 | [docs/12-quality-system.md](docs/12-quality-system.md) | Two-tier quality: deterministic gates + LLM semantic review |
+| [docs/13-security-model.md](docs/13-security-model.md) | Consolidated threat model: actors, trust boundaries, controls |
+| [docs/14-performance.md](docs/14-performance.md) | Performance measurement record (local + CI): hot-path timing, multicore contention, connections |
 | [docs/specs/](docs/specs/) | Vendored external specs & references (OpenSearch API, FIPS, OTel) |
 
 ## Status

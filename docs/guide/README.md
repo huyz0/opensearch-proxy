@@ -65,6 +65,6 @@ the code.
 ## Going deeper
 
 This guide is the entry point. The design rationale lives in the numbered design
-docs ([`docs/00`](../00-goals.md) through [`docs/13`](../13-security-model.md)) and the
+docs ([`docs/00`](../00-goals.md) through [`docs/14`](../14-performance.md)) and the
 [architecture decision records](../decisions/README.md). Where a guide page
 simplifies, it links to the design doc that holds the full story.
