@@ -1,8 +1,8 @@
 use super::*;
 use osproxy_core::{ClusterId, EndpointKind, FieldName, PrincipalId, RequestId};
 use osproxy_spi::{
-    DocIdRule, HeaderView, HttpMethod, IdTemplate, PartitionKeySpec, PlacementAt, Principal,
-    Protocol, SensitivitySpec,
+    BodyDoc, DocIdRule, HeaderView, HttpMethod, IdTemplate, PartitionKeySpec, PlacementAt,
+    Principal, Protocol, SensitivitySpec,
 };
 
 /// A `SharedIndex` tenancy whose `doc_id_rule` is configurable, to prove the
@@ -15,9 +15,9 @@ impl TenancySpi for SharedTenancy {
     fn resolve_partition(
         &self,
         ctx: &RequestCtx<'_>,
-        doc: Option<&serde_json::Value>,
+        body: BodyDoc<'_>,
     ) -> Result<PartitionId, SpiError> {
-        crate::resolve_partition_spec(&PartitionKeySpec::Header("x-tenant".to_owned()), ctx, doc)
+        crate::resolve_partition_spec(&PartitionKeySpec::Header("x-tenant".to_owned()), ctx, body)
     }
     fn doc_id_rule(&self) -> Option<DocIdRule> {
         self.id_rule.clone()
@@ -97,7 +97,7 @@ impl TenancySpi for EncodedHeaderTenancy {
     fn resolve_partition(
         &self,
         ctx: &RequestCtx<'_>,
-        doc: Option<&serde_json::Value>,
+        body: BodyDoc<'_>,
     ) -> Result<PartitionId, SpiError> {
         // Decode an encoded header ourselves first; take the claim before the
         // signature separator.
@@ -109,7 +109,7 @@ impl TenancySpi for EncodedHeaderTenancy {
         }
         // The declarative source resolves a *different*, wrong id; reaching it
         // would prove the decode path did not take precedence.
-        crate::resolve_partition_spec(&PartitionKeySpec::Header("x-wrong".to_owned()), ctx, doc)
+        crate::resolve_partition_spec(&PartitionKeySpec::Header("x-wrong".to_owned()), ctx, body)
     }
     fn doc_id_rule(&self) -> Option<DocIdRule> {
         None
@@ -149,7 +149,9 @@ async fn a_code_extractor_decodes_the_partition_and_wins_over_the_declarative_so
         HeaderView::new(&headers),
         b"",
     );
-    let partition = router.resolve_partition(&ctx, None).expect("extracted");
+    let partition = router
+        .resolve_partition(&ctx, BodyDoc::new(ctx.body()))
+        .expect("extracted");
     assert_eq!(partition, PartitionId::from("acme"));
 }
 

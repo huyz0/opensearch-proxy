@@ -11,11 +11,11 @@ use std::collections::HashMap;
 
 use osproxy_core::PartitionId;
 use osproxy_rewrite::{
-    construct_id, inject_fields, inject_update, map_logical_to_physical, map_physical_to_logical,
-    BulkAction, BulkItem,
+    construct_id_bytes, inject_fields_bytes, inject_update, map_logical_to_physical,
+    map_physical_to_logical, BulkAction, BulkItem,
 };
 use osproxy_sink::{DocOp, WriteOp};
-use osproxy_spi::{BodyTransform, InjectedField, InjectedValue, RequestCtx};
+use osproxy_spi::{BodyDoc, BodyTransform, InjectedField, InjectedValue, RequestCtx};
 use osproxy_tenancy::{Resolved, Router};
 use serde_json::Value;
 
@@ -67,7 +67,10 @@ pub(crate) async fn prepare<R: Router>(
         .unwrap_or_else(|| ctx.logical_index().to_owned());
 
     let partition = router
-        .resolve_partition(ctx, item.source.as_ref())
+        .resolve_partition(
+            ctx,
+            BodyDoc::new(item.source.as_deref().unwrap_or_default()),
+        )
         .map_err(|_| {
             fail(
                 action,
@@ -133,11 +136,16 @@ fn build_op(
         }
         BulkAction::Update => build_update(item, &inject, rule, partition, bad)?,
         BulkAction::Index | BulkAction::Create => {
-            let mut source = item.source.clone().ok_or_else(|| bad("missing_source"))?;
-            inject_fields(&mut source, &inject).map_err(|_| bad("reserved_field_collision"))?;
+            let source = item
+                .source
+                .as_deref()
+                .ok_or_else(|| bad("missing_source"))?;
+            // Splice the tenancy fields straight into the source bytes and read
+            // the id from the original bytes — no `Value` tree (ADR-014).
+            let body = inject_fields_bytes(source, &inject)
+                .map_err(|_| bad("reserved_field_collision"))?;
             let (id, logical) =
-                index_id(rule, partition, item, &source).ok_or_else(|| bad("id_construction"))?;
-            let body = serde_json::to_vec(&source).map_err(|_| bad("serialize"))?;
+                index_id(rule, partition, item, source).ok_or_else(|| bad("id_construction"))?;
             let routing = id.as_ref().and_then(|_| routing_for(rule, partition));
             // `create` fails-if-exists upstream (op_type=create); `index` replaces.
             let doc = if item.action == BulkAction::Create {
@@ -176,7 +184,14 @@ fn build_update<F: Fn(&'static str) -> ItemFailure>(
 ) -> Result<(DocOp, String), ItemFailure> {
     let logical = item.id.clone().ok_or_else(|| bad("update_without_id"))?;
     let id = physical_id(rule, partition, &logical).ok_or_else(|| bad("irreversible_id"))?;
-    let mut update = item.source.clone().ok_or_else(|| bad("missing_source"))?;
+    // An `_update` body is structurally nested (`doc`/`upsert` sub-objects), so it
+    // takes the `Value` path: the byte splice handles only top-level objects. This
+    // is the rarer bulk verb; the hot index/create path stays tree-free (ADR-014).
+    let source = item
+        .source
+        .as_deref()
+        .ok_or_else(|| bad("missing_source"))?;
+    let mut update: Value = serde_json::from_slice(source).map_err(|_| bad("invalid_json"))?;
     inject_update(&mut update, inject).map_err(|_| bad("reserved_field_collision"))?;
     let body = serde_json::to_vec(&update).map_err(|_| bad("serialize"))?;
     Ok((
@@ -189,12 +204,13 @@ fn build_update<F: Fn(&'static str) -> ItemFailure>(
     ))
 }
 
-/// The physical id and the logical id to echo for an index/create op.
+/// The physical id and the logical id to echo for an index/create op. Reads any
+/// `{body.<path>}` id component straight from the source bytes (no `Value` tree).
 fn index_id(
     id_rule: Option<&IdRule<'_>>,
     partition: &str,
     item: &BulkItem,
-    source: &Value,
+    source: &[u8],
 ) -> Option<(Option<String>, String)> {
     match (id_rule, item.id.as_deref()) {
         // Client-supplied id: map logical→physical; echo the client's logical id.
@@ -204,7 +220,7 @@ fn index_id(
         }
         // Rule-constructed id: echo the natural key recovered from the physical.
         (Some(rule), None) => {
-            let physical = construct_id(rule.template, partition, source).ok()?;
+            let physical = construct_id_bytes(rule.template, partition, source).ok()?;
             let logical = map_physical_to_logical(rule.template, partition, &physical)
                 .ok()
                 .flatten()

@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use futures_util::stream::StreamExt as _;
 use osproxy_rewrite::{parse_mget, MgetItem};
 use osproxy_sink::{ReadOp, ReadOutcome, Reader, SinkError};
-use osproxy_spi::RequestCtx;
+use osproxy_spi::{BodyDoc, RequestCtx};
 use osproxy_tenancy::{Resolved, Router};
 use serde_json::{json, Value};
 
@@ -47,7 +47,7 @@ pub(crate) async fn multi_get<R: Router, S: Reader>(
 
     // The partition is the caller's, resolved once (an `_mget` carries no
     // per-doc source to resolve from). A failure here is request-level.
-    let partition = router.resolve_partition(ctx, None)?;
+    let partition = router.resolve_partition(ctx, BodyDoc::new(&[]))?;
 
     let mut docs: Vec<Value> = vec![Value::Null; n];
     let mut prepared: Vec<Option<Prepared>> = (0..n).map(|_| None).collect();

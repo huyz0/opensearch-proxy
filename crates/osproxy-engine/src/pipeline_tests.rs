@@ -4,7 +4,7 @@ use std::sync::Arc;
 use osproxy_core::{ClusterId, FieldName, IndexName, PartitionId, PrincipalId, RequestId};
 use osproxy_sink::MemorySink;
 use osproxy_spi::{
-    DocIdRule, HeaderView, HttpMethod, IdTemplate, InjectedField, InjectedValue, JsonPath,
+    BodyDoc, DocIdRule, HeaderView, HttpMethod, IdTemplate, InjectedField, InjectedValue, JsonPath,
     PartitionKeySpec, Placement, PlacementAt, Principal, Protocol, SensitivitySpec, TenancySpi,
 };
 use osproxy_tenancy::{PlacementTable, TenancyRouter};
@@ -17,14 +17,14 @@ impl TenancySpi for Tenancy {
     fn resolve_partition(
         &self,
         ctx: &osproxy_spi::RequestCtx<'_>,
-        doc: Option<&serde_json::Value>,
+        body: BodyDoc<'_>,
     ) -> Result<osproxy_core::PartitionId, osproxy_spi::SpiError> {
         // Ingest resolves from the body; by-id reads (no body) from a header.
         let spec = PartitionKeySpec::AnyOf(vec![
             PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
             PartitionKeySpec::Header("x-tenant".to_owned()),
         ]);
-        osproxy_tenancy::resolve_partition_spec(&spec, ctx, doc)
+        osproxy_tenancy::resolve_partition_spec(&spec, ctx, body)
     }
     fn doc_id_rule(&self) -> Option<DocIdRule> {
         Some(DocIdRule::new(IdTemplate::new("{partition}:{body.id}")).with_routing(true))

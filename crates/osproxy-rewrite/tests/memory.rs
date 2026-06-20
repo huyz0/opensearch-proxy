@@ -16,8 +16,8 @@
 use dhat::{HeapStats, Profiler};
 use osproxy_core::FieldName;
 use osproxy_rewrite::{
-    construct_id, inject_fields, map_logical_to_physical, map_physical_to_logical, parse_bulk,
-    parse_mget, parse_msearch, strip_fields, wrap_query,
+    construct_id, construct_id_bytes, inject_fields, inject_fields_bytes, map_logical_to_physical,
+    map_physical_to_logical, parse_bulk, parse_mget, parse_msearch, strip_fields, wrap_query,
 };
 use serde_json::{json, Value};
 
@@ -47,18 +47,63 @@ fn rewrite_hot_path_allocation_budgets() {
     document_transform_budgets();
     bulk_path_budgets();
     demux_parse_budgets();
+    streaming_invariant_budgets();
+}
+
+/// INV-MEM (ADR-014): the byte splice/extract primitives allocate a number of
+/// blocks bounded by the document's *structure* (its top-level keys / the path
+/// walked), never by its *size* — there is no `Value` tree, so a 64 KiB document
+/// and a 256 B one cost the same number of allocations. This is the load-bearing
+/// streaming guarantee: the body is held once, never materialized.
+fn streaming_invariant_budgets() {
+    let fields = vec![(FieldName::from("_tenant"), Value::from("acme"))];
+    // Two documents with identical top-level shape but vastly different size.
+    let small = padded_doc(64);
+    let large = padded_doc(64 * 1024);
+
+    let inject_small = allocs(|| {
+        let _ = std::hint::black_box(inject_fields_bytes(&small, &fields).unwrap());
+    });
+    let inject_large = allocs(|| {
+        let _ = std::hint::black_box(inject_fields_bytes(&large, &fields).unwrap());
+    });
+    assert_eq!(
+        inject_small, inject_large,
+        "inject_fields_bytes allocations must not grow with body size (INV-MEM)"
+    );
+
+    let id_small = allocs(|| {
+        let _ = std::hint::black_box(construct_id_bytes("{partition}:{body.id}", "acme", &small));
+    });
+    let id_large = allocs(|| {
+        let _ = std::hint::black_box(construct_id_bytes("{partition}:{body.id}", "acme", &large));
+    });
+    assert_eq!(
+        id_small, id_large,
+        "construct_id_bytes allocations must not grow with body size (INV-MEM)"
+    );
+}
+
+/// A `{"id":7,"data":"x…"}` document padded to ~`size` bytes — fixed top-level
+/// shape, variable size.
+fn padded_doc(size: usize) -> Vec<u8> {
+    let pad = size.saturating_sub(20).max(1);
+    format!(r#"{{"id":7,"data":"{}"}}"#, "x".repeat(pad)).into_bytes()
 }
 
 /// Per-document write/read transforms.
 fn document_transform_budgets() {
     // construct_id: one expansion of `{partition}:{body.id}` into an owned id.
+    // Down from 4 to 3 since the template walk is shared with `construct_id_bytes`
+    // via a closure (ADR-014): the per-placeholder `expand` no longer allocates an
+    // owned String for the `{partition}` literal, pushing it straight into `out`.
     let doc = json!({ "id": 7, "msg": "hi" });
     assert_eq!(
         allocs(|| {
             let _ =
                 std::hint::black_box(construct_id("{partition}:{body.id}", "acme", &doc).unwrap());
         }),
-        4,
+        3,
         "construct_id allocation budget"
     );
 
@@ -133,9 +178,12 @@ fn bulk_path_budgets() {
         let _ = std::hint::black_box(parse_bulk(bulk_body).unwrap());
     });
 
+    // parse_bulk down from 16 to 14: the source line is kept as raw bytes (one
+    // `Vec` copy) instead of being parsed into a `Value` tree (ADR-014); the
+    // per-item transform splices those bytes later without ever materializing it.
     assert_eq!(
         (l2p, p2l, bulk),
-        (2, 2, 16),
+        (2, 2, 14),
         "bulk-path allocation budgets (map_logical_to_physical, map_physical_to_logical, parse_bulk)"
     );
 }

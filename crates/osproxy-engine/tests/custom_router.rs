@@ -12,8 +12,8 @@ use osproxy_core::{
 use osproxy_engine::Pipeline;
 use osproxy_sink::MemorySink;
 use osproxy_spi::{
-    HeaderView, HttpMethod, MigrationPhase, Principal, Protocol, RequestCtx, RouteDecision,
-    SpiError,
+    BodyDoc, HeaderView, HttpMethod, MigrationPhase, Principal, Protocol, RequestCtx,
+    RouteDecision, SpiError,
 };
 use osproxy_tenancy::{Resolved, Router};
 
@@ -41,7 +41,7 @@ impl Router for PinRouter {
     fn resolve_partition(
         &self,
         _ctx: &RequestCtx<'_>,
-        _doc: Option<&serde_json::Value>,
+        _body: BodyDoc<'_>,
     ) -> Result<PartitionId, SpiError> {
         Ok(PartitionId::from("pinned"))
     }

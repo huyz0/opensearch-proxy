@@ -7,7 +7,7 @@
 //! (`docs/04`). Pure and synchronous — no network, fully testable.
 
 use osproxy_core::FieldName;
-use osproxy_rewrite::{construct_id, inject_fields, RewriteError};
+use osproxy_rewrite::{construct_id_bytes, inject_fields_bytes, validate_json};
 use osproxy_sink::{DocOp, WriteBatch, WriteOp};
 use osproxy_spi::{BodyTransform, DocIdRule, InjectedField, InjectedValue};
 use osproxy_tenancy::Resolved;
@@ -16,6 +16,11 @@ use serde_json::Value;
 use crate::error::RequestError;
 
 /// Builds the single-document write batch for a resolved ingest request.
+///
+/// Applies the body transform by **scanning and splicing the raw bytes** — never
+/// parsing the body into a `Value` tree or re-serializing it (ADR-014): an
+/// injected field is written right after the opening `{`, an id is read straight
+/// from the bytes, and an untransformed body is forwarded verbatim.
 ///
 /// # Errors
 ///
@@ -27,54 +32,59 @@ pub fn build_write_batch(resolved: &Resolved, body: &[u8]) -> Result<WriteBatch,
     let decision = &resolved.decision;
     let partition = resolved.partition.as_str();
 
-    let mut doc: Value = serde_json::from_slice(body).map_err(|_| RewriteError::InvalidJson)?;
-    let id = apply_transform(&mut doc, &decision.body_transform, partition)?;
+    let (id, out_body) = apply_transform(body, &decision.body_transform, partition)?;
     let routing = routing_for(&decision.body_transform, partition);
-
-    // Serializing a `Value` back to bytes is infallible for in-memory values.
-    let body = serde_json::to_vec(&doc).map_err(|_| RequestError::Internal {
-        reason: "serializing transformed document",
-    })?;
 
     let op = WriteOp::new(
         decision.target.clone(),
-        DocOp::Index { id, routing, body },
+        DocOp::Index {
+            id,
+            routing,
+            body: out_body,
+        },
         decision.epoch,
     )
     .with_protocol(decision.upstream_protocol);
     Ok(WriteBatch::single(op))
 }
 
-/// Applies the body transform in place, returning the constructed `_id` (if the
-/// transform constructs one).
+/// Applies the body transform over the raw bytes, returning the constructed
+/// `_id` (if any) and the bytes to write.
 fn apply_transform(
-    doc: &mut Value,
+    body: &[u8],
     transform: &BodyTransform,
     partition: &str,
-) -> Result<Option<String>, RequestError> {
+) -> Result<(Option<String>, Vec<u8>), RequestError> {
     match transform {
-        BodyTransform::None => Ok(None),
-        BodyTransform::Inject(fields) => {
-            inject(doc, fields, partition)?;
-            Ok(None)
+        // Verbatim: forward unchanged, but still reject a malformed body.
+        BodyTransform::None => {
+            validate_json(body).map_err(RequestError::from)?;
+            Ok((None, body.to_vec()))
         }
-        BodyTransform::ConstructId(rule) => Ok(Some(build_id(rule, doc, partition)?)),
+        BodyTransform::Inject(fields) => Ok((None, inject(body, fields, partition)?)),
+        // The id reads client fields from the bytes; the body passes through.
+        BodyTransform::ConstructId(rule) => {
+            validate_json(body).map_err(RequestError::from)?;
+            Ok((Some(build_id(rule, body, partition)?), body.to_vec()))
+        }
+        // Splice the injected fields (which validates the object), then read the
+        // id from the original client bytes (id templates reference client fields).
         BodyTransform::Both { inject: fields, id } => {
-            inject(doc, fields, partition)?;
-            Ok(Some(build_id(id, doc, partition)?))
+            let out = inject(body, fields, partition)?;
+            Ok((Some(build_id(id, body, partition)?), out))
         }
     }
 }
 
-/// Injects the resolved fields into `doc`.
-fn inject(doc: &mut Value, fields: &[InjectedField], partition: &str) -> Result<(), RequestError> {
+/// Splices the resolved fields into the body bytes.
+fn inject(body: &[u8], fields: &[InjectedField], partition: &str) -> Result<Vec<u8>, RequestError> {
     let resolved = resolve_values(fields, partition)?;
-    inject_fields(doc, &resolved).map_err(RequestError::from)
+    inject_fields_bytes(body, &resolved).map_err(RequestError::from)
 }
 
-/// Constructs the `_id` from a rule.
-fn build_id(rule: &DocIdRule, doc: &Value, partition: &str) -> Result<String, RequestError> {
-    construct_id(rule.template.as_str(), partition, doc).map_err(RequestError::from)
+/// Constructs the `_id` from a rule by reading scalars straight from the bytes.
+fn build_id(rule: &DocIdRule, body: &[u8], partition: &str) -> Result<String, RequestError> {
+    construct_id_bytes(rule.template.as_str(), partition, body).map_err(RequestError::from)
 }
 
 /// The `_routing` value: the partition id, but only when a constructing
@@ -118,6 +128,7 @@ fn resolve_values(
 mod tests {
     use super::*;
     use osproxy_core::{ClusterId, Epoch, IndexName, PartitionId, Target};
+    use osproxy_rewrite::RewriteError;
     use osproxy_spi::{IdTemplate, Protocol, RouteDecision};
     use serde_json::json;
 

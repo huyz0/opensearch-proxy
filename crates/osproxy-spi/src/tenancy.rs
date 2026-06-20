@@ -4,7 +4,7 @@ use osproxy_core::{ClusterId, Epoch, PartitionId};
 
 use crate::error::SpiError;
 use crate::placement::PlacementAt;
-use crate::request::RequestCtx;
+use crate::request::{BodyDoc, RequestCtx};
 use crate::rules::{DocIdRule, InjectedField, SensitivitySpec};
 
 /// The tenancy-focused contract most implementers provide.
@@ -32,15 +32,14 @@ use crate::rules::{DocIdRule, InjectedField, SensitivitySpec};
 /// ```
 /// use osproxy_core::{ClusterId, Epoch, FieldName, IndexName, PartitionId};
 /// use osproxy_spi::{
-///     InjectedField, InjectedValue, Placement, PlacementAt, PartitionKeySpecKind,
+///     BodyDoc, InjectedField, InjectedValue, Placement, PlacementAt, PartitionKeySpecKind,
 ///     RequestCtx, SensitivitySpec, SpiError, TenancySpi,
 /// };
-/// use serde_json::Value;
 ///
 /// struct OneTenantPerHeader;
 ///
 /// impl TenancySpi for OneTenantPerHeader {
-///     fn resolve_partition(&self, ctx: &RequestCtx<'_>, _doc: Option<&Value>)
+///     fn resolve_partition(&self, ctx: &RequestCtx<'_>, _body: BodyDoc<'_>)
 ///         -> Result<PartitionId, SpiError>
 ///     {
 ///         // Real impls usually defer to `osproxy_tenancy::resolve_partition_spec`;
@@ -73,26 +72,28 @@ use crate::rules::{DocIdRule, InjectedField, SensitivitySpec};
 pub trait TenancySpi: Send + Sync + 'static {
     /// Resolves the partition id for a request.
     ///
-    /// `doc` is the request body parsed as JSON (or `None` if absent / not JSON);
-    /// the adapter parses it once and shares it across a bulk request's items.
+    /// `body` is a [`BodyDoc`] view over the document: the whole request for
+    /// single-doc ingest, or one operation's source line for `_bulk`. Read the
+    /// partition key from it with [`BodyDoc::scalar`] — the proxy scans the bytes
+    /// on demand, so no JSON tree is built (ADR-014).
     ///
     /// Most implementations just defer to the declarative resolver
     /// `osproxy_tenancy::resolve_partition_spec`, naming the source(s) the
     /// partition id lives in (a body field, a header, a principal attribute):
     ///
     /// ```ignore
-    /// fn resolve_partition(&self, ctx: &RequestCtx<'_>, doc: Option<&Value>)
+    /// fn resolve_partition(&self, ctx: &RequestCtx<'_>, body: BodyDoc<'_>)
     ///     -> Result<PartitionId, SpiError>
     /// {
     ///     osproxy_tenancy::resolve_partition_spec(
-    ///         &PartitionKeySpec::BodyField(JsonPath::new("tenant_id")), ctx, doc)
+    ///         &PartitionKeySpec::BodyField(JsonPath::new("tenant_id")), ctx, body)
     /// }
     /// ```
     ///
-    /// Override the body freely for cases the declarative sources cannot express
-    /// — decoding an encoded or signed header, parsing a structured token,
-    /// combining several inputs — and fall back to the declarative resolver if you
-    /// like. You choose the order; nothing is tried implicitly before you.
+    /// Compose [`BodyDoc::scalar`] with header/principal lookups for cases the
+    /// declarative sources cannot express — combining several inputs, decoding a
+    /// structured token — without ever parsing raw bytes yourself. You choose the
+    /// order; nothing is tried implicitly before you.
     ///
     /// # Errors
     ///
@@ -105,7 +106,7 @@ pub trait TenancySpi: Send + Sync + 'static {
     fn resolve_partition(
         &self,
         ctx: &RequestCtx<'_>,
-        doc: Option<&serde_json::Value>,
+        body: BodyDoc<'_>,
     ) -> Result<PartitionId, SpiError>;
 
     /// Optional rule to construct the document `_id` (and `_routing`).

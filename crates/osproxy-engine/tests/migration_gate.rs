@@ -16,7 +16,7 @@ use osproxy_core::{
 use osproxy_engine::{Pipeline, PipelineResponse, RequestError};
 use osproxy_sink::MemorySink;
 use osproxy_spi::{
-    DocIdRule, HeaderView, HttpMethod, IdTemplate, InjectedField, InjectedValue, JsonPath,
+    BodyDoc, DocIdRule, HeaderView, HttpMethod, IdTemplate, InjectedField, InjectedValue, JsonPath,
     PartitionKeySpec, Placement, PlacementAt, Principal, Protocol, RequestCtx, SensitivitySpec,
     SpiError, TenancySpi,
 };
@@ -32,12 +32,12 @@ impl TenancySpi for MigratingTenancy {
     fn resolve_partition(
         &self,
         ctx: &osproxy_spi::RequestCtx<'_>,
-        doc: Option<&serde_json::Value>,
+        body: BodyDoc<'_>,
     ) -> Result<osproxy_core::PartitionId, osproxy_spi::SpiError> {
         osproxy_tenancy::resolve_partition_spec(
             &PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
             ctx,
-            doc,
+            body,
         )
     }
     fn doc_id_rule(&self) -> Option<DocIdRule> {

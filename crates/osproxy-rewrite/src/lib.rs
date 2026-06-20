@@ -27,8 +27,19 @@ mod query;
 pub use bulk::{parse_bulk, BulkAction, BulkItem};
 pub use error::RewriteError;
 pub use extract::extract_scalar;
-pub use fields::{inject_fields, inject_update, strip_fields};
-pub use id::{construct_id, map_logical_to_physical, map_physical_to_logical};
+pub use fields::{inject_fields, inject_fields_bytes, inject_update, strip_fields};
+pub use id::{construct_id, construct_id_bytes, map_logical_to_physical, map_physical_to_logical};
 pub use mget::{parse_mget, MgetItem};
 pub use msearch::{parse_msearch, MsearchItem};
 pub use query::wrap_query;
+
+/// Validates that `body` is a single well-formed JSON document, allocating
+/// nothing — for the verbatim write path, which forwards the body unchanged but
+/// must still reject malformed input.
+///
+/// # Errors
+///
+/// [`RewriteError::InvalidJson`] if `body` is not valid JSON.
+pub fn validate_json(body: &[u8]) -> Result<(), RewriteError> {
+    osproxy_core::json::validate(body).map_err(RewriteError::from)
+}

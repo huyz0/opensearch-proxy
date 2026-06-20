@@ -1,17 +1,15 @@
 //! Resolving the partition id from a request per a [`PartitionKeySpec`].
 
 use osproxy_core::PartitionId;
-use osproxy_rewrite::extract_scalar;
-use osproxy_spi::{PartitionKeySpec, PartitionKeySpecKind, RequestCtx, SpiError};
-use serde_json::Value;
+use osproxy_spi::{BodyDoc, PartitionKeySpec, PartitionKeySpecKind, RequestCtx, SpiError};
 
 /// Resolves the partition id by trying `spec`'s sources in order — the
 /// declarative resolver most [`osproxy_spi::TenancySpi::resolve_partition`]
 /// implementations defer to.
 ///
-/// `doc` is the request body parsed as JSON, or `None` if the body was absent
-/// or not valid JSON (in which case [`PartitionKeySpec::BodyField`] simply does
-/// not resolve).
+/// `body` is a [`BodyDoc`] view over the document; a [`PartitionKeySpec::BodyField`]
+/// reads its scalar straight from the bytes (no JSON tree, ADR-014), and an
+/// absent/non-object body simply does not resolve.
 ///
 /// # Errors
 ///
@@ -20,10 +18,10 @@ use serde_json::Value;
 pub fn resolve_partition_spec(
     spec: &PartitionKeySpec,
     ctx: &RequestCtx<'_>,
-    doc: Option<&Value>,
+    body: BodyDoc<'_>,
 ) -> Result<PartitionId, SpiError> {
     let mut tried = Vec::new();
-    match try_spec(spec, ctx, doc, &mut tried) {
+    match try_spec(spec, ctx, body, &mut tried) {
         Some(id) => Ok(PartitionId::from(id.as_str())),
         None => Err(SpiError::PartitionUnresolved { tried }),
     }
@@ -34,13 +32,13 @@ pub fn resolve_partition_spec(
 fn try_spec(
     spec: &PartitionKeySpec,
     ctx: &RequestCtx<'_>,
-    doc: Option<&Value>,
+    body: BodyDoc<'_>,
     tried: &mut Vec<PartitionKeySpecKind>,
 ) -> Option<String> {
     match spec {
         PartitionKeySpec::BodyField(path) => {
             tried.push(PartitionKeySpecKind::BodyField);
-            doc.and_then(|d| extract_scalar(d, path.segments()).ok())
+            body.scalar(path.as_str())
         }
         PartitionKeySpec::Header(name) => {
             tried.push(PartitionKeySpecKind::Header);
@@ -52,7 +50,7 @@ fn try_spec(
         }
         PartitionKeySpec::AnyOf(specs) => specs
             .iter()
-            .find_map(|inner| try_spec(inner, ctx, doc, tried)),
+            .find_map(|inner| try_spec(inner, ctx, body, tried)),
     }
 }
 
@@ -63,7 +61,6 @@ mod tests {
     use osproxy_spi::{
         HeaderView, HttpMethod, JsonPath, Principal, PrincipalAttr, Protocol, RequestCtx,
     };
-    use serde_json::json;
 
     fn ctx<'a>(
         principal: &'a Principal,
@@ -88,11 +85,10 @@ mod tests {
         let principal = Principal::new(PrincipalId::from("svc"));
         let rid = RequestId::from("r");
         let headers = vec![];
-        let c = ctx(&principal, &rid, &headers, b"");
-        let doc = json!({ "tenant_id": "acme" });
+        let c = ctx(&principal, &rid, &headers, br#"{ "tenant_id": "acme" }"#);
         let spec = PartitionKeySpec::BodyField(JsonPath::new("tenant_id"));
         assert_eq!(
-            resolve_partition_spec(&spec, &c, Some(&doc)).unwrap(),
+            resolve_partition_spec(&spec, &c, BodyDoc::new(c.body())).unwrap(),
             PartitionId::from("acme")
         );
     }
@@ -103,15 +99,14 @@ mod tests {
             Principal::new(PrincipalId::from("svc")).with_attr(PrincipalAttr::new("tenant", "p9"));
         let rid = RequestId::from("r");
         let headers = vec![];
-        let c = ctx(&principal, &rid, &headers, b"");
-        let doc = json!({ "other": 1 });
+        let c = ctx(&principal, &rid, &headers, br#"{ "other": 1 }"#);
         let spec = PartitionKeySpec::AnyOf(vec![
             PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
             PartitionKeySpec::Header("x-tenant".to_owned()),
             PartitionKeySpec::PrincipalAttr("tenant".to_owned()),
         ]);
         assert_eq!(
-            resolve_partition_spec(&spec, &c, Some(&doc)).unwrap(),
+            resolve_partition_spec(&spec, &c, BodyDoc::new(c.body())).unwrap(),
             PartitionId::from("p9")
         );
     }
@@ -126,7 +121,7 @@ mod tests {
             PartitionKeySpec::Header("x-tenant".to_owned()),
             PartitionKeySpec::PrincipalAttr("tenant".to_owned()),
         ]);
-        let err = resolve_partition_spec(&spec, &c, None).unwrap_err();
+        let err = resolve_partition_spec(&spec, &c, BodyDoc::new(c.body())).unwrap_err();
         assert!(
             matches!(&err, SpiError::PartitionUnresolved { tried }
             if *tried == vec![

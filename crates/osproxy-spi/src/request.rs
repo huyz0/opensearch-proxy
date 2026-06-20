@@ -87,6 +87,58 @@ impl<'a> HeaderView<'a> {
     }
 }
 
+/// A read-only view of the request body for partition extraction.
+///
+/// Handed to [`crate::TenancySpi::resolve_partition`] so an implementer can pull
+/// the partition key out of the document **without parsing JSON or touching raw
+/// bytes** (ADR-014): the proxy scans the body on demand, reading just the field
+/// asked for and never materializing a tree. This is the extraction utility the
+/// SPI composes over — it deliberately exposes no byte accessor, so the
+/// memory-bounded scan is the only way in.
+///
+/// Backed by the raw body (the whole request for single-doc ingest, or one
+/// operation's source line for `_bulk`). A body that is absent or not a JSON
+/// object simply yields `None` from every lookup.
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_spi::BodyDoc;
+///
+/// let doc = BodyDoc::new(br#"{"tenant_id":"acme","meta":{"region":"eu"}}"#);
+/// assert_eq!(doc.scalar("tenant_id").as_deref(), Some("acme"));
+/// assert_eq!(doc.scalar("meta.region").as_deref(), Some("eu"));
+/// assert_eq!(doc.scalar("missing"), None);
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub struct BodyDoc<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> BodyDoc<'a> {
+    /// Wraps the raw body bytes.
+    #[must_use]
+    pub fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes }
+    }
+
+    /// The scalar at a dotted `path` (e.g. `"tenant_id"` or `"meta.region"`),
+    /// or `None` if the path is absent, the leaf is not a scalar, or the body is
+    /// not a JSON object. String leaves are decoded; numbers and bools use their
+    /// source text. The scan reads only as far as the field and allocates nothing
+    /// beyond the returned string.
+    #[must_use]
+    pub fn scalar(&self, path: &str) -> Option<String> {
+        osproxy_core::json::scalar_at_path(self.bytes, path.split('.')).ok()
+    }
+
+    /// Whether the body is empty (no document to read).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
 /// The read-only view of an authenticated request given to the SPI to decide
 /// routing.
 ///

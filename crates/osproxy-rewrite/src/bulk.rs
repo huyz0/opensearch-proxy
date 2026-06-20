@@ -7,6 +7,7 @@
 //! §3). It is a pure parse — no tenancy meaning — held to the same coverage bar
 //! as the other transforms.
 
+use osproxy_core::json;
 use serde_json::Value;
 
 use crate::error::RewriteError;
@@ -61,8 +62,10 @@ pub struct BulkItem {
     /// fan-out path rejects such items: the precondition is evaluated against the
     /// live version, which does not exist at enqueue time (`docs/04` §9).
     pub concurrency_control: bool,
-    /// The source document (for index/create/update; `None` for delete).
-    pub source: Option<Value>,
+    /// The source document as **raw bytes** (for index/create/update; `None` for
+    /// delete). Kept verbatim — not parsed into a `Value` — so the per-item
+    /// transform can scan and splice it without materializing a tree (ADR-014).
+    pub source: Option<Vec<u8>>,
 }
 
 /// Parses an NDJSON `_bulk` body into its ordered operations.
@@ -84,7 +87,7 @@ pub struct BulkItem {
 /// assert_eq!(items.len(), 1);
 /// assert_eq!(items[0].action, BulkAction::Index);
 /// assert_eq!(items[0].id.as_deref(), Some("1"));
-/// assert_eq!(items[0].source.as_ref().unwrap()["msg"], "hi");
+/// assert_eq!(items[0].source.as_deref(), Some(&b"{\"msg\":\"hi\"}"[..]));
 /// ```
 pub fn parse_bulk(body: &[u8]) -> Result<Vec<BulkItem>, RewriteError> {
     let mut items = Vec::new();
@@ -95,7 +98,10 @@ pub fn parse_bulk(body: &[u8]) -> Result<Vec<BulkItem>, RewriteError> {
         let (action, meta) = parse_action_line(action_line)?;
         let source = if action.has_source() {
             let source_line = lines.next().ok_or(RewriteError::MalformedBulkAction)?;
-            Some(serde_json::from_slice(source_line).map_err(|_| RewriteError::InvalidJson)?)
+            // Validate the line is well-formed JSON (no alloc), but keep the raw
+            // bytes — the transform splices them later without a `Value` tree.
+            json::validate(source_line).map_err(|_| RewriteError::InvalidJson)?;
+            Some(source_line.to_vec())
         } else {
             None
         };
@@ -159,6 +165,11 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Parses an item's raw source bytes back into a `Value` for assertions.
+    fn source_json(item: &BulkItem) -> Value {
+        serde_json::from_slice(item.source.as_ref().unwrap()).unwrap()
+    }
+
     #[test]
     fn parses_index_create_delete_in_order() {
         let body = concat!(
@@ -174,10 +185,10 @@ mod tests {
         assert_eq!(items[0].action, BulkAction::Index);
         assert_eq!(items[0].index.as_deref(), Some("a"));
         assert_eq!(items[0].id.as_deref(), Some("1"));
-        assert_eq!(items[0].source.as_ref().unwrap()["msg"], json!("one"));
+        assert_eq!(source_json(&items[0])["msg"], json!("one"));
 
         assert_eq!(items[1].action, BulkAction::Create);
-        assert_eq!(items[1].source.as_ref().unwrap()["msg"], json!("two"));
+        assert_eq!(source_json(&items[1])["msg"], json!("two"));
 
         assert_eq!(items[2].action, BulkAction::Delete);
         assert_eq!(items[2].id.as_deref(), Some("3"));

@@ -9,8 +9,8 @@
 
 use osproxy_core::{ClusterId, Epoch, FieldName, IndexName, PartitionId};
 use osproxy_spi::{
-    DocIdRule, IdTemplate, InjectedField, InjectedValue, JsonPath, PartitionKeySpec, Placement,
-    PlacementAt, SpiError, TenancySpi,
+    BodyDoc, DocIdRule, IdTemplate, InjectedField, InjectedValue, JsonPath, PartitionKeySpec,
+    Placement, PlacementAt, SpiError, TenancySpi,
 };
 
 /// The injected tenancy field name.
@@ -46,7 +46,7 @@ impl TenancySpi for ReferenceTenancy {
     fn resolve_partition(
         &self,
         ctx: &osproxy_spi::RequestCtx<'_>,
-        doc: Option<&serde_json::Value>,
+        body: BodyDoc<'_>,
     ) -> Result<osproxy_core::PartitionId, osproxy_spi::SpiError> {
         // Ingest carries the partition in the body; by-id reads have no body, so
         // they carry it in a header set by the caller (or an auth gateway).
@@ -54,7 +54,7 @@ impl TenancySpi for ReferenceTenancy {
             PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
             PartitionKeySpec::Header(TENANT_HEADER.to_owned()),
         ]);
-        osproxy_tenancy::resolve_partition_spec(&spec, ctx, doc)
+        osproxy_tenancy::resolve_partition_spec(&spec, ctx, body)
     }
 
     fn doc_id_rule(&self) -> Option<DocIdRule> {

@@ -16,8 +16,8 @@ use osproxy_sink::{
     SearchOutcome, Sink, SinkError, WriteAck, WriteBatch,
 };
 use osproxy_spi::{
-    DocIdRule, HeaderView, HttpMethod, InjectedField, JsonPath, PartitionKeySpec, Placement,
-    PlacementAt, Principal, Protocol, RequestCtx, SensitivitySpec, SpiError, TenancySpi,
+    BodyDoc, DocIdRule, HeaderView, HttpMethod, InjectedField, JsonPath, PartitionKeySpec,
+    Placement, PlacementAt, Principal, Protocol, RequestCtx, SensitivitySpec, SpiError, TenancySpi,
 };
 use osproxy_tenancy::TenancyRouter;
 
@@ -72,12 +72,12 @@ impl TenancySpi for StubTenancy {
     fn resolve_partition(
         &self,
         ctx: &osproxy_spi::RequestCtx<'_>,
-        doc: Option<&serde_json::Value>,
+        body: BodyDoc<'_>,
     ) -> Result<osproxy_core::PartitionId, osproxy_spi::SpiError> {
         osproxy_tenancy::resolve_partition_spec(
             &PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
             ctx,
-            doc,
+            body,
         )
     }
     fn doc_id_rule(&self) -> Option<DocIdRule> {

@@ -18,7 +18,7 @@ use osproxy_core::{
 use osproxy_engine::{Pipeline, PipelineResponse};
 use osproxy_sink::{MemorySink, ReadOp, Reader, Sink, SinkError};
 use osproxy_spi::{
-    DocIdRule, HeaderView, HttpMethod, IdTemplate, InjectedField, InjectedValue, JsonPath,
+    BodyDoc, DocIdRule, HeaderView, HttpMethod, IdTemplate, InjectedField, InjectedValue, JsonPath,
     PartitionKeySpec, Placement, PlacementAt, Principal, Protocol, RequestCtx, SensitivitySpec,
     SpiError, TenancySpi,
 };
@@ -34,7 +34,7 @@ impl TenancySpi for SharedTenancy {
     fn resolve_partition(
         &self,
         ctx: &osproxy_spi::RequestCtx<'_>,
-        doc: Option<&serde_json::Value>,
+        body: BodyDoc<'_>,
     ) -> Result<osproxy_core::PartitionId, osproxy_spi::SpiError> {
         osproxy_tenancy::resolve_partition_spec(
             &PartitionKeySpec::AnyOf(vec![
@@ -42,7 +42,7 @@ impl TenancySpi for SharedTenancy {
                 PartitionKeySpec::Header("x-tenant".to_owned()),
             ]),
             ctx,
-            doc,
+            body,
         )
     }
     fn doc_id_rule(&self) -> Option<DocIdRule> {

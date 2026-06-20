@@ -11,9 +11,9 @@ use osproxy_core::{
     ClusterId, EndpointKind, FieldName, IndexName, PartitionId, PrincipalId, RequestId,
 };
 use osproxy_spi::{
-    BodyTransform, DocIdRule, HeaderView, HttpMethod, IdTemplate, InjectedField, InjectedValue,
-    JsonPath, PartitionKeySpec, Placement, PlacementAt, Principal, Protocol, RequestCtx,
-    RoutingSpi, SensitivitySpec, SpiError, TenancySpi,
+    BodyDoc, BodyTransform, DocIdRule, HeaderView, HttpMethod, IdTemplate, InjectedField,
+    InjectedValue, JsonPath, PartitionKeySpec, Placement, PlacementAt, Principal, Protocol,
+    RequestCtx, RoutingSpi, SensitivitySpec, SpiError, TenancySpi,
 };
 use osproxy_tenancy::{PlacementTable, TenancyRouter};
 
@@ -29,12 +29,12 @@ impl TenancySpi for SharedTenancy {
     fn resolve_partition(
         &self,
         ctx: &osproxy_spi::RequestCtx<'_>,
-        doc: Option<&serde_json::Value>,
+        body: BodyDoc<'_>,
     ) -> Result<osproxy_core::PartitionId, osproxy_spi::SpiError> {
         osproxy_tenancy::resolve_partition_spec(
             &PartitionKeySpec::BodyField(JsonPath::new("tenant_id")),
             ctx,
-            doc,
+            body,
         )
     }
     fn doc_id_rule(&self) -> Option<DocIdRule> {

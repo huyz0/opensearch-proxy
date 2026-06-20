@@ -9,6 +9,7 @@
 //! cannot collide across tenants (`docs/03`); that invariant is enforced one
 //! level up, in the tenancy adapter, before this function is called.
 
+use osproxy_core::json::scalar_at_path;
 use serde_json::Value;
 
 use crate::error::RewriteError;
@@ -33,6 +34,53 @@ use crate::extract::extract_scalar;
 /// assert_eq!(id, "acme:1001");
 /// ```
 pub fn construct_id(template: &str, partition: &str, doc: &Value) -> Result<String, RewriteError> {
+    construct_id_with(template, partition, |path| {
+        extract_scalar(doc, path.split('.'))
+    })
+}
+
+/// Expands `template` against the resolved `partition` and the raw document
+/// `body`, reading `{body.<path>}` scalars straight from the bytes — **without
+/// parsing `body` into a `Value`** (ADR-014). The byte-level twin of
+/// [`construct_id`] for the streaming write path.
+///
+/// String leaves are decoded; number and bool leaves use their source text.
+///
+/// # Errors
+///
+/// As [`construct_id`], plus [`RewriteError::InvalidJson`] if `body` up to a
+/// referenced leaf is malformed.
+///
+/// # Examples
+///
+/// ```
+/// use osproxy_rewrite::construct_id_bytes;
+///
+/// let id = construct_id_bytes("{partition}:{body.order_id}", "acme", br#"{"order_id":1001}"#)
+///     .unwrap();
+/// assert_eq!(id, "acme:1001");
+/// ```
+pub fn construct_id_bytes(
+    template: &str,
+    partition: &str,
+    body: &[u8],
+) -> Result<String, RewriteError> {
+    construct_id_with(template, partition, |path| {
+        scalar_at_path(body, path.split('.')).map_err(RewriteError::from)
+    })
+}
+
+/// Walks `template`, expanding `{partition}` and resolving each `{body.<path>}`
+/// placeholder through `resolve_body`. Shared by [`construct_id`] (over a
+/// `Value`) and [`construct_id_bytes`] (over raw bytes).
+fn construct_id_with<F>(
+    template: &str,
+    partition: &str,
+    resolve_body: F,
+) -> Result<String, RewriteError>
+where
+    F: Fn(&str) -> Result<String, RewriteError>,
+{
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(open) = rest.find('{') {
@@ -44,7 +92,15 @@ pub fn construct_id(template: &str, partition: &str, doc: &Value) -> Result<Stri
                 placeholder: after.to_owned(),
             })?;
         let placeholder = &after[..close];
-        out.push_str(&expand(placeholder, partition, doc)?);
+        if placeholder == "partition" {
+            out.push_str(partition);
+        } else if let Some(path) = placeholder.strip_prefix("body.") {
+            out.push_str(&resolve_body(path)?);
+        } else {
+            return Err(RewriteError::UnsupportedPlaceholder {
+                placeholder: placeholder.to_owned(),
+            });
+        }
         rest = &after[close + 1..];
     }
     out.push_str(rest);
@@ -156,19 +212,6 @@ fn id_frame(template: &str, partition: &str) -> Result<(String, String), Rewrite
         return Err(RewriteError::IrreversibleIdTemplate);
     }
     Ok((prefix, suffix))
-}
-
-/// Expands a single placeholder (the text between `{` and `}`).
-fn expand(placeholder: &str, partition: &str, doc: &Value) -> Result<String, RewriteError> {
-    if placeholder == "partition" {
-        return Ok(partition.to_owned());
-    }
-    if let Some(path) = placeholder.strip_prefix("body.") {
-        return extract_scalar(doc, path.split('.'));
-    }
-    Err(RewriteError::UnsupportedPlaceholder {
-        placeholder: placeholder.to_owned(),
-    })
 }
 
 #[cfg(test)]

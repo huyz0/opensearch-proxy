@@ -34,7 +34,7 @@ pub use decision::{BodyTransform, HeaderOp, RouteDecision};
 pub use error::SpiError;
 pub use placement::{MigrationPhase, Placement, PlacementAt};
 pub use principal::{Principal, PrincipalAttr};
-pub use request::{HeaderView, HttpMethod, Protocol, RequestCtx};
+pub use request::{BodyDoc, HeaderView, HttpMethod, Protocol, RequestCtx};
 pub use routing::RoutingSpi;
 pub use rules::{
     DocIdRule, IdTemplate, InjectedField, InjectedValue, JsonPath, PartitionKeySpec,

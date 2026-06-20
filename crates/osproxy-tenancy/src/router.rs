@@ -8,7 +8,7 @@
 
 use osproxy_core::{ClusterId, Epoch, IndexName, PartitionId, Target};
 use osproxy_spi::{
-    BodyTransform, InjectedField, InjectedValue, MigrationPhase, Placement, RequestCtx,
+    BodyDoc, BodyTransform, InjectedField, InjectedValue, MigrationPhase, Placement, RequestCtx,
     RouteDecision, RoutingSpi, SpiError, TenancySpi,
 };
 use serde_json::Value;
@@ -69,15 +69,16 @@ impl<T: TenancySpi> TenancyRouter<T> {
                 endpoint: ctx.endpoint(),
             });
         }
-        let doc = serde_json::from_slice::<Value>(ctx.body()).ok();
-        let partition = self.resolve_partition(ctx, doc.as_ref())?;
+        // The body is scanned on demand for the partition key — never parsed into
+        // a JSON tree (ADR-014).
+        let partition = self.resolve_partition(ctx, BodyDoc::new(ctx.body()))?;
         self.resolve_placement(ctx, partition, ctx.logical_index())
             .await
     }
 
     /// Resolves just the partition id for a request and document, without a
     /// placement lookup. The per-document entry point for bulk demux (`docs/04`
-    /// §3), where each operation carries its own source.
+    /// §3), where each operation carries its own source as a [`BodyDoc`].
     ///
     /// # Errors
     ///
@@ -86,9 +87,9 @@ impl<T: TenancySpi> TenancyRouter<T> {
     pub fn resolve_partition(
         &self,
         ctx: &RequestCtx<'_>,
-        doc: Option<&Value>,
+        body: BodyDoc<'_>,
     ) -> Result<PartitionId, SpiError> {
-        self.spi.resolve_partition(ctx, doc)
+        self.spi.resolve_partition(ctx, body)
     }
 
     /// Resolves a known partition to its placement and the routing plan for a
@@ -203,7 +204,7 @@ pub trait Router: Send + Sync + 'static {
     fn resolve_partition(
         &self,
         ctx: &RequestCtx<'_>,
-        doc: Option<&Value>,
+        body: BodyDoc<'_>,
     ) -> Result<PartitionId, SpiError>;
 
     /// Resolves a known partition to its placement and routing plan.
@@ -237,9 +238,9 @@ impl<T: TenancySpi> Router for TenancyRouter<T> {
     fn resolve_partition(
         &self,
         ctx: &RequestCtx<'_>,
-        doc: Option<&Value>,
+        body: BodyDoc<'_>,
     ) -> Result<PartitionId, SpiError> {
-        TenancyRouter::resolve_partition(self, ctx, doc)
+        TenancyRouter::resolve_partition(self, ctx, body)
     }
 
     async fn resolve_placement(

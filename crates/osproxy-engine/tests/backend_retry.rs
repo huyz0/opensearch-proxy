@@ -16,8 +16,8 @@ use osproxy_core::{
 use osproxy_engine::{Pipeline, PipelineResponse, RequestError, RetryPolicy};
 use osproxy_sink::MemorySink;
 use osproxy_spi::{
-    HeaderView, HttpMethod, InjectedField, InjectedValue, JsonPath, PartitionKeySpec, Placement,
-    PlacementAt, Principal, Protocol, RequestCtx, SensitivitySpec, SpiError, TenancySpi,
+    BodyDoc, HeaderView, HttpMethod, InjectedField, InjectedValue, JsonPath, PartitionKeySpec,
+    Placement, PlacementAt, Principal, Protocol, RequestCtx, SensitivitySpec, SpiError, TenancySpi,
 };
 use osproxy_tenancy::{PlacementTable, TenancyRouter};
 use serde_json::json;
@@ -34,7 +34,7 @@ impl TenancySpi for FlakyTenancy {
     fn resolve_partition(
         &self,
         ctx: &osproxy_spi::RequestCtx<'_>,
-        doc: Option<&serde_json::Value>,
+        body: BodyDoc<'_>,
     ) -> Result<osproxy_core::PartitionId, osproxy_spi::SpiError> {
         // Header-or-body: ingest carries the tenant in the doc; a bodyless read
         // (`_mget`/`_msearch`) carries it in `x-tenant`. Order is BodyField first so
@@ -45,7 +45,7 @@ impl TenancySpi for FlakyTenancy {
                 PartitionKeySpec::Header("x-tenant".to_owned()),
             ]),
             ctx,
-            doc,
+            body,
         )
     }
     fn doc_id_rule(&self) -> Option<osproxy_spi::DocIdRule> {

@@ -4,6 +4,7 @@
 //! [`strip_fields`]. This symmetry is the heart of the shared-index isolation
 //! model (`docs/03`) and is exercised by a round-trip property test.
 
+use osproxy_core::json::object_top_level;
 use osproxy_core::FieldName;
 use serde_json::{Map, Value};
 
@@ -46,6 +47,76 @@ pub fn inject_fields(doc: &mut Value, fields: &[(FieldName, Value)]) -> Result<(
         obj.insert(name.as_str().to_owned(), value.clone());
     }
     Ok(())
+}
+
+/// Splices `fields` into the top level of the JSON object in `body`, returning
+/// the new bytes — **without parsing `body` into a `Value` or re-serializing it**
+/// (ADR-014). The body is scanned once for its top-level keys (to reject a
+/// spoofed reserved field) and the injected fields are written right after the
+/// opening `{`; the rest of the document is copied verbatim. The byte-level twin
+/// of [`inject_fields`] for the streaming write path.
+///
+/// A field that already exists is a [`RewriteError::ReservedFieldCollision`], as
+/// in [`inject_fields`]: a client must not pre-seed a tenancy field and defeat
+/// isolation (`docs/03`). Escaped key names are decoded before the check, so the
+/// collision cannot be smuggled past as `"_tenant"`.
+///
+/// # Errors
+///
+/// [`RewriteError::NotAnObject`] if `body` is not a JSON object,
+/// [`RewriteError::InvalidJson`] if it is malformed, or
+/// [`RewriteError::ReservedFieldCollision`] if an injected field is already
+/// present.
+///
+/// # Examples
+///
+/// ```
+/// use serde_json::Value;
+/// use osproxy_core::FieldName;
+/// use osproxy_rewrite::inject_fields_bytes;
+///
+/// let out = inject_fields_bytes(
+///     br#"{"msg":"hi"}"#,
+///     &[(FieldName::from("_tenant"), Value::from("acme"))],
+/// ).unwrap();
+/// assert_eq!(out, br#"{"_tenant":"acme","msg":"hi"}"#);
+/// ```
+pub fn inject_fields_bytes(
+    body: &[u8],
+    fields: &[(FieldName, Value)],
+) -> Result<Vec<u8>, RewriteError> {
+    let top = object_top_level(body)?;
+    if fields.is_empty() {
+        return Ok(body.to_vec());
+    }
+    for (name, _) in fields {
+        if top.keys.iter().any(|k| k == name.as_str()) {
+            return Err(RewriteError::ReservedFieldCollision {
+                field: name.clone(),
+            });
+        }
+    }
+    let mut injected: Vec<u8> = Vec::new();
+    for (idx, (name, value)) in fields.iter().enumerate() {
+        if idx > 0 {
+            injected.push(b',');
+        }
+        // Serializing a `&str` key and an in-memory `Value` into a `Vec` is
+        // infallible (no I/O, no non-string map keys, no NaN); the error arms are
+        // unreachable but kept so the splice fails closed rather than panics.
+        serde_json::to_writer(&mut injected, name.as_str())
+            .map_err(|_| RewriteError::InvalidJson)?;
+        injected.push(b':');
+        serde_json::to_writer(&mut injected, value).map_err(|_| RewriteError::InvalidJson)?;
+    }
+    let mut out = Vec::with_capacity(body.len() + injected.len() + 1);
+    out.extend_from_slice(&body[..top.insert_at]);
+    out.extend_from_slice(&injected);
+    if !top.empty {
+        out.push(b',');
+    }
+    out.extend_from_slice(&body[top.insert_at..]);
+    Ok(out)
 }
 
 /// Injects the tenancy fields into the `doc` and `upsert` sub-objects of an

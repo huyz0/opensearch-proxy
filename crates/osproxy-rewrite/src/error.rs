@@ -1,5 +1,6 @@
 //! Failures the pure body transforms can return.
 
+use osproxy_core::json::JsonError;
 use osproxy_core::FieldName;
 use thiserror::Error;
 
@@ -55,4 +56,16 @@ pub enum RewriteError {
     /// usable for `GetById`/`DeleteById` (`docs/03` §4, `docs/04` §5).
     #[error("id template is not reversible: needs exactly one body placeholder")]
     IrreversibleIdTemplate,
+}
+
+/// Maps a byte-scanner failure onto the transform error vocabulary, so the
+/// byte-level inject/id primitives surface the same variants as the `Value` path.
+impl From<JsonError> for RewriteError {
+    fn from(err: JsonError) -> Self {
+        match err {
+            JsonError::Invalid => Self::InvalidJson,
+            JsonError::NotAnObject => Self::NotAnObject,
+            JsonError::PathNotScalar { path } => Self::PathNotScalar { path },
+        }
+    }
 }
