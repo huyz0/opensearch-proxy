@@ -67,7 +67,14 @@ impl ClusterPool {
     /// connector so the pool's connection reuse is observable (NFR-P).
     fn new(base: String) -> Self {
         let opened = Arc::new(AtomicU64::new(0));
-        let connector = || CountingConnector::new(HttpConnector::new(), Arc::clone(&opened));
+        // Disable Nagle on upstream connections too: the proxy writes a complete
+        // request and waits for the response, so Nagle+delayed-ACK only adds tail
+        // latency on a real network. Matches the downstream ingress setting.
+        let connector = || {
+            let mut http = HttpConnector::new();
+            http.set_nodelay(true);
+            CountingConnector::new(http, Arc::clone(&opened))
+        };
         Self {
             base,
             client_h1: Client::builder(TokioExecutor::new()).build(connector()),

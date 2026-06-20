@@ -217,6 +217,11 @@ fn spawn_conn<H: IngressHandler>(
     // the loop can break and reach `await_drain`), not by the atomic itself. The
     // load-bearing edge is the guard's Release `fetch_sub` paired with the
     // Acquire load in `await_drain`.
+    // Disable Nagle's algorithm: a proxy does small, complete request/response
+    // writes, and Nagle's interaction with delayed-ACK can add tens of ms of
+    // round-trip latency on a real (non-loopback) network. Best-effort — a failure
+    // here only forgoes the optimization, it must not drop the connection.
+    let _ = stream.set_nodelay(true);
     active.fetch_add(1, Ordering::Relaxed);
     let guard = ActiveGuard(Arc::clone(active));
     let handler = Arc::clone(handler);
