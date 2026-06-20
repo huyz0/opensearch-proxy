@@ -19,7 +19,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use bytes::Bytes;
-use http_body_util::combinators::BoxBody;
+use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::{Method, Request, Response};
@@ -47,16 +47,20 @@ use crate::wire::{build_request, doc_uri, parse_result};
 /// error here. Boxed so both fit one client type.
 pub type BodyError = Box<dyn std::error::Error + Send + Sync>;
 
-/// The upstream request body type. Boxed so a request can carry buffered bytes
-/// or a streamed (or head + stream-tail) body without changing the pooled
-/// client's type (ADR-014).
-pub type UpstreamBody = BoxBody<Bytes, BodyError>;
+/// The upstream request body type. Boxed (unsync — the pooled client needs only
+/// `Send`) so a request can carry buffered bytes or a streamed (or head +
+/// stream-tail) body without changing the pooled client's type (ADR-014). Unsync
+/// so a downstream `hyper::body::Incoming`, which is `Send` but not `Sync`, can be
+/// streamed straight through.
+pub type UpstreamBody = UnsyncBoxBody<Bytes, BodyError>;
 
 /// Wraps fully-buffered bytes as an [`UpstreamBody`]. The buffered body is
 /// infallible; `match never {}` discharges its `Infallible` error into [`BodyError`].
 #[must_use]
 pub fn buffered(bytes: Bytes) -> UpstreamBody {
-    Full::new(bytes).map_err(|never| match never {}).boxed()
+    Full::new(bytes)
+        .map_err(|never| match never {})
+        .boxed_unsync()
 }
 
 /// Adapts any streaming body into an [`UpstreamBody`] — e.g. the downstream
@@ -64,10 +68,10 @@ pub fn buffered(bytes: Bytes) -> UpstreamBody {
 /// the upstream without buffering (ADR-014 stage 2).
 pub fn stream_body<B>(body: B) -> UpstreamBody
 where
-    B: hyper::body::Body<Data = Bytes> + Send + Sync + 'static,
+    B: hyper::body::Body<Data = Bytes> + Send + 'static,
     B::Error: Into<BodyError>,
 {
-    body.map_err(Into::into).boxed()
+    body.map_err(Into::into).boxed_unsync()
 }
 
 type HttpClient = Client<CountingConnector<HttpConnector>, UpstreamBody>;

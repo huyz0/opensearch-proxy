@@ -37,6 +37,9 @@ pub use admission::IngressLimits;
 pub use classify::{classify, Classified};
 pub use grpc::{serve_grpc, serve_grpc_tls};
 pub use handler::IngressHandler;
+/// The streamed request body type for [`IngressHandler::handle_forward`],
+/// re-exported so handlers can name it without depending on `hyper` directly.
+pub use hyper::body::Incoming;
 pub use request::{IngressRequest, IngressResponse};
 pub use server::{
     serve, serve_tls, serve_tls_with_limits, serve_tls_with_shutdown, serve_with_limits,

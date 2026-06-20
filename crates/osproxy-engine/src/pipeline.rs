@@ -22,7 +22,7 @@ use osproxy_observe::{
     DirectiveSet, DirectiveStore, DirectiveVerifier, EgressInfo, ExplainStore, NoVerifier,
     NoopDiagnosticSink, NoopExporter, RequestAttrs, RequestTrace, SpanExporter,
 };
-use osproxy_sink::{Reader, Sink};
+use osproxy_sink::{Reader, Sink, UpstreamBody};
 use osproxy_spi::{RequestCtx, SpiError};
 use osproxy_tenancy::Router;
 use serde_json::Value;
@@ -457,6 +457,53 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             capture,
             traffic_capture,
         }
+    }
+
+    /// Whether a request for `logical_index` is a tenant-agnostic passthrough that
+    /// can be **streamed** verbatim (ADR-014 stage 2). Body-free so the transport
+    /// can decide before buffering. `false` when no passthrough policy is set or
+    /// the index is not matched (the request then takes the buffered tenancy path).
+    #[must_use]
+    pub fn is_passthrough(&self, logical_index: &str) -> bool {
+        self.passthrough
+            .as_ref()
+            .is_some_and(|p| p.matches_index(logical_index))
+    }
+
+    /// Handles a verbatim passthrough request whose body is supplied as a
+    /// **stream** (ADR-014 stage 2): forward it to the passthrough cluster without
+    /// buffering. Mirrors [`handle_with_capture`](Self::handle_with_capture)'s
+    /// trace lifecycle (classify → dispatch → egress, recorded into the explain
+    /// store), minus the buffered-body diagnostics: traffic capture is never
+    /// available here because the body is not retained, so the returned flag is
+    /// always `false`.
+    pub async fn forward_streamed(
+        &self,
+        ctx: &RequestCtx<'_>,
+        body: UpstreamBody,
+    ) -> (Result<PipelineResponse, RequestError>, bool) {
+        let mut trace = RequestTrace::new();
+        trace.record_context(crate::endpoints::wire_trace(ctx));
+        trace.record_classify(ClassifyInfo {
+            endpoint: ctx.endpoint(),
+            logical_index: logical_index(ctx.logical_index()),
+        });
+        let result = match self.passthrough.as_ref() {
+            Some(policy) => self.forward_stream(ctx, policy, body, &mut trace).await,
+            // Only reachable if a caller streams a request `is_passthrough` rejects.
+            None => Err(RequestError::Spi(SpiError::UnsupportedEndpoint {
+                endpoint: ctx.endpoint(),
+            })),
+        };
+        match &result {
+            Ok(resp) => trace.record_egress(EgressInfo {
+                status: resp.status,
+                response_bytes: resp.body.len(),
+            }),
+            Err(err) => trace.record_error(error_context(err)),
+        }
+        self.explain.record(ctx.request_id().clone(), &trace);
+        (result, false)
     }
 
     /// Dispatches on endpoint class, recording the per-stage spans into `trace`.

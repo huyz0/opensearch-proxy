@@ -17,10 +17,10 @@ use osproxy_observe::{
 use osproxy_sink::OpenSearchSink;
 use osproxy_spi::{
     Action, AuthError, Authenticator, Authorizer, ClientCredentials, HeaderView, HttpMethod,
-    RequestCtx,
+    Principal, RequestCtx,
 };
 use osproxy_tenancy::TenancyRouter;
-use osproxy_transport::{IngressHandler, IngressRequest, IngressResponse};
+use osproxy_transport::{Incoming, IngressHandler, IngressRequest, IngressResponse};
 
 use crate::auth::AllowAllAuthorizer;
 use crate::log::{NoLog, RequestLog};
@@ -303,6 +303,45 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
     }
 }
 
+impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
+    /// The shared pre-dispatch gate for both the buffered and streamed paths:
+    /// refuse mutation over cleartext (NFR-S1), authenticate (the bearer token is
+    /// consumed here, never reaching the pipeline or telemetry), and authorize.
+    /// Returns the resolved principal, or the error response to return verbatim.
+    async fn gate(
+        &self,
+        req: &IngressRequest,
+        request_id: &RequestId,
+    ) -> Result<Principal, IngressResponse> {
+        if self.require_tls_for_mutation && req.endpoint.is_tenancy_aware() && !req.secure {
+            return Err(
+                IngressResponse::json(403, br#"{"error":"tls_required"}"#.to_vec())
+                    .with_header("x-request-id", request_id.as_str()),
+            );
+        }
+        let principal = self
+            .authenticator
+            .authenticate(&credentials_from(req))
+            .await
+            .map_err(|err| {
+                IngressResponse::json(err.http_status(), auth_error_body(&err))
+                    .with_header("x-request-id", request_id.as_str())
+            })?;
+        let action = Action {
+            endpoint: req.endpoint,
+            logical_index: req.logical_index.clone(),
+        };
+        self.authorizer
+            .authorize(&principal, &action)
+            .await
+            .map_err(|err| {
+                IngressResponse::json(err.http_status(), auth_error_body(&err))
+                    .with_header("x-request-id", request_id.as_str())
+            })?;
+        Ok(principal)
+    }
+}
+
 impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
     async fn handle(&self, req: IngressRequest) -> IngressResponse {
         let request_id = self.next_request_id();
@@ -313,40 +352,10 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
             return resp;
         }
 
-        // NFR-S1: the proxy mutates the body (inject/filter/strip) for every
-        // tenancy-aware endpoint; mutating an encrypted stream requires
-        // terminating TLS, so a mutating request over cleartext is refused before
-        // it is processed. Read-only admin/unknown pass-through is unaffected.
-        if self.require_tls_for_mutation && req.endpoint.is_tenancy_aware() && !req.secure {
-            return IngressResponse::json(403, br#"{"error":"tls_required"}"#.to_vec())
-                .with_header("x-request-id", request_id.as_str());
-        }
-
-        // Authenticate before any routing. The bearer token is consumed here and
-        // never reaches the pipeline or telemetry.
-        let principal = match self
-            .authenticator
-            .authenticate(&credentials_from(&req))
-            .await
-        {
+        let principal = match self.gate(&req, &request_id).await {
             Ok(principal) => principal,
-            Err(err) => {
-                return IngressResponse::json(err.http_status(), auth_error_body(&err))
-                    .with_header("x-request-id", request_id.as_str());
-            }
+            Err(resp) => return resp,
         };
-
-        // Authorize the resolved principal against the action. The default
-        // allow-all authorizer makes this a no-op; a supplied policy can decline
-        // (403) without ever seeing the credentials, which were consumed above.
-        let action = Action {
-            endpoint: req.endpoint,
-            logical_index: req.logical_index.clone(),
-        };
-        if let Err(err) = self.authorizer.authorize(&principal, &action).await {
-            return IngressResponse::json(err.http_status(), auth_error_body(&err))
-                .with_header("x-request-id", request_id.as_str());
-        }
 
         // The credentials were consumed above; strip the `Authorization` header so
         // the bearer token never reaches the pipeline, observability, or logs. The
@@ -371,6 +380,64 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         // /debug/explain/{id} afterward. `should_capture` is the live per-request
         // capture decision, applied to both success and error responses.
         let (result, should_capture) = self.pipeline.handle_with_capture(&ctx).await;
+        let (response, ok) = match result {
+            Ok(resp) => {
+                let ok = (200..300).contains(&resp.status);
+                (IngressResponse::json(resp.status, resp.body), ok)
+            }
+            Err(err) => (
+                IngressResponse::json(status_for(&err), error_body(&err)),
+                false,
+            ),
+        };
+        self.after_response(&req, &response, &request_id, ok, should_capture);
+        response.with_header("x-request-id", request_id.as_str())
+    }
+
+    fn forward_plan(&self, _method: HttpMethod, path: &str, logical_index: &str) -> bool {
+        // Full-fidelity capture tees the raw exchange, which needs the body in
+        // memory — so when capture is wired, buffer (take the `handle` path) rather
+        // than stream. Streaming and capture are mutually exclusive by nature.
+        if self.capture.enabled() {
+            return false;
+        }
+        // Never stream-forward the proxy-internal surfaces — they are served
+        // pre-auth in `handle` and must not be forwarded to a cluster, even under
+        // a whole-instance passthrough policy (which matches every index).
+        if path.starts_with("/debug/") || path == "/metrics" || path == "/admin/directives" {
+            return false;
+        }
+        self.pipeline.is_passthrough(logical_index)
+    }
+
+    async fn handle_forward(&self, req: IngressRequest, body: Incoming) -> IngressResponse {
+        let request_id = self.next_request_id();
+        // `forward_plan` already excluded the introspection routes; apply the same
+        // TLS + auth + authz gate as the buffered path before forwarding.
+        let principal = match self.gate(&req, &request_id).await {
+            Ok(principal) => principal,
+            Err(resp) => return resp,
+        };
+
+        let safe_headers = crate::bearer::without_authorization(&req.headers);
+        // The body is the streamed `body` argument, not `req.body` (empty here).
+        let ctx = RequestCtx::new(
+            &principal,
+            &request_id,
+            req.method,
+            req.endpoint,
+            req.protocol,
+            &req.logical_index,
+            HeaderView::new(&safe_headers),
+            &req.body,
+        )
+        .with_doc_id(req.doc_id.as_deref())
+        .with_query(req.query.as_deref())
+        .with_path(&req.path);
+
+        // Pipe the downstream body straight to the upstream — never buffered.
+        let upstream = osproxy_sink::stream_body(body);
+        let (result, should_capture) = self.pipeline.forward_streamed(&ctx, upstream).await;
         let (response, ok) = match result {
             Ok(resp) => {
                 let ok = (200..300).contains(&resp.status);

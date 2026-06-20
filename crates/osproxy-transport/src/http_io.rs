@@ -29,9 +29,11 @@ pub(crate) struct ConnInfo {
     pub(crate) secure: bool,
 }
 
-/// Parses one request, runs the handler, and renders the response. The body's
-/// in-flight reservation is held across the handler call and released when the
-/// response is rendered.
+/// Parses one request and serves it. A verbatim passthrough is **streamed** to
+/// the handler without buffering (ADR-014 stage 2); every other request is
+/// buffered (capped, and holding an in-flight reservation across the handler
+/// call) and handled normally. Early failures: `405` (method), `429` (in-flight
+/// ceiling), `413` (body over the per-request cap).
 pub(crate) async fn serve_request<H: IngressHandler>(
     handler: &H,
     req: Request<Incoming>,
@@ -39,24 +41,8 @@ pub(crate) async fn serve_request<H: IngressHandler>(
     limits: IngressLimits,
     admission: &Arc<Admission>,
 ) -> Response<Full<Bytes>> {
-    match parse(req, conn_info, limits, admission).await {
-        Ok((ingress, _reservation)) => render(handler.handle(ingress).await),
-        Err(early) => render(early),
-    }
-}
-
-/// Parses a hyper request into an owned [`IngressRequest`] plus the in-flight
-/// [`Reservation`] covering its body, or an early [`IngressResponse`]: `405` for
-/// an unsupported method, `429` when the in-flight ceiling is reached, or `413`
-/// for a body over the per-request cap.
-async fn parse(
-    req: Request<Incoming>,
-    conn_info: &ConnInfo,
-    limits: IngressLimits,
-    admission: &Arc<Admission>,
-) -> Result<(IngressRequest, Reservation), IngressResponse> {
     let Some(method) = map_method(req.method()) else {
-        return Err(IngressResponse::json(405, error_body("method not allowed")));
+        return render(IngressResponse::json(405, error_body("method not allowed")));
     };
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
@@ -72,41 +58,56 @@ async fn parse(
     // A declared Content-Length over the per-request cap is too large outright.
     let declared = content_length(&headers);
     if declared.is_some_and(|n| n > limits.max_body_bytes) {
-        return Err(IngressResponse::json(
+        return render(IngressResponse::json(
             413,
             error_body("request body too large"),
         ));
     }
-    // Reserve the (declared, else worst-case) size against the global budget
-    // before buffering; shed with 429 + retry guidance if the ceiling is reached.
-    let reserve = declared.unwrap_or(limits.max_body_bytes);
-    let reservation = admission
-        .try_reserve(reserve)
-        .ok_or_else(overloaded_response)?;
-
-    let body = Limited::new(req.into_body(), limits.max_body_bytes)
-        .collect()
-        .await
-        .map(|c| c.to_bytes().to_vec())
-        .map_err(|_| IngressResponse::json(413, error_body("request body too large")))?;
 
     let c = classify(method, &path);
-    Ok((
-        IngressRequest {
-            method,
-            protocol,
-            path,
-            endpoint: c.endpoint,
-            logical_index: c.logical_index,
-            doc_id: c.doc_id,
-            headers,
-            body,
-            query,
-            client_cert_subject: conn_info.client_cert_subject.clone(),
-            secure: conn_info.secure,
-        },
-        reservation,
-    ))
+    // The head, sans body — built before any body work so the streaming decision
+    // (which reads only the head) can avoid buffering entirely.
+    let mut head = IngressRequest {
+        method,
+        protocol,
+        path,
+        endpoint: c.endpoint,
+        logical_index: c.logical_index,
+        doc_id: c.doc_id,
+        headers,
+        body: Vec::new(),
+        query,
+        client_cert_subject: conn_info.client_cert_subject.clone(),
+        secure: conn_info.secure,
+    };
+
+    // Streaming verbatim forward: pipe the downstream body straight upstream with
+    // no buffering and no in-flight reservation (it never lands in memory).
+    if handler.forward_plan(method, &head.path, &head.logical_index) {
+        return render(handler.handle_forward(head, req.into_body()).await);
+    }
+
+    // Buffered path: reserve the (declared, else worst-case) size against the
+    // global budget, collect under the cap, then handle. The reservation is held
+    // until the response is rendered.
+    let reserve = declared.unwrap_or(limits.max_body_bytes);
+    let Some(_reservation): Option<Reservation> = admission.try_reserve(reserve) else {
+        return render(overloaded_response());
+    };
+    let body = match Limited::new(req.into_body(), limits.max_body_bytes)
+        .collect()
+        .await
+    {
+        Ok(collected) => collected.to_bytes().to_vec(),
+        Err(_) => {
+            return render(IngressResponse::json(
+                413,
+                error_body("request body too large"),
+            ))
+        }
+    };
+    head.body = body;
+    render(handler.handle(head).await)
 }
 
 /// The `Content-Length` header parsed to a byte count, if present and valid.

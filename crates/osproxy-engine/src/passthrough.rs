@@ -22,7 +22,7 @@
 
 use osproxy_core::ClusterId;
 use osproxy_observe::{DispatchInfo, RequestTrace};
-use osproxy_sink::{CursorOp, Reader, Sink};
+use osproxy_sink::{CursorOp, ForwardOp, Reader, Sink, UpstreamBody};
 use osproxy_tenancy::Router;
 
 use crate::endpoints::wire_trace;
@@ -75,11 +75,25 @@ impl PassthroughPolicy {
     /// starts with a configured prefix; otherwise the request stays tenanted.
     #[must_use]
     pub fn matches(&self, ctx: &RequestCtx<'_>) -> bool {
+        self.matches_index(ctx.logical_index())
+    }
+
+    /// Whether a request for `logical_index` should be forwarded verbatim. The
+    /// body-free half of [`matches`](Self::matches), so the transport can decide
+    /// to **stream** a passthrough request before buffering its body (ADR-014
+    /// stage 2).
+    #[must_use]
+    pub fn matches_index(&self, logical_index: &str) -> bool {
         self.index_prefixes.is_empty()
             || self
                 .index_prefixes
                 .iter()
-                .any(|p| ctx.logical_index().starts_with(p.as_str()))
+                .any(|p| logical_index.starts_with(p.as_str()))
+    }
+
+    /// The cluster + base URL a matching request forwards to.
+    fn target(&self) -> (ClusterId, Option<String>) {
+        (self.cluster.clone(), self.endpoint.clone())
     }
 }
 
@@ -106,6 +120,35 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         let outcome = self.sink.cursor(op).await?;
         trace.record_dispatch(DispatchInfo {
             cluster: policy.cluster.clone(),
+            upstream_status: outcome.status,
+            pool_reuse: outcome.pool_reuse,
+        });
+        Ok(PipelineResponse {
+            status: outcome.status,
+            body: outcome.body,
+        })
+    }
+
+    /// Forwards `ctx` verbatim with its body supplied as a **stream**, piped
+    /// straight to the upstream without buffering (ADR-014 stage 2). The streaming
+    /// twin of [`forward`](Self::forward): same destination and verbatim semantics,
+    /// but the body never lands in memory. The response is still read buffered.
+    pub(crate) async fn forward_stream(
+        &self,
+        ctx: &RequestCtx<'_>,
+        policy: &PassthroughPolicy,
+        body: UpstreamBody,
+        trace: &mut RequestTrace,
+    ) -> Result<PipelineResponse, RequestError> {
+        let (cluster, endpoint) = policy.target();
+        let op = ForwardOp::new(cluster.clone(), ctx.method(), ctx.path().to_owned())
+            .with_endpoint(endpoint)
+            .with_query(ctx.query().map(str::to_owned))
+            .with_protocol(ctx.protocol())
+            .with_trace(Some(wire_trace(ctx)));
+        let outcome = self.sink.forward_stream(op, body).await?;
+        trace.record_dispatch(DispatchInfo {
+            cluster,
             upstream_status: outcome.status,
             pool_reuse: outcome.pool_reuse,
         });

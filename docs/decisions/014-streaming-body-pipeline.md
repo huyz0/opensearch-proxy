@@ -168,10 +168,16 @@ are `Vec<u8>`; the upstream clients are typed `Client<_, Full<Bytes>>`). Staged:
    instead of `Full<Bytes>`, with a `buffered()` helper; `inject_trace` is generic
    over the body. A request body may now be a buffered head, a stream, or a head +
    stream tail. No path streams yet; this is the type foundation.
-2. **Streaming verbatim forward**: the passthrough/cursor/admin paths carry the
-   downstream body stream straight to the upstream request body — never buffered.
-   Needs a handler seam that keeps the body stream out of the `Copy` `RequestCtx`
-   (the stream travels beside it, not inside it).
+2. **Streaming verbatim forward** — DONE: a tenant-agnostic passthrough request
+   is streamed end to end. The sink gained `Reader::forward_stream`/`ForwardOp`
+   (shared `forward_raw` with the buffered cursor op); the engine gained
+   `Pipeline::is_passthrough` (body-free match) and `forward_streamed` (trace
+   lifecycle minus buffered-body diagnostics); the transport `IngressHandler`
+   gained `forward_plan` + `handle_forward(req, Incoming)` and `http_io` branches
+   before buffering. The body stream travels *beside* the `Copy` `RequestCtx`, not
+   inside it. Streaming is disabled when capture is wired (capture must tee the
+   buffered body) and never applies to the proxy-internal surfaces. Response is
+   still read buffered (response-body streaming is a later refinement).
 3. **Streaming inject / prefix-until-key routing** for single-doc: read the head
    to the routing key (and the `{` for a splice), then stream the tail.
 4. **Bulk streaming demux**: incremental NDJSON over the inbound stream, per-op
