@@ -84,6 +84,33 @@ fn bench_parse_bulk(bencher: divan::Bencher) {
     bencher.bench_local(|| parse_bulk(divan::black_box(body)));
 }
 
+/// A `{"id":7,"data":"x…"}` document padded to ~`size` bytes.
+fn padded_doc(size: usize) -> Vec<u8> {
+    let pad = size.saturating_sub(20).max(1);
+    format!(r#"{{"id":7,"data":"{}"}}"#, "x".repeat(pad)).into_bytes()
+}
+
+/// The cost attacked on the bulk source path: today every source document is
+/// parsed into a `Value` and re-serialized. This benches that round-trip by
+/// document size — the headroom a raw-bytes (verbatim / splice) source path
+/// would unlock for `_bulk`.
+#[divan::bench(args = [256, 4096, 65536])]
+fn bench_source_parse_reserialize(bencher: divan::Bencher, size: usize) {
+    let doc = padded_doc(size);
+    bencher.bench_local(|| {
+        let v: Value = serde_json::from_slice(divan::black_box(&doc)).unwrap();
+        serde_json::to_vec(&v).unwrap()
+    });
+}
+
+/// The verbatim alternative: a raw byte copy of the same document (what a
+/// no-mutation source line would cost instead of parse+reserialize).
+#[divan::bench(args = [256, 4096, 65536])]
+fn bench_source_verbatim_copy(bencher: divan::Bencher, size: usize) {
+    let doc = padded_doc(size);
+    bencher.bench_local(|| divan::black_box(doc.as_slice()).to_vec());
+}
+
 /// `parse_mget`: parse one `_mget` `docs` entry.
 #[divan::bench]
 fn bench_parse_mget(bencher: divan::Bencher) {
