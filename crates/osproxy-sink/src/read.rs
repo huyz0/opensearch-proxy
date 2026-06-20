@@ -310,6 +310,74 @@ impl CursorOp {
     }
 }
 
+/// A verbatim forward whose request body is a **stream**, not buffered bytes
+/// (ADR-014 stage 2): the same destination shape as [`CursorOp`] but the body is
+/// supplied separately as an [`UpstreamBody`](crate::UpstreamBody) so it can be
+/// piped from the downstream connection straight to the upstream without ever
+/// being collected. Used by the tenant-agnostic passthrough path.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ForwardOp {
+    /// The cluster to forward to.
+    pub cluster: ClusterId,
+    /// The HTTP method to forward.
+    pub method: HttpMethod,
+    /// The upstream path, forwarded verbatim.
+    pub path: String,
+    /// An already-allow-listed query string (without the `?`) to append upstream.
+    pub query: Option<String>,
+    /// The cluster's base URL, when known (so the pool can be built on any
+    /// instance). `None` reuses an existing pool, erroring if none exists.
+    pub endpoint: Option<String>,
+    /// The upstream wire protocol. Defaults to [`Protocol::Http1`].
+    pub protocol: Protocol,
+    /// The W3C trace context to forward downstream.
+    pub trace: Option<TraceContext>,
+}
+
+impl ForwardOp {
+    /// Constructs a streaming forward op (defaulting to HTTP/1.1 upstream).
+    #[must_use]
+    pub fn new(cluster: ClusterId, method: HttpMethod, path: impl Into<String>) -> Self {
+        Self {
+            cluster,
+            method,
+            path: path.into(),
+            query: None,
+            endpoint: None,
+            protocol: Protocol::Http1,
+            trace: None,
+        }
+    }
+
+    /// Sets the cluster's base URL (builder style).
+    #[must_use]
+    pub fn with_endpoint(mut self, endpoint: Option<String>) -> Self {
+        self.endpoint = endpoint;
+        self
+    }
+
+    /// Sets the (already allow-listed) upstream query string (builder style).
+    #[must_use]
+    pub fn with_query(mut self, query: Option<String>) -> Self {
+        self.query = query;
+        self
+    }
+
+    /// Sets the upstream wire protocol (builder style).
+    #[must_use]
+    pub fn with_protocol(mut self, protocol: Protocol) -> Self {
+        self.protocol = protocol;
+        self
+    }
+
+    /// Sets the trace context to propagate downstream (builder style).
+    #[must_use]
+    pub fn with_trace(mut self, trace: Option<TraceContext>) -> Self {
+        self.trace = trace;
+        self
+    }
+}
+
 /// The outcome of a cursor passthrough: the upstream status and raw body,
 /// forwarded back to the client verbatim.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -406,6 +474,27 @@ pub trait Reader: Send + Sync {
         async {
             Err(SinkError::Transport {
                 kind: "cursor passthrough not supported by this sink",
+            })
+        }
+    }
+
+    /// Forwards a request to a cluster with the body supplied as a **stream**
+    /// (ADR-014 stage 2): the verbatim-passthrough path pipes the downstream body
+    /// straight upstream without buffering. The default is **unsupported**;
+    /// `OpenSearchSink` overrides it with a real streamed upstream call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SinkError`] if the sink does not support streaming forward or the
+    /// upstream cannot be reached.
+    fn forward_stream(
+        &self,
+        _op: ForwardOp,
+        _body: crate::opensearch::UpstreamBody,
+    ) -> impl std::future::Future<Output = Result<CursorOutcome, SinkError>> + Send {
+        async {
+            Err(SinkError::Transport {
+                kind: "streaming forward not supported by this sink",
             })
         }
     }

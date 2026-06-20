@@ -23,7 +23,8 @@ use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use osproxy_core::{ClusterId, Epoch, IndexName, RequestId, Target, TraceContext};
 use osproxy_sink::{
-    CursorOp, DocOp, OpenSearchSink, ReadOp, Reader, SearchOp, Sink, WriteBatch, WriteOp,
+    stream_body, CursorOp, DocOp, ForwardOp, OpenSearchSink, ReadOp, Reader, SearchOp, Sink,
+    WriteBatch, WriteOp,
 };
 use osproxy_spi::HttpMethod;
 use tokio::net::TcpListener;
@@ -199,6 +200,30 @@ async fn cursor_passthrough_forwards_method_path_and_body_to_the_pinned_cluster(
         outcome.body.starts_with(br#"{"_scroll_id""#),
         "the upstream response is forwarded back verbatim"
     );
+}
+
+#[tokio::test]
+async fn forward_stream_pipes_a_streamed_body_to_the_pinned_cluster() {
+    // The verbatim-passthrough path (ADR-014 stage 2): the body is supplied as a
+    // streaming `UpstreamBody` (here adapted from a body via `stream_body`, as the
+    // transport will adapt the downstream `Incoming`) and forwarded verbatim.
+    let (base, captured) = start_mock(r#"{"result":"created"}"#).await;
+    let sink = OpenSearchSink::new();
+
+    let op = ForwardOp::new(ClusterId::from("eu-1"), HttpMethod::Post, "/legacy/_doc")
+        .with_endpoint(Some(base));
+    let body = stream_body(Full::new(Bytes::from(r#"{"msg":"streamed"}"#)));
+    let outcome = sink.forward_stream(op, body).await.unwrap();
+
+    let got = captured.lock().unwrap().clone();
+    assert_eq!(got.method, "POST");
+    assert_eq!(got.uri, "/legacy/_doc");
+    assert!(
+        got.body.contains("streamed"),
+        "the streamed body reached the upstream: {}",
+        got.body
+    );
+    assert_eq!(outcome.status, 200);
 }
 
 #[tokio::test]

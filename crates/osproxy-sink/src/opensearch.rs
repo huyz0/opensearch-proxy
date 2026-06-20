@@ -36,25 +36,38 @@ use crate::breaker::Breaker;
 use crate::conn::{CountingConnector, PoolStats};
 use crate::error::SinkError;
 use crate::read::{
-    CountOutcome, CursorOp, CursorOutcome, ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome,
+    CountOutcome, CursorOp, CursorOutcome, ForwardOp, ReadOp, ReadOutcome, Reader, SearchOp,
+    SearchOutcome,
 };
 use crate::sink::Sink;
 use crate::wire::{build_request, doc_uri, parse_result};
 
 /// The error type the upstream body may surface. A buffered body never errors
-/// (`Infallible`); a streamed verbatim-forward body (a later stage) surfaces the
-/// downstream read error here. Boxed so both fit one client type.
-pub(crate) type BodyError = Box<dyn std::error::Error + Send + Sync>;
+/// (`Infallible`); a streamed verbatim-forward body surfaces the downstream read
+/// error here. Boxed so both fit one client type.
+pub type BodyError = Box<dyn std::error::Error + Send + Sync>;
 
 /// The upstream request body type. Boxed so a request can carry buffered bytes
-/// today and a streamed (or head + stream-tail) body in a later stage without
-/// changing the pooled client's type (ADR-014).
-pub(crate) type UpstreamBody = BoxBody<Bytes, BodyError>;
+/// or a streamed (or head + stream-tail) body without changing the pooled
+/// client's type (ADR-014).
+pub type UpstreamBody = BoxBody<Bytes, BodyError>;
 
 /// Wraps fully-buffered bytes as an [`UpstreamBody`]. The buffered body is
 /// infallible; `match never {}` discharges its `Infallible` error into [`BodyError`].
-pub(crate) fn buffered(bytes: Bytes) -> UpstreamBody {
+#[must_use]
+pub fn buffered(bytes: Bytes) -> UpstreamBody {
     Full::new(bytes).map_err(|never| match never {}).boxed()
+}
+
+/// Adapts any streaming body into an [`UpstreamBody`] — e.g. the downstream
+/// `hyper::body::Incoming` for a verbatim forward, so its bytes flow straight to
+/// the upstream without buffering (ADR-014 stage 2).
+pub fn stream_body<B>(body: B) -> UpstreamBody
+where
+    B: hyper::body::Body<Data = Bytes> + Send + Sync + 'static,
+    B::Error: Into<BodyError>,
+{
+    body.map_err(Into::into).boxed()
 }
 
 type HttpClient = Client<CountingConnector<HttpConnector>, UpstreamBody>;
@@ -363,6 +376,51 @@ impl OpenSearchSink {
         Ok((status, body, reused))
     }
 
+    /// The one verbatim-forward path, shared by the buffered cursor op and the
+    /// streaming passthrough: concatenate `op.path` (and any allow-listed query)
+    /// onto the cluster base and send `body` — buffered or streamed — upstream.
+    ///
+    /// Defense in depth: this is the choke point where a passthrough path is
+    /// concatenated verbatim into the upstream URI. Refuse a `..` segment so no op
+    /// type can let a path resolve past its allow-listed prefix upstream — the
+    /// engine already guards admin/cursor paths, so this should never fire.
+    async fn forward_raw(
+        &self,
+        op: &ForwardOp,
+        body: UpstreamBody,
+        fail_kind: &'static str,
+    ) -> Result<CursorOutcome, SinkError> {
+        reject_path_traversal(&op.path)?;
+        let pool = self.pool_for(&op.cluster, op.endpoint.as_deref())?;
+        let uri = match &op.query {
+            Some(q) if !q.is_empty() => format!("{}{}?{q}", pool.base, op.path),
+            _ => format!("{}{}", pool.base, op.path),
+        };
+        let req = Request::builder()
+            .method(hyper_method(op.method))
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(body)
+            .map_err(|_| SinkError::Transport {
+                kind: "building upstream forward request",
+            })?;
+        let (resp, reused) = self
+            .send(&pool, op.protocol, req, op.trace.as_ref(), fail_kind)
+            .await?;
+        let status = resp.status().as_u16();
+        reject_5xx(status)?;
+        let body = resp
+            .into_body()
+            .collect()
+            .await
+            .map_err(|_| SinkError::Transport {
+                kind: "reading upstream forward response",
+            })?
+            .to_bytes()
+            .to_vec();
+        Ok(CursorOutcome::new(status, body).with_pool_reuse(reused))
+    }
+
     /// Sends a single operation and parses its result, with whether the dispatch
     /// reused a pooled connection.
     async fn dispatch(&self, op: &WriteOp) -> Result<(OpResult, bool), SinkError> {
@@ -454,50 +512,29 @@ impl Reader for OpenSearchSink {
     }
 
     async fn cursor(&self, op: CursorOp) -> Result<CursorOutcome, SinkError> {
-        // Forward the raw scroll/PIT/admin op to the cluster the engine pinned it
-        // to; `op.path` is the upstream endpoint (e.g. `/_search/scroll`) and
-        // `op.body` already carries the real (unwrapped) cursor id.
-        //
-        // Defense in depth: this is the one choke point where a passthrough path
-        // is concatenated verbatim into the upstream URI. Refuse a `..` segment
-        // here so no current or future op type can let a path resolve past its
-        // allow-listed prefix upstream — the engine already guards the admin path,
-        // and cursor paths are engine-built, so this should never fire.
-        reject_path_traversal(&op.path)?;
-        let pool = self.pool_for(&op.cluster, op.endpoint.as_deref())?;
-        let uri = match &op.query {
-            Some(q) if !q.is_empty() => format!("{}{}?{q}", pool.base, op.path),
-            _ => format!("{}{}", pool.base, op.path),
+        // A cursor op's body is already buffered (the engine substituted the real
+        // cursor id), so wrap it and share the one verbatim-forward path.
+        let body = buffered(Bytes::from(op.body));
+        let fwd = ForwardOp {
+            cluster: op.cluster,
+            method: op.method,
+            path: op.path,
+            query: op.query,
+            endpoint: op.endpoint,
+            protocol: op.protocol,
+            trace: op.trace,
         };
-        let req = Request::builder()
-            .method(hyper_method(op.method))
-            .uri(uri)
-            .header("content-type", "application/json")
-            .body(buffered(Bytes::from(op.body.clone())))
-            .map_err(|_| SinkError::Transport {
-                kind: "building upstream cursor request",
-            })?;
-        let (resp, reused) = self
-            .send(
-                &pool,
-                op.protocol,
-                req,
-                op.trace.as_ref(),
-                "upstream cursor failed",
-            )
-            .await?;
-        let status = resp.status().as_u16();
-        reject_5xx(status)?;
-        let body = resp
-            .into_body()
-            .collect()
-            .await
-            .map_err(|_| SinkError::Transport {
-                kind: "reading upstream cursor response",
-            })?
-            .to_bytes()
-            .to_vec();
-        Ok(CursorOutcome::new(status, body).with_pool_reuse(reused))
+        self.forward_raw(&fwd, body, "upstream cursor failed").await
+    }
+
+    async fn forward_stream(
+        &self,
+        op: ForwardOp,
+        body: UpstreamBody,
+    ) -> Result<CursorOutcome, SinkError> {
+        // The verbatim-passthrough path: the body is a stream piped straight to the
+        // upstream, never buffered (ADR-014 stage 2).
+        self.forward_raw(&op, body, "upstream forward failed").await
     }
 }
 
