@@ -1750,6 +1750,7 @@ dependencies = [
 name = "osproxy-etcd"
 version = "0.0.0"
 dependencies = [
+ "arc-swap",
  "etcd-client",
  "osproxy-core",
  "osproxy-observe",
@@ -1789,6 +1790,7 @@ dependencies = [
 name = "osproxy-observe"
 version = "0.0.0"
 dependencies = [
+ "arc-swap",
  "dhat",
  "divan",
  "osproxy-core",

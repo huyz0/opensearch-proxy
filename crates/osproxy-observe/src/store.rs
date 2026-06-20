@@ -14,7 +14,9 @@
 //! safety is intrinsic: directives carry an absolute expiry, so even a published
 //! set that is never replaced self-expires at evaluation time.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
 
 use crate::directive::DirectiveSet;
 
@@ -39,7 +41,7 @@ impl DirectiveStore for Arc<DirectiveSet> {
 /// `DirectiveStore` without touching the pipeline (`docs/05` §3).
 #[derive(Debug, Default)]
 pub struct InMemoryDirectiveStore {
-    current: Mutex<Arc<DirectiveSet>>,
+    current: ArcSwap<DirectiveSet>,
 }
 
 impl InMemoryDirectiveStore {
@@ -47,7 +49,7 @@ impl InMemoryDirectiveStore {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            current: Mutex::new(Arc::new(DirectiveSet::new())),
+            current: ArcSwap::from_pointee(DirectiveSet::new()),
         }
     }
 
@@ -59,21 +61,17 @@ impl InMemoryDirectiveStore {
     }
 
     /// Replaces the active set — the fleet-wide "flip" an operator performs. The
-    /// next `load` on every thread sees it (no restart).
+    /// next `load` on every thread sees it (no restart). A lock-free atomic store.
     pub fn publish(&self, set: DirectiveSet) {
-        *self.lock() = Arc::new(set);
-    }
-
-    /// Locks the snapshot, recovering a poisoned lock — it is a pointer swap with
-    /// no torn invariant a panicking holder could leave behind (NFR-R1).
-    fn lock(&self) -> std::sync::MutexGuard<'_, Arc<DirectiveSet>> {
-        self.current.lock().unwrap_or_else(PoisonError::into_inner)
+        self.current.store(Arc::new(set));
     }
 }
 
 impl DirectiveStore for InMemoryDirectiveStore {
     fn load(&self) -> Arc<DirectiveSet> {
-        Arc::clone(&self.lock())
+        // Lock-free: a relaxed atomic load of the current snapshot pointer, so the
+        // per-request read scales across cores instead of serializing on a mutex.
+        self.current.load_full()
     }
 }
 

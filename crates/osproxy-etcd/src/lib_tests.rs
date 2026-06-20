@@ -11,7 +11,7 @@ const GOOD: &[u8] = br#"{"directives":[{"id":"a","level":"Shape","ttl_secs":600}
 #[test]
 fn a_valid_value_is_applied_and_load_reflects_it() {
     let clock = ManualClock::new();
-    let current = Arc::new(Mutex::new(Arc::new(DirectiveSet::new())));
+    let current = Arc::new(ArcSwap::from_pointee(DirectiveSet::new()));
     let store = EtcdDirectiveStore {
         current: Arc::clone(&current),
     };
@@ -25,7 +25,7 @@ fn a_valid_value_is_applied_and_load_reflects_it() {
 fn a_malformed_value_keeps_the_last_good_snapshot() {
     // A bad publish must never blank fleet diagnostics — the previous set stays.
     let clock = ManualClock::new();
-    let current = Arc::new(Mutex::new(Arc::new(DirectiveSet::new())));
+    let current = Arc::new(ArcSwap::from_pointee(DirectiveSet::new()));
     apply_value(&current, GOOD, &clock);
 
     apply_value(&current, b"not json", &clock);

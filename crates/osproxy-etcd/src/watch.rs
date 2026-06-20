@@ -3,9 +3,10 @@
 //! exercised against a live etcd (the Docker-gated `tests/etcd_live.rs`), so they
 //! are excluded from unit-coverage by filename like the other live harnesses.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use etcd_client::{Client, EventType};
 use osproxy_core::Clock;
 use osproxy_observe::{decode_directive_set, DirectiveSet};
@@ -41,7 +42,7 @@ impl EtcdDirectiveStore {
             .first()
             .and_then(|kv| decode_directive_set(kv.value(), clock.as_ref()).ok())
             .unwrap_or_default();
-        let current = Arc::new(Mutex::new(Arc::new(initial)));
+        let current = Arc::new(ArcSwap::from_pointee(initial));
 
         // Capture the runtime handle to spawn the watch (spawn discipline: never a
         // bare tokio::spawn in a library; mirror osproxy-otlp).
@@ -61,7 +62,7 @@ async fn watch_loop(
     endpoints: Vec<String>,
     key: String,
     clock: Arc<dyn Clock>,
-    current: Arc<Mutex<Arc<DirectiveSet>>>,
+    current: Arc<ArcSwap<DirectiveSet>>,
 ) {
     loop {
         // A clean stream end or any error both fall through to the reconnect delay;
@@ -76,7 +77,7 @@ async fn watch_once(
     endpoints: &[String],
     key: &str,
     clock: &dyn Clock,
-    current: &Mutex<Arc<DirectiveSet>>,
+    current: &ArcSwap<DirectiveSet>,
 ) -> Result<(), etcd_client::Error> {
     let mut client = Client::connect(endpoints, None).await?;
     // Re-read once on (re)connect so an update missed during a disconnect is not
@@ -97,8 +98,7 @@ async fn watch_once(
                 }
                 // A deleted key means "no directives": flip to the empty set.
                 EventType::Delete => {
-                    *current.lock().unwrap_or_else(PoisonError::into_inner) =
-                        Arc::new(DirectiveSet::new());
+                    current.store(Arc::new(DirectiveSet::new()));
                 }
             }
         }

@@ -25,8 +25,9 @@
 //!   however it is published, and a typo'd key can never widen its blast radius.
 #![deny(missing_docs)]
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use osproxy_core::Clock;
 use osproxy_observe::{decode_directive_set, DirectiveSet, DirectiveStore};
 
@@ -49,34 +50,29 @@ pub enum EtcdError {
 /// snapshot) so the same store can be handed to the pipeline and an admin surface.
 #[derive(Clone, Debug)]
 pub struct EtcdDirectiveStore {
-    current: Arc<Mutex<Arc<DirectiveSet>>>,
+    current: Arc<ArcSwap<DirectiveSet>>,
 }
 
 impl EtcdDirectiveStore {
     /// Wraps an already-built shared snapshot — the seam the [`watch`] connect path
     /// uses after its initial read.
-    fn from_snapshot(current: Arc<Mutex<Arc<DirectiveSet>>>) -> Self {
+    fn from_snapshot(current: Arc<ArcSwap<DirectiveSet>>) -> Self {
         Self { current }
-    }
-
-    /// Locks the snapshot, recovering a poisoned lock — it guards a single `Arc`
-    /// pointer with no torn invariant a panicking holder could leave (NFR-R1).
-    fn lock(&self) -> std::sync::MutexGuard<'_, Arc<DirectiveSet>> {
-        self.current.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
 impl DirectiveStore for EtcdDirectiveStore {
     fn load(&self) -> Arc<DirectiveSet> {
-        Arc::clone(&self.lock())
+        // Lock-free atomic load of the watch-maintained snapshot (hot path).
+        self.current.load_full()
     }
 }
 
 /// Swaps in a freshly decoded set, or **keeps the last good snapshot** if the
 /// value does not parse — a malformed publish must never blank fleet diagnostics.
-fn apply_value(current: &Mutex<Arc<DirectiveSet>>, value: &[u8], clock: &dyn Clock) {
+fn apply_value(current: &ArcSwap<DirectiveSet>, value: &[u8], clock: &dyn Clock) {
     if let Ok(set) = decode_directive_set(value, clock) {
-        *current.lock().unwrap_or_else(PoisonError::into_inner) = Arc::new(set);
+        current.store(Arc::new(set));
     }
 }
 

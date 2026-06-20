@@ -104,10 +104,16 @@ fn error_json(err: &ErrorContext) -> Value {
 /// A single-instance affordance backing `/debug/explain/{request_id}` (`docs/05`
 /// §5 ring buffer). Oldest entries are evicted past capacity, so memory is
 /// bounded regardless of traffic.
+///
+/// It retains the **assembled trace**, not a serialized document: `/debug/explain`
+/// is read for a vanishing fraction of requests, so building the JSON eagerly on
+/// every request was pure waste (~12µs/req of allocation + serialization). The doc
+/// is built lazily in [`ExplainStore::get`] instead; `record` only clones the
+/// (small, owned) trace and pushes it under the lock.
 #[derive(Debug)]
 pub struct ExplainStore {
     capacity: usize,
-    entries: Mutex<VecDeque<(RequestId, Value)>>,
+    entries: Mutex<VecDeque<(RequestId, RequestTrace)>>,
 }
 
 impl ExplainStore {
@@ -120,9 +126,9 @@ impl ExplainStore {
         }
     }
 
-    /// Records the explanation for `request_id`, evicting the oldest if full.
+    /// Records the trace for `request_id`, evicting the oldest if full. Retains the
+    /// trace as-is — the explain document is assembled lazily on [`Self::get`].
     pub fn record(&self, request_id: RequestId, trace: &RequestTrace) {
-        let doc = explain_json(&request_id, trace);
         let mut entries = self
             .entries
             .lock()
@@ -130,10 +136,11 @@ impl ExplainStore {
         if entries.len() >= self.capacity {
             entries.pop_front();
         }
-        entries.push_back((request_id, doc));
+        entries.push_back((request_id, trace.clone()));
     }
 
-    /// Looks up the explanation for `request_id`, if still retained.
+    /// Looks up `request_id` and assembles its explanation document, if retained.
+    /// The JSON is built here (read time), not at record time.
     #[must_use]
     pub fn get(&self, request_id: &RequestId) -> Option<Value> {
         self.entries
@@ -141,7 +148,7 @@ impl ExplainStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .find(|(id, _)| id == request_id)
-            .map(|(_, doc)| doc.clone())
+            .map(|(id, trace)| explain_json(id, trace))
     }
 }
 

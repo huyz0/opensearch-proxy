@@ -63,6 +63,9 @@ osproxy-bench = { path = "crates/osproxy-bench" }
 
 # Third-party (pinned conservatively; add as milestones need them).
 thiserror = "2"
+# Lock-free atomic Arc swap for the per-request directive-store read (a hot-path
+# `load()`): a relaxed atomic load instead of a mutex, so it scales with cores.
+arc-swap = "1"
 serde = { version = "1", features = ["derive"] }
 # `raw_value` lets hot paths re-emit untouched JSON subtrees verbatim instead of
 # materializing them into `Value` trees (see `osproxy-rewrite::wrap_query`).

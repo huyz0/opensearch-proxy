@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 osproxy-core.workspace = true
 osproxy-observe.workspace = true
+arc-swap.workspace = true
 etcd-client.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
