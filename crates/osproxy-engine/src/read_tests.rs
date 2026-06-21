@@ -157,3 +157,41 @@ fn hits_are_stripped_to_the_logical_view() {
     assert!(hit["_source"].get("_tenant").is_none());
     assert_eq!(hit["_source"]["msg"], "hi");
 }
+
+#[test]
+fn top_level_siblings_including_aggregations_pass_through_untouched() {
+    // The strip shapes only `hits`; `took`, `_shards`, and `aggregations` (which
+    // can dwarf the hits) are forwarded verbatim — never materialized/re-serialized
+    // (ADR-014: the read-path counterpart of wrap_query's raw-sibling posture).
+    let upstream = br#"{
+        "took": 5,
+        "_shards": { "total": 3, "successful": 3 },
+        "hits": { "total": { "value": 1 }, "hits": [
+            { "_index": "shared", "_id": "acme:7", "_routing": "acme",
+              "_source": { "_tenant": "acme", "msg": "hi" } }
+        ] },
+        "aggregations": { "by_day": { "buckets": [ { "key": 1, "doc_count": 9 } ] } }
+    }"#;
+    let shape = read_shape(&shared_transform());
+    let body = shape_hits(upstream, "orders", "acme", &shape).unwrap();
+    let doc: Value = serde_json::from_slice(&body).unwrap();
+
+    // Hits shaped...
+    assert_eq!(doc["hits"]["hits"][0]["_index"], "orders");
+    assert!(doc["hits"]["hits"][0]["_source"].get("_tenant").is_none());
+    // ...siblings preserved exactly.
+    assert_eq!(doc["took"], 5);
+    assert_eq!(doc["_shards"]["successful"], 3);
+    assert_eq!(doc["aggregations"]["by_day"]["buckets"][0]["doc_count"], 9);
+}
+
+#[test]
+fn a_non_object_response_passes_through_unchanged() {
+    // A valid but non-object body has no hits to shape; only invalid JSON errors.
+    let shape = read_shape(&shared_transform());
+    assert_eq!(
+        shape_hits(b"[1,2,3]", "orders", "acme", &shape).unwrap(),
+        b"[1,2,3]"
+    );
+    assert!(shape_hits(b"not json", "orders", "acme", &shape).is_err());
+}

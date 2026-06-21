@@ -6,11 +6,14 @@
 //! map physical ids back to logical, present the logical index). Pure and
 //! synchronous; the network hop happens in the pipeline.
 
+use std::collections::BTreeMap;
+
 use osproxy_core::FieldName;
 use osproxy_rewrite::{map_logical_to_physical, map_physical_to_logical, strip_fields, wrap_query};
 use osproxy_sink::{DocOp, ReadOp, SearchOp, WriteOp};
 use osproxy_spi::{BodyTransform, DocIdRule, InjectedValue};
 use osproxy_tenancy::Resolved;
+use serde_json::value::RawValue;
 use serde_json::Value;
 
 use crate::error::RequestError;
@@ -202,20 +205,40 @@ pub(crate) fn shape_hits(
     partition: &str,
     shape: &ReadShape,
 ) -> Result<Vec<u8>, RequestError> {
-    let mut doc: Value = serde_json::from_slice(upstream_body)
-        .map_err(|_| osproxy_rewrite::RewriteError::InvalidJson)?;
-    if let Some(hits) = doc
-        .get_mut("hits")
-        .and_then(|h| h.get_mut("hits"))
-        .and_then(Value::as_array_mut)
-    {
-        for hit in hits.iter_mut() {
-            shape_hit(hit, logical_index, partition, shape);
-        }
-    }
-    serde_json::to_vec(&doc).map_err(|_| RequestError::Internal {
+    let internal = || RequestError::Internal {
         reason: "serializing search response",
-    })
+    };
+    // Parse only the top level; the siblings the proxy never touches — `took`,
+    // `_shards`, and especially `aggregations` (which can dwarf the hits) — stay as
+    // raw byte spans rather than being materialized into a `Value` tree and
+    // re-serialized (the same posture as `wrap_query`). Only the `hits` subtree is
+    // shaped.
+    let mut top: BTreeMap<String, Box<RawValue>> = match serde_json::from_slice(upstream_body) {
+        Ok(top) => top,
+        // A valid but non-object body has no hits to shape — pass it through
+        // unchanged; only genuinely invalid JSON is an error (as before).
+        Err(_) => {
+            return if serde_json::from_slice::<&RawValue>(upstream_body).is_ok() {
+                Ok(upstream_body.to_vec())
+            } else {
+                Err(osproxy_rewrite::RewriteError::InvalidJson.into())
+            };
+        }
+    };
+    if let Some(hits_raw) = top.remove("hits") {
+        let mut hits: Value = serde_json::from_slice(hits_raw.get().as_bytes())
+            .map_err(|_| osproxy_rewrite::RewriteError::InvalidJson)?;
+        if let Some(arr) = hits.get_mut("hits").and_then(Value::as_array_mut) {
+            for hit in arr.iter_mut() {
+                shape_hit(hit, logical_index, partition, shape);
+            }
+        }
+        top.insert(
+            "hits".to_owned(),
+            serde_json::value::to_raw_value(&hits).map_err(|_| internal())?,
+        );
+    }
+    serde_json::to_vec(&top).map_err(|_| internal())
 }
 
 /// Strips one search hit in place into the client's logical view.
