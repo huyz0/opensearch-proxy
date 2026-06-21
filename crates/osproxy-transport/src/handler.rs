@@ -4,7 +4,6 @@ use std::future::Future;
 
 use hyper::body::Incoming;
 use osproxy_core::EndpointKind;
-use osproxy_spi::HttpMethod;
 
 use crate::request::{IngressRequest, IngressResponse};
 
@@ -25,8 +24,9 @@ pub trait IngressHandler: Send + Sync + 'static {
     /// Whether this request is a verbatim passthrough that should be forwarded
     /// with a **streamed** body (ADR-014 stage 2), decided from the head alone so
     /// the transport can avoid buffering. Returns `false` by default (every
-    /// request is buffered and handled by [`handle`](Self::handle)).
-    fn forward_plan(&self, _method: HttpMethod, _path: &str, _logical_index: &str) -> bool {
+    /// request is buffered and handled by [`handle`](Self::handle)). Verbatim
+    /// passthrough forwards every method, so the decision is path/index-only.
+    fn forward_plan(&self, _path: &str, _logical_index: &str) -> bool {
         false
     }
 

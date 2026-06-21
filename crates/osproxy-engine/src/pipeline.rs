@@ -191,8 +191,14 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     /// else the deployment baseline. An unparseable header falls back to the
     /// baseline rather than erroring — an unknown mode is not a hard failure.
     pub(crate) fn write_mode(&self, ctx: &RequestCtx<'_>) -> crate::asyncwrite::WriteMode {
-        ctx.headers()
-            .get("x-write-mode")
+        self.resolve_write_mode(ctx.headers().get("x-write-mode"))
+    }
+
+    /// The write mode from a raw `X-Write-Mode` header value (or its absence) —
+    /// the precedence shared by [`write_mode`](Self::write_mode) and
+    /// [`is_sync_write`](Self::is_sync_write): a valid header wins, else the baseline.
+    fn resolve_write_mode(&self, header: Option<&str>) -> crate::asyncwrite::WriteMode {
+        header
             .and_then(crate::asyncwrite::WriteMode::parse)
             .unwrap_or(self.baseline_write_mode)
     }
@@ -465,12 +471,11 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     /// async fan-out keeps the buffered path) from the head alone (ADR-014 stage 4).
     #[must_use]
     pub fn is_sync_write(&self, headers: &[(String, String)]) -> bool {
-        let mode = headers
+        let header = headers
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case("x-write-mode"))
-            .and_then(|(_, v)| crate::asyncwrite::WriteMode::parse(v))
-            .unwrap_or(self.baseline_write_mode);
-        mode == crate::asyncwrite::WriteMode::Sync
+            .map(|(_, v)| v.as_str());
+        self.resolve_write_mode(header) == crate::asyncwrite::WriteMode::Sync
     }
 
     /// Whether a request for `logical_index` is a tenant-agnostic passthrough that
@@ -496,12 +501,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         ctx: &RequestCtx<'_>,
         body: UpstreamBody,
     ) -> (Result<PipelineResponse, RequestError>, bool) {
-        let mut trace = RequestTrace::new();
-        trace.record_context(crate::endpoints::wire_trace(ctx));
-        trace.record_classify(ClassifyInfo {
-            endpoint: ctx.endpoint(),
-            logical_index: logical_index(ctx.logical_index()),
-        });
+        let mut trace = Self::begin_streamed_trace(ctx);
         let result = match self.passthrough.as_ref() {
             Some(policy) => self.forward_stream(ctx, policy, body, &mut trace).await,
             // Only reachable if a caller streams a request `is_passthrough` rejects.
@@ -509,15 +509,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
                 endpoint: ctx.endpoint(),
             })),
         };
-        match &result {
-            Ok(resp) => trace.record_egress(EgressInfo {
-                status: resp.status,
-                response_bytes: resp.body.len(),
-            }),
-            Err(err) => trace.record_error(error_context(err)),
-        }
-        self.explain.record(ctx.request_id().clone(), &trace);
-        (result, false)
+        self.finish_streamed_trace(ctx, trace, result)
     }
 
     /// Handles a `_bulk` request whose body is supplied as a **stream** (ADR-014
@@ -532,15 +524,36 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         ctx: &RequestCtx<'_>,
         body: UpstreamBody,
     ) -> (Result<PipelineResponse, RequestError>, bool) {
+        // Bulk records its outcome positionally in the response, not per-stage, so
+        // the trace passes straight from open to close with no mid-stage spans.
+        let trace = Self::begin_streamed_trace(ctx);
+        let result =
+            crate::bulk::ingest_bulk_streamed(&self.router, &self.sink, ctx, body, self.retry)
+                .await;
+        self.finish_streamed_trace(ctx, trace, result)
+    }
+
+    /// Opens the shape-only trace for a streamed request: context + classify, the
+    /// stages known before dispatch. Shared by the streamed forward and bulk paths.
+    fn begin_streamed_trace(ctx: &RequestCtx<'_>) -> RequestTrace {
         let mut trace = RequestTrace::new();
         trace.record_context(crate::endpoints::wire_trace(ctx));
         trace.record_classify(ClassifyInfo {
             endpoint: ctx.endpoint(),
             logical_index: logical_index(ctx.logical_index()),
         });
-        let result =
-            crate::bulk::ingest_bulk_streamed(&self.router, &self.sink, ctx, body, self.retry)
-                .await;
+        trace
+    }
+
+    /// Closes a streamed request's trace (egress or error) and records it into the
+    /// explain store. Returns the result plus `false` — traffic capture is never
+    /// available on a streamed path (the body is not retained to tee).
+    fn finish_streamed_trace(
+        &self,
+        ctx: &RequestCtx<'_>,
+        mut trace: RequestTrace,
+        result: Result<PipelineResponse, RequestError>,
+    ) -> (Result<PipelineResponse, RequestError>, bool) {
         match &result {
             Ok(resp) => trace.record_egress(EgressInfo {
                 status: resp.status,

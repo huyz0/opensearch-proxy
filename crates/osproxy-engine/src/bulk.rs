@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 
+use bytes::{Buf as _, BytesMut};
 use futures_util::stream::StreamExt as _;
 use http_body_util::BodyExt as _;
 use osproxy_core::{PartitionId, Target};
@@ -167,9 +168,17 @@ pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
 /// An incremental NDJSON reader over a streamed body: pulls frames on demand and
 /// yields one bulk op at a time, buffering only the current (and at most the next)
 /// line. Blank lines are skipped, matching [`parse_bulk`].
+///
+/// The buffer is a [`BytesMut`]: consumed bytes are released with an O(1) cursor
+/// advance (`split_to`), and the newline search resumes from `scan` rather than
+/// rescanning, so framing a batch is linear in its size — never quadratic, even
+/// when one frame carries many lines.
 struct NdjsonReader {
     body: UpstreamBody,
-    buf: Vec<u8>,
+    buf: BytesMut,
+    /// How far into `buf` the newline search has already looked (no rescanning a
+    /// prefix after a frame is appended).
+    scan: usize,
     done: bool,
 }
 
@@ -177,7 +186,8 @@ impl NdjsonReader {
     fn new(body: UpstreamBody) -> Self {
         Self {
             body,
-            buf: Vec::new(),
+            buf: BytesMut::new(),
+            scan: 0,
             done: false,
         }
     }
@@ -204,23 +214,27 @@ impl NdjsonReader {
     }
 
     /// Returns the next non-blank line (newline stripped), or `None` at EOF.
-    async fn next_line(&mut self) -> Result<Option<Vec<u8>>, RequestError> {
+    async fn next_line(&mut self) -> Result<Option<BytesMut>, RequestError> {
         loop {
-            if let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
-                let mut line: Vec<u8> = self.buf.drain(..=pos).collect();
-                line.pop(); // drop '\n'
+            if let Some(rel) = self.buf[self.scan..].iter().position(|&b| b == b'\n') {
+                let nl = self.scan + rel;
+                let mut line = self.buf.split_to(nl); // bytes before '\n' (O(1))
+                self.buf.advance(1); // drop the '\n'
+                self.scan = 0;
                 if line.last() == Some(&b'\r') {
-                    line.pop();
+                    line.truncate(line.len() - 1);
                 }
                 if line.iter().all(u8::is_ascii_whitespace) {
                     continue;
                 }
                 return Ok(Some(line));
             }
+            self.scan = self.buf.len(); // searched all of buf; resume here after a frame
             if self.done {
                 if self.buf.iter().all(u8::is_ascii_whitespace) {
                     return Ok(None);
                 }
+                // Trailing line with no final newline: take the whole remainder.
                 return Ok(Some(std::mem::take(&mut self.buf)));
             }
             if self.buf.len() > MAX_LINE_BYTES {

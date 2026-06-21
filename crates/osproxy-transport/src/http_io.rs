@@ -83,7 +83,7 @@ pub(crate) async fn serve_request<H: IngressHandler>(
 
     // Streaming verbatim forward: pipe the downstream body straight upstream with
     // no buffering and no in-flight reservation (it never lands in memory).
-    if handler.forward_plan(method, &head.path, &head.logical_index) {
+    if handler.forward_plan(&head.path, &head.logical_index) {
         return render(handler.handle_forward(head, req.into_body()).await);
     }
 

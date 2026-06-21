@@ -417,7 +417,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         response.with_header("x-request-id", request_id.as_str())
     }
 
-    fn forward_plan(&self, _method: HttpMethod, path: &str, logical_index: &str) -> bool {
+    fn forward_plan(&self, path: &str, logical_index: &str) -> bool {
         // Full-fidelity capture tees the raw exchange, which needs the body in
         // memory — so when capture is wired, buffer (take the `handle` path) rather
         // than stream. Streaming and capture are mutually exclusive by nature.
