@@ -157,6 +157,32 @@ async fn streamed_bulk_matches_the_buffered_path() {
 }
 
 #[tokio::test]
+async fn a_target_flushes_mid_batch_at_the_byte_threshold() {
+    // Five ~1 MiB docs to one target total > the 4 MiB byte-flush threshold but far
+    // under the 256 op-count threshold — so the target is flushed mid-batch by
+    // bytes, bounding the transformed working set for large documents. Each flush
+    // is one recorded write, so a mid-batch flush shows as more than one.
+    use std::fmt::Write as _;
+    let p = pipeline();
+    let big = "x".repeat(1024 * 1024);
+    let mut body = String::new();
+    for i in 0..5 {
+        body.push_str("{\"index\":{}}\n");
+        let _ = writeln!(
+            body,
+            "{{\"tenant_id\":\"acme\",\"id\":{i},\"data\":\"{big}\"}}"
+        );
+    }
+    let resp = bulk(&p, body.as_bytes()).await;
+    assert_eq!(resp.status, 200);
+    assert!(
+        p.sink().recorded().len() >= 2,
+        "byte-flush should split the sub-batch mid-stream: {} writes",
+        p.sink().recorded().len()
+    );
+}
+
+#[tokio::test]
 async fn streamed_bulk_positions_a_per_item_failure_in_place() {
     // An unresolvable op (no tenant_id, no header) fails positionally; the others
     // still succeed — identical semantics to the buffered path, over a stream.

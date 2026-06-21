@@ -29,7 +29,7 @@ use osproxy_core::{PartitionId, Target};
 use osproxy_rewrite::{
     parse_bulk, parse_bulk_action, parse_bulk_op, BulkAction, BulkItem, RewriteError,
 };
-use osproxy_sink::{ByteBody, OpResult, Sink, SinkError, WriteAck, WriteBatch};
+use osproxy_sink::{ByteBody, DocOp, OpResult, Sink, SinkError, WriteAck, WriteBatch, WriteOp};
 use osproxy_spi::RequestCtx;
 use osproxy_tenancy::{Resolved, Router};
 use serde_json::{json, Value};
@@ -42,9 +42,14 @@ use crate::bulkprep::{prepare, Prepared};
 use crate::error::RequestError;
 use crate::pipeline::PipelineResponse;
 
-/// The largest a single target's sub-batch grows before it is flushed mid-stream,
-/// bounding the transformed working set held in memory (NFR-P7).
+/// The largest a single target's sub-batch grows (in op count) before it is
+/// flushed mid-stream, bounding the transformed working set held in memory (NFR-P7).
 const FLUSH_THRESHOLD: usize = 256;
+
+/// The largest a single target's buffered op **bytes** grow before a flush —
+/// bounds the working set by size as well as count, so a handful of very large
+/// documents flush early instead of holding up to [`FLUSH_THRESHOLD`] of them.
+const BYTE_FLUSH_THRESHOLD: usize = 4 * 1024 * 1024;
 
 /// The most per-target sub-batches dispatched at once in the final flush, so a
 /// wide fan-out cannot open an unbounded number of upstream requests (NFR-P).
@@ -74,18 +79,22 @@ pub(crate) async fn ingest_bulk<R: Router, S: Sink>(
     // FLUSH_THRESHOLD, so the transformed working set stays bounded (NFR-P7).
     let mut lines: Vec<Value> = vec![Value::Null; n];
     let mut buffers: HashMap<Target, Entries> = HashMap::new();
+    let mut sizes: HashMap<Target, usize> = HashMap::new();
     let mut cache: HashMap<(PartitionId, String), Resolved> = HashMap::new();
 
     for (ordinal, item) in items.into_iter().enumerate() {
         match prepare(router, ctx, &mut cache, item, retry).await {
             Ok(p) => {
-                let target = p.op.target.clone();
-                let buf = buffers.entry(target.clone()).or_default();
-                buf.push((ordinal, p));
-                if buf.len() >= FLUSH_THRESHOLD {
-                    let entries = buffers.remove(&target).unwrap_or_default();
-                    flush(router, sink, entries, &mut lines).await;
-                }
+                buffer_and_flush(
+                    router,
+                    sink,
+                    &mut buffers,
+                    &mut sizes,
+                    &mut lines,
+                    ordinal,
+                    p,
+                )
+                .await;
             }
             Err(fail) => lines[ordinal] = fail.into_line(),
         }
@@ -130,6 +139,7 @@ pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
     let mut reader = NdjsonReader::new(body);
     let mut lines: Vec<Value> = Vec::new();
     let mut buffers: HashMap<Target, Entries> = HashMap::new();
+    let mut sizes: HashMap<Target, usize> = HashMap::new();
     let mut cache: HashMap<(PartitionId, String), Resolved> = HashMap::new();
 
     let mut ordinal = 0usize;
@@ -138,17 +148,11 @@ pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
         ordinal += 1;
         lines.push(Value::Null);
         match prepare(router, ctx, &mut cache, item, retry).await {
+            // Flush a target mid-stream once it reaches the count or byte threshold,
+            // so the transformed working set stays bounded (NFR-P7) — the same
+            // backpressure as the buffered path, here over a live stream.
             Ok(p) => {
-                let target = p.op.target.clone();
-                let buf = buffers.entry(target.clone()).or_default();
-                buf.push((ord, p));
-                // Flush a target mid-stream once it reaches the threshold, so the
-                // transformed working set stays bounded (NFR-P7) — the same
-                // backpressure as the buffered path, here over a live stream.
-                if buf.len() >= FLUSH_THRESHOLD {
-                    let entries = buffers.remove(&target).unwrap_or_default();
-                    flush(router, sink, entries, &mut lines).await;
-                }
+                buffer_and_flush(router, sink, &mut buffers, &mut sizes, &mut lines, ord, p).await;
             }
             Err(fail) => lines[ord] = fail.into_line(),
         }
@@ -355,6 +359,44 @@ fn enqueue_failed_line(p: &Prepared) -> Value {
         "status": 503,
         "error": { "type": "enqueue_failed" },
     }})
+}
+
+/// Buffers a prepared op into its target's demux buffer and flushes that target
+/// when it reaches the op-count *or* byte threshold — so the transformed working
+/// set stays bounded by size as well as count (NFR-P7). Shared by the buffered and
+/// streamed bulk paths.
+async fn buffer_and_flush<R: Router, S: Sink>(
+    router: &R,
+    sink: &S,
+    buffers: &mut HashMap<Target, Entries>,
+    sizes: &mut HashMap<Target, usize>,
+    lines: &mut [Value],
+    ordinal: usize,
+    prepared: Prepared,
+) {
+    let target = prepared.op.target.clone();
+    let op_bytes = op_body_len(&prepared.op);
+    let buf = buffers.entry(target.clone()).or_default();
+    buf.push((ordinal, prepared));
+    let over_count = buf.len() >= FLUSH_THRESHOLD;
+    let size = sizes.entry(target.clone()).or_default();
+    *size += op_bytes;
+    if over_count || *size >= BYTE_FLUSH_THRESHOLD {
+        let entries = buffers.remove(&target).unwrap_or_default();
+        sizes.remove(&target);
+        flush(router, sink, entries, lines).await;
+    }
+}
+
+/// The byte length of an op's document body (0 for a delete) — what the flush
+/// byte-budget accounts for.
+fn op_body_len(op: &WriteOp) -> usize {
+    match &op.doc {
+        DocOp::Index { body, .. } | DocOp::Create { body, .. } | DocOp::Update { body, .. } => {
+            body.len()
+        }
+        DocOp::Delete { .. } => 0,
+    }
 }
 
 /// Flushes one target's sub-batch in place: re-check the migration write gate
