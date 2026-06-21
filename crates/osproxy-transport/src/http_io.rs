@@ -55,14 +55,7 @@ pub(crate) async fn serve_request<H: IngressHandler>(
         .map(|(k, v)| (k.as_str().to_owned(), v.to_str().unwrap_or("").to_owned()))
         .collect();
 
-    // A declared Content-Length over the per-request cap is too large outright.
     let declared = content_length(&headers);
-    if declared.is_some_and(|n| n > limits.max_body_bytes) {
-        return render(IngressResponse::json(
-            413,
-            error_body("request body too large"),
-        ));
-    }
 
     let c = classify(method, &path);
     // The head, sans body — built before any body work so the streaming decision
@@ -82,9 +75,22 @@ pub(crate) async fn serve_request<H: IngressHandler>(
     };
 
     // Streaming verbatim forward: pipe the downstream body straight upstream with
-    // no buffering and no in-flight reservation (it never lands in memory).
+    // no buffering and no in-flight reservation (it never lands in memory). It is
+    // *not* subject to the per-request size cap — the cap bounds buffered memory,
+    // and this path buffers nothing, so a passthrough may stream a body of any
+    // size with bounded memory (ADR-014 stage 2).
     if handler.forward_plan(&head.path, &head.logical_index) {
         return render(handler.handle_forward(head, req.into_body()).await);
+    }
+
+    // The remaining paths are size-capped: the buffered path holds the whole body,
+    // and the bulk demux holds one response line per op (bounded by the cap). A
+    // declared Content-Length over the cap is too large outright.
+    if declared.is_some_and(|n| n > limits.max_body_bytes) {
+        return render(IngressResponse::json(
+            413,
+            error_body("request body too large"),
+        ));
     }
 
     // Stream-demuxed `_bulk`: frame and dispatch the NDJSON op by op without
