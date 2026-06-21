@@ -1732,7 +1732,9 @@ dependencies = [
 name = "osproxy-engine"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "futures-util",
+ "http-body-util",
  "osproxy-control",
  "osproxy-core",
  "osproxy-observe",

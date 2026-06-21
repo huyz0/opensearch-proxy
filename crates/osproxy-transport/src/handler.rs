@@ -3,6 +3,7 @@
 use std::future::Future;
 
 use hyper::body::Incoming;
+use osproxy_core::EndpointKind;
 use osproxy_spi::HttpMethod;
 
 use crate::request::{IngressRequest, IngressResponse};
@@ -41,5 +42,24 @@ pub trait IngressHandler: Send + Sync + 'static {
         _body: Incoming,
     ) -> impl Future<Output = IngressResponse> + Send {
         async { IngressResponse::json(500, br#"{"error":"forward_not_implemented"}"#.to_vec()) }
+    }
+
+    /// Whether this `_bulk` request should be **stream-demuxed** (ADR-014 stage 4)
+    /// rather than buffered: decided from the endpoint + headers (e.g. the write
+    /// mode) alone, so the transport can avoid buffering the whole batch. `false`
+    /// by default.
+    fn wants_bulk_stream(&self, _endpoint: EndpointKind, _headers: &[(String, String)]) -> bool {
+        false
+    }
+
+    /// Handles a stream-demuxed `_bulk`: `body` is the NDJSON batch, framed and
+    /// dispatched op by op without buffering the whole thing. Called only when
+    /// [`wants_bulk_stream`](Self::wants_bulk_stream) returned `true`. Default `500`.
+    fn handle_bulk_stream(
+        &self,
+        _req: IngressRequest,
+        _body: Incoming,
+    ) -> impl Future<Output = IngressResponse> + Send {
+        async { IngressResponse::json(500, br#"{"error":"bulk_stream_not_implemented"}"#.to_vec()) }
     }
 }

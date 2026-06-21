@@ -117,6 +117,50 @@ pub fn parse_bulk(body: &[u8]) -> Result<Vec<BulkItem>, RewriteError> {
     Ok(items)
 }
 
+/// Parses just the **action** of a bulk action line — the verb — so a streaming
+/// reader can decide whether a source line follows ([`BulkAction::has_source`])
+/// before it frames the next line (ADR-014 stage 4). Validates the single-key
+/// `{verb: {…}}` shape like [`parse_bulk`].
+///
+/// # Errors
+///
+/// [`RewriteError::InvalidJson`] if the line is not JSON, or
+/// [`RewriteError::MalformedBulkAction`] if it is not a single-key action object.
+pub fn parse_bulk_action(line: &[u8]) -> Result<BulkAction, RewriteError> {
+    parse_action_line(line).map(|(action, _)| action)
+}
+
+/// Parses one bulk operation from its already-framed action line and (for
+/// source-bearing verbs) source line — the per-op entry point for the streaming
+/// demux (ADR-014 stage 4). The source line is kept as raw bytes, validated but
+/// not materialized, exactly as [`parse_bulk`] does.
+///
+/// # Errors
+///
+/// [`RewriteError::MalformedBulkAction`] if a source-bearing action has no source
+/// line, [`RewriteError::InvalidJson`] if a line is not valid JSON.
+pub fn parse_bulk_op(
+    action_line: &[u8],
+    source_line: Option<&[u8]>,
+) -> Result<BulkItem, RewriteError> {
+    let (action, meta) = parse_action_line(action_line)?;
+    let source = if action.has_source() {
+        let line = source_line.ok_or(RewriteError::MalformedBulkAction)?;
+        json::validate(line).map_err(|_| RewriteError::InvalidJson)?;
+        Some(line.to_vec())
+    } else {
+        None
+    };
+    Ok(BulkItem {
+        action,
+        index: meta.index,
+        id: meta.id,
+        routing: meta.routing,
+        concurrency_control: meta.concurrency_control,
+        source,
+    })
+}
+
 /// The `_index`/`_id`/`routing` pulled from an action line's metadata object.
 struct ActionMeta {
     index: Option<String>,
@@ -248,6 +292,39 @@ mod tests {
     fn invalid_json_action_is_rejected() {
         assert_eq!(
             parse_bulk(b"not json\n").unwrap_err(),
+            RewriteError::InvalidJson
+        );
+    }
+
+    #[test]
+    fn streaming_parse_op_matches_whole_body_parse() {
+        // The per-op streaming API yields the same items as parse_bulk for the
+        // same lines: an index (with source) and a delete (no source).
+        let action = br#"{"index":{"_index":"a","_id":"1"}}"#;
+        let source = br#"{"msg":"hi"}"#;
+        assert!(parse_bulk_action(action).unwrap() == BulkAction::Index);
+        let op = parse_bulk_op(action, Some(source)).unwrap();
+        assert_eq!(op.action, BulkAction::Index);
+        assert_eq!(op.index.as_deref(), Some("a"));
+        assert_eq!(op.id.as_deref(), Some("1"));
+        assert_eq!(op.source.as_deref(), Some(&source[..]));
+
+        let del = br#"{"delete":{"_id":"2"}}"#;
+        assert_eq!(parse_bulk_action(del).unwrap(), BulkAction::Delete);
+        let op = parse_bulk_op(del, None).unwrap();
+        assert_eq!(op.action, BulkAction::Delete);
+        assert!(op.source.is_none());
+    }
+
+    #[test]
+    fn streaming_parse_op_rejects_missing_source_and_bad_json() {
+        let action = br#"{"index":{"_id":"1"}}"#;
+        assert_eq!(
+            parse_bulk_op(action, None).unwrap_err(),
+            RewriteError::MalformedBulkAction
+        );
+        assert_eq!(
+            parse_bulk_op(action, Some(b"not json")).unwrap_err(),
             RewriteError::InvalidJson
         );
     }

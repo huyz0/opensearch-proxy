@@ -9,8 +9,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use osproxy_core::{Clock, ErrorCode, RequestId};
-use osproxy_engine::{Pipeline, RequestError};
+use osproxy_core::{Clock, EndpointKind, ErrorCode, RequestId};
+use osproxy_engine::{Pipeline, PipelineResponse, RequestError};
 use osproxy_observe::{
     decode_directive_set, DirectiveStore, InMemoryDirectiveStore, Metrics, PoolSnapshot,
 };
@@ -340,6 +340,29 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
             })?;
         Ok(principal)
     }
+
+    /// Maps a streamed pipeline outcome to a response, tallying side effects — the
+    /// shared tail of the streaming forward and bulk paths.
+    fn finish_streamed(
+        &self,
+        req: &IngressRequest,
+        request_id: &RequestId,
+        result: Result<PipelineResponse, RequestError>,
+        should_capture: bool,
+    ) -> IngressResponse {
+        let (response, ok) = match result {
+            Ok(resp) => {
+                let ok = (200..300).contains(&resp.status);
+                (IngressResponse::json(resp.status, resp.body), ok)
+            }
+            Err(err) => (
+                IngressResponse::json(status_for(&err), error_body(&err)),
+                false,
+            ),
+        };
+        self.after_response(req, &response, request_id, ok, should_capture);
+        response.with_header("x-request-id", request_id.as_str())
+    }
 }
 
 impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
@@ -438,18 +461,43 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         // Pipe the downstream body straight to the upstream — never buffered.
         let upstream = osproxy_sink::stream_body(body);
         let (result, should_capture) = self.pipeline.forward_streamed(&ctx, upstream).await;
-        let (response, ok) = match result {
-            Ok(resp) => {
-                let ok = (200..300).contains(&resp.status);
-                (IngressResponse::json(resp.status, resp.body), ok)
-            }
-            Err(err) => (
-                IngressResponse::json(status_for(&err), error_body(&err)),
-                false,
-            ),
+        self.finish_streamed(&req, &request_id, result, should_capture)
+    }
+
+    fn wants_bulk_stream(&self, endpoint: EndpointKind, headers: &[(String, String)]) -> bool {
+        // Capture must tee the buffered body, so streaming and capture are mutually
+        // exclusive; only sync `_bulk` streams (async fan-out keeps the buffered
+        // path, which enqueues per item).
+        endpoint == EndpointKind::IngestBulk
+            && !self.capture.enabled()
+            && self.pipeline.is_sync_write(headers)
+    }
+
+    async fn handle_bulk_stream(&self, req: IngressRequest, body: Incoming) -> IngressResponse {
+        let request_id = self.next_request_id();
+        let principal = match self.gate(&req, &request_id).await {
+            Ok(principal) => principal,
+            Err(resp) => return resp,
         };
-        self.after_response(&req, &response, &request_id, ok, should_capture);
-        response.with_header("x-request-id", request_id.as_str())
+        let safe_headers = crate::bearer::without_authorization(&req.headers);
+        // The body is the streamed NDJSON batch, not `req.body` (empty here).
+        let ctx = RequestCtx::new(
+            &principal,
+            &request_id,
+            req.method,
+            req.endpoint,
+            req.protocol,
+            &req.logical_index,
+            HeaderView::new(&safe_headers),
+            &req.body,
+        )
+        .with_doc_id(req.doc_id.as_deref())
+        .with_query(req.query.as_deref())
+        .with_path(&req.path);
+
+        let stream = osproxy_sink::stream_body(body);
+        let (result, should_capture) = self.pipeline.handle_bulk_streamed(&ctx, stream).await;
+        self.finish_streamed(&req, &request_id, result, should_capture)
     }
 }
 

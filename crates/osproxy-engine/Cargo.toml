@@ -19,6 +19,8 @@ osproxy-observe.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
 futures-util.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
 tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]

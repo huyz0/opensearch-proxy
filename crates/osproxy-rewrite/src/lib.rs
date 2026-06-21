@@ -24,7 +24,7 @@ mod mget;
 mod msearch;
 mod query;
 
-pub use bulk::{parse_bulk, BulkAction, BulkItem};
+pub use bulk::{parse_bulk, parse_bulk_action, parse_bulk_op, BulkAction, BulkItem};
 pub use error::RewriteError;
 pub use extract::extract_scalar;
 pub use fields::{inject_fields, inject_fields_bytes, inject_update, strip_fields};

@@ -159,9 +159,8 @@ index/create/delete de-materialized (no `Value` tree, splice not reserialize);
 SPI `resolve_partition(ctx, BodyDoc)` with a `scalar(path)` extraction util and no
 raw-byte accessor; INV-MEM dhat gate + serde-oracle + spoof property tests.
 
-**In progress (true zero-buffer streaming — core-model rewrite):** the body is
-still held once as owned bytes (`IngressRequest.body`/`DocOp.body`/`CursorOp.body`
-are `Vec<u8>`; the upstream clients are typed `Client<_, Full<Bytes>>`). Staged:
+**Zero-buffer streaming (core-model rewrite) — verbatim forward + bulk done;
+single-doc write streaming deliberately not done (unsound).** Staged:
 
 1. **Sink streaming-capable body** — DONE (green, behavior-preserving): the
    upstream pooled clients carry a boxed body (`UpstreamBody = BoxBody<Bytes, _>`)
@@ -178,7 +177,22 @@ are `Vec<u8>`; the upstream clients are typed `Client<_, Full<Bytes>>`). Staged:
    inside it. Streaming is disabled when capture is wired (capture must tee the
    buffered body) and never applies to the proxy-internal surfaces. Response is
    still read buffered (response-body streaming is a later refinement).
-3. **Streaming inject / prefix-until-key routing** for single-doc: read the head
-   to the routing key (and the `{` for a splice), then stream the tail.
-4. **Bulk streaming demux**: incremental NDJSON over the inbound stream, per-op
-   transform, concurrent multi-target upstream streams, re-interleaved response.
+3. **Streaming inject / prefix-until-key routing** for single-doc — WON'T DO
+   (found unsound/infeasible): routing needs the partition key from the body, and
+   the spoof check needs *every* top-level key (a client could place `_tenant`
+   last), so a flat doc is fully read before it can be forwarded — there is no
+   safe tail to stream. The buffered single-doc path is already CPU-optimal
+   (no tree, splice) and bounded by the 413 cap; converting it would weaken the
+   isolation invariant for no real gain.
+4. **Bulk streaming demux** — DONE: the `_bulk` NDJSON is framed incrementally
+   from the inbound stream (`NdjsonReader` over the body's frames) and each op is
+   demuxed/dispatched as it is read, reusing the existing flush/gate/re-interleave
+   — so the whole batch is never held (only the bounded per-target flush buffers +
+   the response lines). Each op's object is still fully scanned (spoof check
+   intact), one at a time. Sync write mode only (the transport decides from the
+   endpoint + write-mode header; async fan-out and capture keep the buffered
+   path). rewrite gained `parse_bulk_action`/`parse_bulk_op`; the engine gained
+   `ingest_bulk_streamed` + `Pipeline::handle_bulk_streamed`/`is_sync_write`; the
+   transport gained `wants_bulk_stream` + `handle_bulk_stream`. A per-op size cap
+   bounds one giant line. Verified: streamed response == buffered response
+   (same items, same order); per-item failures positioned in place.

@@ -13,13 +13,22 @@
 //! Memory is bounded (NFR-P7): a target's sub-batch is flushed as soon as it
 //! reaches [`FLUSH_THRESHOLD`], so the transformed working set stays a bounded
 //! multiple of the threshold rather than growing to the whole body.
+//
+// JUSTIFY(file-length): one cohesive bulk module — the sync (buffered), async
+// fan-out, and streamed (ADR-014 stage 4) demuxes all share the same
+// demux/flush/gate/re-interleave machinery and per-item response shaping.
+// Splitting a variant into its own file would scatter that shared machinery or
+// force it pub(crate) across files for no real separation.
 
 use std::collections::HashMap;
 
 use futures_util::stream::StreamExt as _;
+use http_body_util::BodyExt as _;
 use osproxy_core::{PartitionId, Target};
-use osproxy_rewrite::{parse_bulk, BulkAction};
-use osproxy_sink::{OpResult, Sink, SinkError, WriteAck, WriteBatch};
+use osproxy_rewrite::{
+    parse_bulk, parse_bulk_action, parse_bulk_op, BulkAction, BulkItem, RewriteError,
+};
+use osproxy_sink::{OpResult, Sink, SinkError, UpstreamBody, WriteAck, WriteBatch};
 use osproxy_spi::RequestCtx;
 use osproxy_tenancy::{Resolved, Router};
 use serde_json::{json, Value};
@@ -91,6 +100,149 @@ pub(crate) async fn ingest_bulk<R: Router, S: Sink>(
             reason: "serializing bulk response",
         })?,
     })
+}
+
+/// The largest a single bulk line (one action or one source) may grow before the
+/// streaming reader rejects the request — bounds the per-op buffer so one giant
+/// line cannot exhaust memory even though the batch as a whole is streamed.
+const MAX_LINE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Streams a `_bulk` request from the inbound body (ADR-014 stage 4): the NDJSON
+/// is framed incrementally and each op is demuxed/dispatched as it is read, so the
+/// **whole batch is never held** — only the bounded per-target flush buffers and
+/// the response lines. Same re-interleaved response and per-item semantics as
+/// [`ingest_bulk`]; only the source differs (a stream, not a buffered body).
+///
+/// # Errors
+///
+/// Returns [`RequestError`] if a line is unparseable or the body stream fails.
+/// Unlike the buffered path (which parses the whole body before dispatching), a
+/// mid-stream parse error surfaces after earlier ops were already applied — the
+/// honest consequence of not buffering (mirrors a streaming bulk upstream).
+pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
+    router: &R,
+    sink: &S,
+    ctx: &RequestCtx<'_>,
+    body: UpstreamBody,
+    retry: crate::RetryPolicy,
+) -> Result<PipelineResponse, RequestError> {
+    let mut reader = NdjsonReader::new(body);
+    let mut lines: Vec<Value> = Vec::new();
+    let mut buffers: HashMap<Target, Entries> = HashMap::new();
+    let mut cache: HashMap<(PartitionId, String), Resolved> = HashMap::new();
+
+    let mut ordinal = 0usize;
+    while let Some(item) = reader.next_op().await? {
+        let ord = ordinal;
+        ordinal += 1;
+        lines.push(Value::Null);
+        match prepare(router, ctx, &mut cache, item, retry).await {
+            Ok(p) => {
+                let target = p.op.target.clone();
+                let buf = buffers.entry(target.clone()).or_default();
+                buf.push((ord, p));
+                // Flush a target mid-stream once it reaches the threshold, so the
+                // transformed working set stays bounded (NFR-P7) — the same
+                // backpressure as the buffered path, here over a live stream.
+                if buf.len() >= FLUSH_THRESHOLD {
+                    let entries = buffers.remove(&target).unwrap_or_default();
+                    flush(router, sink, entries, &mut lines).await;
+                }
+            }
+            Err(fail) => lines[ord] = fail.into_line(),
+        }
+    }
+    flush_remaining(router, sink, buffers, &mut lines).await;
+
+    let errors = lines.iter().any(is_error_line);
+    let body = json!({ "took": 0, "errors": errors, "items": lines });
+    Ok(PipelineResponse {
+        status: 200,
+        body: serde_json::to_vec(&body).map_err(|_| RequestError::Internal {
+            reason: "serializing bulk response",
+        })?,
+    })
+}
+
+/// An incremental NDJSON reader over a streamed body: pulls frames on demand and
+/// yields one bulk op at a time, buffering only the current (and at most the next)
+/// line. Blank lines are skipped, matching [`parse_bulk`].
+struct NdjsonReader {
+    body: UpstreamBody,
+    buf: Vec<u8>,
+    done: bool,
+}
+
+impl NdjsonReader {
+    fn new(body: UpstreamBody) -> Self {
+        Self {
+            body,
+            buf: Vec::new(),
+            done: false,
+        }
+    }
+
+    /// Reads the next op: an action line, plus a source line for verbs that carry
+    /// one. `Ok(None)` at end of stream.
+    async fn next_op(&mut self) -> Result<Option<BulkItem>, RequestError> {
+        let Some(action_line) = self.next_line().await? else {
+            return Ok(None);
+        };
+        let action = parse_bulk_action(&action_line).map_err(RequestError::from)?;
+        let source = if action.has_source() {
+            Some(
+                self.next_line()
+                    .await?
+                    .ok_or_else(|| RequestError::from(RewriteError::MalformedBulkAction))?,
+            )
+        } else {
+            None
+        };
+        parse_bulk_op(&action_line, source.as_deref())
+            .map(Some)
+            .map_err(RequestError::from)
+    }
+
+    /// Returns the next non-blank line (newline stripped), or `None` at EOF.
+    async fn next_line(&mut self) -> Result<Option<Vec<u8>>, RequestError> {
+        loop {
+            if let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
+                let mut line: Vec<u8> = self.buf.drain(..=pos).collect();
+                line.pop(); // drop '\n'
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                if line.iter().all(u8::is_ascii_whitespace) {
+                    continue;
+                }
+                return Ok(Some(line));
+            }
+            if self.done {
+                if self.buf.iter().all(u8::is_ascii_whitespace) {
+                    return Ok(None);
+                }
+                return Ok(Some(std::mem::take(&mut self.buf)));
+            }
+            if self.buf.len() > MAX_LINE_BYTES {
+                return Err(RequestError::Internal {
+                    reason: "bulk line exceeds the per-op size cap",
+                });
+            }
+            match self.body.frame().await {
+                Some(Ok(frame)) => {
+                    if let Ok(data) = frame.into_data() {
+                        self.buf.extend_from_slice(&data);
+                    }
+                }
+                Some(Err(_)) => {
+                    return Err(RequestError::Internal {
+                        reason: "reading bulk body stream",
+                    })
+                }
+                None => self.done = true,
+            }
+        }
+    }
 }
 
 /// The async fan-out counterpart of [`ingest_bulk`] (`docs/04` §9): each item is

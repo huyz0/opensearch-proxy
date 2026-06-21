@@ -107,8 +107,73 @@ async fn bulk(
     p.handle(&ctx).await.unwrap()
 }
 
+/// Runs a `_bulk` through the **streaming** demux (ADR-014 stage 4): the body is
+/// supplied as an `UpstreamBody` and framed incrementally, never buffered whole.
+async fn bulk_streamed(
+    p: &Pipeline<TenancyRouter<SharedTenancy>, MemorySink>,
+    body: &[u8],
+) -> PipelineResponse {
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("b");
+    let headers = vec![];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::IngestBulk,
+        Protocol::Http1,
+        "orders",
+        HeaderView::new(&headers),
+        b"",
+    );
+    p.handle_bulk_streamed(&ctx, osproxy_sink::buffered(body.to_vec().into()))
+        .await
+        .0
+        .unwrap()
+}
+
 fn target(index: &str) -> Target {
     Target::new(ClusterId::from("eu-1"), IndexName::from(index))
+}
+
+#[tokio::test]
+async fn streamed_bulk_matches_the_buffered_path() {
+    // The streaming demux must produce the identical re-interleaved response as the
+    // buffered path for the same mixed-partition batch — same items, same order.
+    let body = concat!(
+        "{\"index\":{\"_id\":\"1\"}}\n{\"tenant_id\":\"acme\",\"id\":1}\n",
+        "{\"index\":{\"_id\":\"2\"}}\n{\"tenant_id\":\"globex\",\"id\":2}\n",
+        "{\"index\":{\"_id\":\"3\"}}\n{\"tenant_id\":\"acme\",\"id\":3}\n",
+    )
+    .as_bytes();
+
+    let buffered: Value = serde_json::from_slice(&bulk(&pipeline(), body).await.body).unwrap();
+    let streamed: Value =
+        serde_json::from_slice(&bulk_streamed(&pipeline(), body).await.body).unwrap();
+
+    assert_eq!(streamed["errors"], buffered["errors"]);
+    assert_eq!(streamed["items"], buffered["items"]);
+    assert_eq!(streamed["items"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn streamed_bulk_positions_a_per_item_failure_in_place() {
+    // An unresolvable op (no tenant_id, no header) fails positionally; the others
+    // still succeed — identical semantics to the buffered path, over a stream.
+    let body = concat!(
+        "{\"index\":{\"_id\":\"1\"}}\n{\"tenant_id\":\"acme\",\"id\":1}\n",
+        "{\"index\":{\"_id\":\"2\"}}\n{\"no_tenant\":true}\n",
+    )
+    .as_bytes();
+
+    let resp: Value = serde_json::from_slice(&bulk_streamed(&pipeline(), body).await.body).unwrap();
+    let items = resp["items"].as_array().unwrap();
+    assert_eq!(resp["errors"], true);
+    assert!(items[0]["index"].get("error").is_none(), "first ok");
+    assert!(
+        items[1]["index"].get("error").is_some(),
+        "second failed in place"
+    );
 }
 
 #[tokio::test]

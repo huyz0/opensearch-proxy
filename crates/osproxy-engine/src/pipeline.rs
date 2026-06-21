@@ -459,6 +459,20 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         }
     }
 
+    /// Whether the effective write mode for a request with these headers is sync —
+    /// the `X-Write-Mode` header if present and valid, else the deployment
+    /// baseline. Lets the transport decide to stream-demux a `_bulk` (sync only;
+    /// async fan-out keeps the buffered path) from the head alone (ADR-014 stage 4).
+    #[must_use]
+    pub fn is_sync_write(&self, headers: &[(String, String)]) -> bool {
+        let mode = headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("x-write-mode"))
+            .and_then(|(_, v)| crate::asyncwrite::WriteMode::parse(v))
+            .unwrap_or(self.baseline_write_mode);
+        mode == crate::asyncwrite::WriteMode::Sync
+    }
+
     /// Whether a request for `logical_index` is a tenant-agnostic passthrough that
     /// can be **streamed** verbatim (ADR-014 stage 2). Body-free so the transport
     /// can decide before buffering. `false` when no passthrough policy is set or
@@ -495,6 +509,38 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
                 endpoint: ctx.endpoint(),
             })),
         };
+        match &result {
+            Ok(resp) => trace.record_egress(EgressInfo {
+                status: resp.status,
+                response_bytes: resp.body.len(),
+            }),
+            Err(err) => trace.record_error(error_context(err)),
+        }
+        self.explain.record(ctx.request_id().clone(), &trace);
+        (result, false)
+    }
+
+    /// Handles a `_bulk` request whose body is supplied as a **stream** (ADR-014
+    /// stage 4): frame and demux the NDJSON incrementally so the whole batch is
+    /// never buffered. Same trace lifecycle as [`forward_streamed`](Self::forward_streamed)
+    /// (classify → egress, into the explain store); per-op outcomes live
+    /// positionally in the response body, as in the buffered bulk path. Sync write
+    /// mode only — the streaming decision is made by the caller; async fan-out
+    /// keeps the buffered path.
+    pub async fn handle_bulk_streamed(
+        &self,
+        ctx: &RequestCtx<'_>,
+        body: UpstreamBody,
+    ) -> (Result<PipelineResponse, RequestError>, bool) {
+        let mut trace = RequestTrace::new();
+        trace.record_context(crate::endpoints::wire_trace(ctx));
+        trace.record_classify(ClassifyInfo {
+            endpoint: ctx.endpoint(),
+            logical_index: logical_index(ctx.logical_index()),
+        });
+        let result =
+            crate::bulk::ingest_bulk_streamed(&self.router, &self.sink, ctx, body, self.retry)
+                .await;
         match &result {
             Ok(resp) => trace.record_egress(EgressInfo {
                 status: resp.status,

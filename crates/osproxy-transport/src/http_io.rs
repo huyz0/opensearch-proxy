@@ -87,6 +87,12 @@ pub(crate) async fn serve_request<H: IngressHandler>(
         return render(handler.handle_forward(head, req.into_body()).await);
     }
 
+    // Stream-demuxed `_bulk`: frame and dispatch the NDJSON op by op without
+    // buffering the whole batch (ADR-014 stage 4).
+    if handler.wants_bulk_stream(head.endpoint, &head.headers) {
+        return render(handler.handle_bulk_stream(head, req.into_body()).await);
+    }
+
     // Buffered path: reserve the (declared, else worst-case) size against the
     // global budget, collect under the cap, then handle. The reservation is held
     // until the response is rendered.
