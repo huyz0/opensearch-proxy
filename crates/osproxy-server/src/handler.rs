@@ -20,7 +20,9 @@ use osproxy_spi::{
     Principal, RequestCtx,
 };
 use osproxy_tenancy::TenancyRouter;
-use osproxy_transport::{Incoming, IngressHandler, IngressRequest, IngressResponse};
+use osproxy_transport::{
+    Incoming, IngressHandler, IngressRequest, IngressResponse, StreamingResponse,
+};
 
 use crate::auth::AllowAllAuthorizer;
 use crate::log::{NoLog, RequestLog};
@@ -433,13 +435,15 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         self.pipeline.is_passthrough(logical_index)
     }
 
-    async fn handle_forward(&self, req: IngressRequest, body: Incoming) -> IngressResponse {
+    async fn handle_forward(&self, req: IngressRequest, body: Incoming) -> StreamingResponse {
         let request_id = self.next_request_id();
         // `forward_plan` already excluded the introspection routes; apply the same
         // TLS + auth + authz gate as the buffered path before forwarding.
         let principal = match self.gate(&req, &request_id).await {
             Ok(principal) => principal,
-            Err(resp) => return resp,
+            // The gate's refusal is a small buffered error; carry it as a streaming
+            // response so both arms share one return type.
+            Err(resp) => return to_streaming(resp),
         };
 
         let safe_headers = crate::bearer::without_authorization(&req.headers);
@@ -458,10 +462,21 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         .with_query(req.query.as_deref())
         .with_path(&req.path);
 
-        // Pipe the downstream body straight to the upstream — never buffered.
+        // Both directions stream: the request body pipes upstream, the upstream
+        // response pipes back — neither buffered.
         let upstream = osproxy_sink::stream_body(body);
-        let (result, should_capture) = self.pipeline.forward_streamed(&ctx, upstream).await;
-        self.finish_streamed(&req, &request_id, result, should_capture)
+        let (result, _capture) = self.pipeline.forward_streamed(&ctx, upstream).await;
+        let response = match result {
+            Ok(forward) => {
+                self.after_streamed(&request_id, (200..300).contains(&forward.status));
+                StreamingResponse::stream(forward.status, forward.body)
+            }
+            Err(err) => {
+                self.after_streamed(&request_id, false);
+                StreamingResponse::buffered(status_for(&err), error_body(&err))
+            }
+        };
+        response.with_header("x-request-id", request_id.as_str())
     }
 
     fn wants_bulk_stream(&self, endpoint: EndpointKind, headers: &[(String, String)]) -> bool {
@@ -523,6 +538,18 @@ impl<A, Z> AppHandler<A, Z> {
         self.tee_capture(req, response, request_id, should_capture);
     }
 
+    /// Post-response side effects for a **streamed** response (no body retained):
+    /// tally metrics and emit the structured log. Capture is never available on a
+    /// streamed path (there is no buffered body to tee), so it is not attempted.
+    fn after_streamed(&self, request_id: &RequestId, ok: bool) {
+        self.metrics.record(ok);
+        if self.request_log.enabled() {
+            if let Some(record) = self.pipeline.explain(request_id) {
+                self.request_log.emit(&record);
+            }
+        }
+    }
+
     /// Full-fidelity capture: tee the raw exchange for replay/audit when a capture
     /// sink is wired *and* `should_capture` (the live directive decision) selected
     /// this request — so capture is on demand, not whenever a sink exists. The
@@ -549,6 +576,15 @@ impl<A, Z> AppHandler<A, Z> {
             response_body: &response.body,
         });
     }
+}
+
+/// Carries a small buffered [`IngressResponse`] (e.g. an auth refusal) as a
+/// [`StreamingResponse`], preserving its status and headers — so the streamed
+/// forward path has one return type for both the gate refusal and the stream.
+fn to_streaming(resp: IngressResponse) -> StreamingResponse {
+    let mut streaming = StreamingResponse::buffered(resp.status, resp.body);
+    streaming.headers = resp.headers;
+    streaming
 }
 
 /// Extracts client credentials from a request: a bearer token from

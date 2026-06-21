@@ -49,27 +49,28 @@ impl Drop for ProxyChild {
 }
 
 /// A mock upstream that **drains** each request body frame by frame (never
-/// buffering it) and returns a small response — so the proxy, not the mock, is
-/// what the test measures, and backpressure is realistic.
-async fn start_drain_upstream() -> String {
+/// buffering it) and returns a response of `response_size` bytes — so the proxy,
+/// not the mock, is what the test measures, and backpressure is realistic.
+async fn start_drain_upstream(response_size: usize) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
             tokio::spawn(async move {
                 let io = TokioIo::new(stream);
-                let svc = service_fn(|req: Request<Incoming>| async move {
+                let svc = move |req: Request<Incoming>| async move {
                     let mut body = req.into_body();
-                    // Discard each frame as it arrives — bounded memory.
+                    // Discard each request frame as it arrives — bounded memory.
                     while let Some(frame) = body.frame().await {
                         drop(frame);
                     }
-                    Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(
-                        b"{\"result\":\"ok\"}",
-                    ))))
-                });
+                    Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from(vec![
+                        b'y';
+                        response_size
+                    ]))))
+                };
                 let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(io, svc)
+                    .serve_connection(io, service_fn(svc))
                     .await;
             });
         }
@@ -132,7 +133,7 @@ async fn wait_ready(client: &HttpClient, base: &str) -> bool {
 #[ignore = "requires Linux /proc; run with --ignored --nocapture"]
 async fn a_large_passthrough_request_streams_with_bounded_memory() {
     let client: HttpClient = Client::builder(TokioExecutor::new()).build_http();
-    let upstream = start_drain_upstream().await;
+    let upstream = start_drain_upstream(16).await;
     let (proxy, base, pid) = spawn_passthrough_proxy(&upstream).await;
     assert!(
         wait_ready(&client, &base).await,
@@ -143,10 +144,73 @@ async fn a_large_passthrough_request_streams_with_bounded_memory() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     let idle = rss_bytes(pid).expect("read idle RSS");
 
-    // Sample the proxy's RSS continuously while the big body streams through, so a
+    // Drive several large requests, sampling the proxy's RSS throughout — a
     // transient full-body buffer (held for the whole transfer) would be caught.
+    let peak = peak_rss_during(pid, async {
+        for _ in 0..4 {
+            let resp = client
+                .request(passthrough_request(&base, BIG_BODY))
+                .await
+                .expect("big passthrough request");
+            assert!(
+                resp.status().is_success(),
+                "big passthrough streamed, not 413'd: {}",
+                resp.status()
+            );
+            drain(resp.into_body()).await;
+        }
+    })
+    .await;
+
+    assert_bounded("request", idle, peak);
+    drop(proxy);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Linux /proc; run with --ignored --nocapture"]
+async fn a_large_passthrough_response_streams_with_bounded_memory() {
+    let client: HttpClient = Client::builder(TokioExecutor::new()).build_http();
+    // The upstream returns a 64 MiB response; the proxy must pipe it back without
+    // buffering — so its resident set stays small even as the big body flows.
+    let upstream = start_drain_upstream(BIG_BODY).await;
+    let (proxy, base, pid) = spawn_passthrough_proxy(&upstream).await;
+    assert!(
+        wait_ready(&client, &base).await,
+        "proxy did not become ready"
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let idle = rss_bytes(pid).expect("read idle RSS");
+
+    let peak = peak_rss_during(pid, async {
+        for _ in 0..4 {
+            let resp = client
+                .request(passthrough_request(&base, 1))
+                .await
+                .expect("small request, big response");
+            assert!(resp.status().is_success(), "status {}", resp.status());
+            // Drain the big response frame by frame, never collecting it whole.
+            drain(resp.into_body()).await;
+        }
+    })
+    .await;
+
+    assert_bounded("response", idle, peak);
+    drop(proxy);
+}
+
+/// Drains a response body frame by frame (bounded memory), discarding the bytes.
+async fn drain(mut body: Incoming) {
+    while let Some(frame) = body.frame().await {
+        drop(frame);
+    }
+}
+
+/// Runs `work` while continuously sampling `pid`'s resident set, returning the
+/// peak observed — so a buffer held for the duration of a transfer is caught even
+/// without hitting the exact instant of peak.
+async fn peak_rss_during<F: std::future::Future<Output = ()>>(pid: u32, work: F) -> u64 {
     let done = Arc::new(AtomicBool::new(false));
-    let peak = Arc::new(AtomicU64::new(idle));
+    let peak = Arc::new(AtomicU64::new(0));
     let sampler = {
         let (done, peak) = (Arc::clone(&done), Arc::clone(&peak));
         tokio::spawn(async move {
@@ -158,28 +222,18 @@ async fn a_large_passthrough_request_streams_with_bounded_memory() {
             }
         })
     };
-
-    // Drive several large requests so the sampler reliably overlaps the transfers.
-    for _ in 0..4 {
-        let resp = client
-            .request(passthrough_request(&base, BIG_BODY))
-            .await
-            .expect("big passthrough request");
-        assert!(
-            resp.status().is_success(),
-            "big passthrough streamed, not 413'd: {}",
-            resp.status()
-        );
-        let _ = resp.into_body().collect().await;
-    }
-
+    work.await;
     done.store(true, Ordering::Relaxed);
     sampler.await.unwrap();
-    let peak = peak.load(Ordering::Relaxed);
-    let growth = peak.saturating_sub(idle);
+    peak.load(Ordering::Relaxed)
+}
 
+/// Asserts the proxy's RSS grew far less than a buffered body would have, printing
+/// the figures either way.
+fn assert_bounded(direction: &str, idle: u64, peak: u64) {
+    let growth = peak.saturating_sub(idle);
     println!(
-        "idle = {:.1} MiB, peak = {:.1} MiB, growth = {:.1} MiB over a {} MiB body",
+        "{direction}: idle = {:.1} MiB, peak = {:.1} MiB, growth = {:.1} MiB over a {} MiB body",
         idle as f64 / 1_048_576.0,
         peak as f64 / 1_048_576.0,
         growth as f64 / 1_048_576.0,
@@ -187,11 +241,9 @@ async fn a_large_passthrough_request_streams_with_bounded_memory() {
     );
     assert!(
         growth < MAX_GROWTH_BYTES,
-        "passthrough must stream, not buffer: RSS grew {:.1} MiB for a {} MiB body (cap {:.0} MiB)",
+        "passthrough {direction} must stream, not buffer: RSS grew {:.1} MiB for a {} MiB body (cap {:.0} MiB)",
         growth as f64 / 1_048_576.0,
         BIG_BODY / 1_048_576,
         MAX_GROWTH_BYTES as f64 / 1_048_576.0,
     );
-
-    drop(proxy);
 }

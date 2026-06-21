@@ -37,7 +37,7 @@ use crate::conn::{CountingConnector, PoolStats};
 use crate::error::SinkError;
 use crate::read::{
     CountOutcome, CursorOp, CursorOutcome, ForwardOp, ReadOp, ReadOutcome, Reader, SearchOp,
-    SearchOutcome,
+    SearchOutcome, StreamingForward,
 };
 use crate::sink::Sink;
 use crate::wire::{build_request, doc_uri, parse_result};
@@ -390,12 +390,12 @@ impl OpenSearchSink {
     /// concatenated verbatim into the upstream URI. Refuse a `..` segment so no op
     /// type can let a path resolve past its allow-listed prefix upstream — the
     /// engine already guards admin/cursor paths, so this should never fire.
-    async fn forward_raw(
+    async fn forward_send(
         &self,
         op: &ForwardOp,
         body: ByteBody,
         fail_kind: &'static str,
-    ) -> Result<CursorOutcome, SinkError> {
+    ) -> Result<(u16, Response<Incoming>, bool), SinkError> {
         reject_path_traversal(&op.path)?;
         let pool = self.pool_for(&op.cluster, op.endpoint.as_deref())?;
         let uri = match &op.query {
@@ -415,16 +415,7 @@ impl OpenSearchSink {
             .await?;
         let status = resp.status().as_u16();
         reject_5xx(status)?;
-        let body = resp
-            .into_body()
-            .collect()
-            .await
-            .map_err(|_| SinkError::Transport {
-                kind: "reading upstream forward response",
-            })?
-            .to_bytes()
-            .to_vec();
-        Ok(CursorOutcome::new(status, body).with_pool_reuse(reused))
+        Ok((status, resp, reused))
     }
 
     /// Sends a single operation and parses its result, with whether the dispatch
@@ -519,7 +510,7 @@ impl Reader for OpenSearchSink {
 
     async fn cursor(&self, op: CursorOp) -> Result<CursorOutcome, SinkError> {
         // A cursor op's body is already buffered (the engine substituted the real
-        // cursor id), so wrap it and share the one verbatim-forward path.
+        // cursor id) and its response is small, so buffer the response too.
         let body = buffered(Bytes::from(op.body));
         let fwd = ForwardOp {
             cluster: op.cluster,
@@ -530,17 +521,37 @@ impl Reader for OpenSearchSink {
             protocol: op.protocol,
             trace: op.trace,
         };
-        self.forward_raw(&fwd, body, "upstream cursor failed").await
+        let (status, resp, reused) = self
+            .forward_send(&fwd, body, "upstream cursor failed")
+            .await?;
+        let body = resp
+            .into_body()
+            .collect()
+            .await
+            .map_err(|_| SinkError::Transport {
+                kind: "reading upstream cursor response",
+            })?
+            .to_bytes()
+            .to_vec();
+        Ok(CursorOutcome::new(status, body).with_pool_reuse(reused))
     }
 
     async fn forward_stream(
         &self,
         op: ForwardOp,
         body: ByteBody,
-    ) -> Result<CursorOutcome, SinkError> {
-        // The verbatim-passthrough path: the body is a stream piped straight to the
-        // upstream, never buffered (ADR-014 stage 2).
-        self.forward_raw(&op, body, "upstream forward failed").await
+    ) -> Result<StreamingForward, SinkError> {
+        // The verbatim-passthrough path: the request body streams straight upstream
+        // and the response streams straight back — neither lands in memory (ADR-014
+        // stages 2 + the response-streaming follow-up).
+        let (status, resp, reused) = self
+            .forward_send(&op, body, "upstream forward failed")
+            .await?;
+        Ok(StreamingForward {
+            status,
+            body: stream_body(resp.into_body()),
+            pool_reuse: reused,
+        })
     }
 }
 

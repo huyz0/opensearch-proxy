@@ -7,8 +7,7 @@
 
 use std::sync::Arc;
 
-use bytes::Bytes;
-use http_body_util::{BodyExt, Full, Limited};
+use http_body_util::{BodyExt, Limited};
 use hyper::body::Incoming;
 use hyper::{Method, Request, Response};
 use osproxy_spi::{HttpMethod, Protocol};
@@ -16,7 +15,9 @@ use osproxy_spi::{HttpMethod, Protocol};
 use crate::admission::{Admission, IngressLimits, Reservation};
 use crate::classify::classify;
 use crate::handler::IngressHandler;
-use crate::request::{IngressRequest, IngressResponse};
+use crate::request::{
+    buffered_response, IngressRequest, IngressResponse, ResponseBody, StreamingResponse,
+};
 
 /// Connection-level facts shared by every request on a connection: the verified
 /// mTLS client identity (TLS suite/version for the trace's `ingress` span attach
@@ -40,7 +41,7 @@ pub(crate) async fn serve_request<H: IngressHandler>(
     conn_info: &ConnInfo,
     limits: IngressLimits,
     admission: &Arc<Admission>,
-) -> Response<Full<Bytes>> {
+) -> Response<ResponseBody> {
     let Some(method) = map_method(req.method()) else {
         return render(IngressResponse::json(405, error_body("method not allowed")));
     };
@@ -80,7 +81,7 @@ pub(crate) async fn serve_request<H: IngressHandler>(
     // and this path buffers nothing, so a passthrough may stream a body of any
     // size with bounded memory (ADR-014 stage 2).
     if handler.forward_plan(&head.path, &head.logical_index) {
-        return render(handler.handle_forward(head, req.into_body()).await);
+        return render_forward(handler.handle_forward(head, req.into_body()).await);
     }
 
     // The remaining paths are size-capped: the buffered path holds the whole body,
@@ -160,8 +161,8 @@ fn map_protocol(version: hyper::Version) -> Protocol {
     }
 }
 
-/// Renders an [`IngressResponse`] into a hyper response, never panicking.
-fn render(out: IngressResponse) -> Response<Full<Bytes>> {
+/// Renders a buffered [`IngressResponse`] into a hyper response, never panicking.
+fn render(out: IngressResponse) -> Response<ResponseBody> {
     let mut builder = Response::builder()
         .status(out.status)
         .header("content-type", "application/json");
@@ -169,12 +170,26 @@ fn render(out: IngressResponse) -> Response<Full<Bytes>> {
         builder = builder.header(name, value);
     }
     builder
-        .body(Full::new(Bytes::from(out.body)))
+        .body(buffered_response(out.body))
         .unwrap_or_else(|_| {
             // A well-formed status + static body cannot fail to build; fall back
             // to a minimal 500 rather than unwrapping (NFR-R1).
-            Response::new(Full::new(Bytes::from_static(b"{\"error\":\"internal\"}")))
+            Response::new(buffered_response(b"{\"error\":\"internal\"}".to_vec()))
         })
+}
+
+/// Renders a [`StreamingResponse`] (a verbatim forward) into a hyper response: the
+/// body is the upstream stream, piped straight to the client without buffering.
+fn render_forward(out: StreamingResponse) -> Response<ResponseBody> {
+    let mut builder = Response::builder()
+        .status(out.status)
+        .header("content-type", "application/json");
+    for (name, value) in out.headers {
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(out.body)
+        .unwrap_or_else(|_| Response::new(buffered_response(b"{\"error\":\"internal\"}".to_vec())))
 }
 
 /// A minimal JSON error body, value-free.

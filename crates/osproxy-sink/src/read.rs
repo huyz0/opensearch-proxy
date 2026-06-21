@@ -378,6 +378,30 @@ impl ForwardOp {
     }
 }
 
+/// The outcome of a **streaming** verbatim forward (ADR-014): the upstream status
+/// and its response body as a live [`ByteBody`](crate::ByteBody) stream — piped
+/// back to the client without ever being collected. Unlike [`CursorOutcome`], the
+/// body is not materialized here, so this carries no derives (the stream is
+/// one-shot).
+pub struct StreamingForward {
+    /// The upstream HTTP status.
+    pub status: u16,
+    /// The upstream response body, streamed back verbatim.
+    pub body: crate::ByteBody,
+    /// Whether this op rode a reused pooled connection (NFR-P telemetry).
+    pub pool_reuse: bool,
+}
+
+impl std::fmt::Debug for StreamingForward {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The streamed body is not `Debug`; show the shape.
+        f.debug_struct("StreamingForward")
+            .field("status", &self.status)
+            .field("pool_reuse", &self.pool_reuse)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The outcome of a cursor passthrough: the upstream status and raw body,
 /// forwarded back to the client verbatim.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -491,7 +515,7 @@ pub trait Reader: Send + Sync {
         &self,
         _op: ForwardOp,
         _body: crate::opensearch::ByteBody,
-    ) -> impl std::future::Future<Output = Result<CursorOutcome, SinkError>> + Send {
+    ) -> impl std::future::Future<Output = Result<StreamingForward, SinkError>> + Send {
         async {
             Err(SinkError::Transport {
                 kind: "streaming forward not supported by this sink",

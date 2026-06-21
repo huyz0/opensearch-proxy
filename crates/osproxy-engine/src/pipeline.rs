@@ -22,7 +22,7 @@ use osproxy_observe::{
     DirectiveSet, DirectiveStore, DirectiveVerifier, EgressInfo, ExplainStore, NoVerifier,
     NoopDiagnosticSink, NoopExporter, RequestAttrs, RequestTrace, SpanExporter,
 };
-use osproxy_sink::{ByteBody, Reader, Sink};
+use osproxy_sink::{ByteBody, Reader, Sink, StreamingForward};
 use osproxy_spi::{RequestCtx, SpiError};
 use osproxy_tenancy::Router;
 use serde_json::Value;
@@ -500,7 +500,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         &self,
         ctx: &RequestCtx<'_>,
         body: ByteBody,
-    ) -> (Result<PipelineResponse, RequestError>, bool) {
+    ) -> (Result<StreamingForward, RequestError>, bool) {
         let mut trace = Self::begin_streamed_trace(ctx);
         let result = match self.passthrough.as_ref() {
             Some(policy) => self.forward_stream(ctx, policy, body, &mut trace).await,
@@ -509,7 +509,17 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
                 endpoint: ctx.endpoint(),
             })),
         };
-        self.finish_streamed_trace(ctx, trace, result)
+        // The response body is a live stream of unknown length, so egress records
+        // the status with zero bytes (the size is not known until it has flowed).
+        match &result {
+            Ok(f) => trace.record_egress(EgressInfo {
+                status: f.status,
+                response_bytes: 0,
+            }),
+            Err(err) => trace.record_error(error_context(err)),
+        }
+        self.explain.record(ctx.request_id().clone(), &trace);
+        (result, false)
     }
 
     /// Handles a `_bulk` request whose body is supplied as a **stream** (ADR-014

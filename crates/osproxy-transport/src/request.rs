@@ -5,8 +5,77 @@
 //! back. It carries no routing or tenancy meaning — just the parsed HTTP facts
 //! plus the endpoint classification.
 
+use bytes::Bytes;
+use http_body_util::combinators::UnsyncBoxBody;
+use http_body_util::{BodyExt, Full};
 use osproxy_core::EndpointKind;
 use osproxy_spi::{HttpMethod, Protocol};
+
+/// The transport's HTTP response body: boxed so a response may be buffered bytes
+/// or a **live stream** piped from the upstream without buffering (ADR-014).
+/// Unsync — the server only needs `Send`. Structurally identical to
+/// `osproxy-sink`'s `ByteBody`, so a streamed upstream response flows through
+/// as-is, no copy.
+pub type ResponseBody = UnsyncBoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>;
+
+/// Wraps fully-buffered bytes as a [`ResponseBody`] (the buffered response path).
+#[must_use]
+pub fn buffered_response(body: Vec<u8>) -> ResponseBody {
+    Full::new(Bytes::from(body))
+        .map_err(|never| match never {})
+        .boxed_unsync()
+}
+
+/// A streaming response a handler returns for a verbatim forward (ADR-014): a
+/// status, extra headers, and a body piped to the client without buffering.
+pub struct StreamingResponse {
+    /// The HTTP status code.
+    pub status: u16,
+    /// Extra response headers (beyond the content type the transport sets).
+    pub headers: Vec<(String, String)>,
+    /// The response body — a live stream, or buffered bytes for an error.
+    pub body: ResponseBody,
+}
+
+impl std::fmt::Debug for StreamingResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The body is a stream, not `Debug`; show the rest of the shape.
+        f.debug_struct("StreamingResponse")
+            .field("status", &self.status)
+            .field("headers", &self.headers)
+            .finish_non_exhaustive()
+    }
+}
+
+impl StreamingResponse {
+    /// A response whose body is a live stream.
+    #[must_use]
+    pub fn stream(status: u16, body: ResponseBody) -> Self {
+        Self {
+            status,
+            headers: Vec::new(),
+            body,
+        }
+    }
+
+    /// A response with a buffered body (e.g. an error), boxed into the streaming
+    /// body type so both kinds share one response type.
+    #[must_use]
+    pub fn buffered(status: u16, body: Vec<u8>) -> Self {
+        Self {
+            status,
+            headers: Vec::new(),
+            body: buffered_response(body),
+        }
+    }
+
+    /// Adds a response header (builder style).
+    #[must_use]
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
+    }
+}
 
 /// A parsed, owned client request ready for the pipeline.
 #[derive(Clone, PartialEq, Eq, Debug)]

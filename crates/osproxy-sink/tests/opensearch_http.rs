@@ -224,6 +224,9 @@ async fn forward_stream_pipes_a_streamed_body_to_the_pinned_cluster() {
         got.body
     );
     assert_eq!(outcome.status, 200);
+    // The response body is itself a stream; collect it to assert it forwards back.
+    let resp_body = outcome.body.collect().await.unwrap().to_bytes();
+    assert_eq!(&resp_body[..], br#"{"result":"created"}"#);
 }
 
 #[tokio::test]

@@ -5,7 +5,7 @@ use std::future::Future;
 use hyper::body::Incoming;
 use osproxy_core::EndpointKind;
 
-use crate::request::{IngressRequest, IngressResponse};
+use crate::request::{IngressRequest, IngressResponse, StreamingResponse};
 
 /// Handles a parsed ingress request, producing a response.
 ///
@@ -31,17 +31,20 @@ pub trait IngressHandler: Send + Sync + 'static {
     }
 
     /// Handles a streamed verbatim forward: `body` is the downstream request body
-    /// piped straight to the upstream without buffering. Called only when
-    /// [`forward_plan`](Self::forward_plan) returned `true`; `req` carries the
-    /// parsed head (its `body` field is empty — the body is the `body` argument).
-    /// The default returns `500`, so a handler that opts in via `forward_plan`
-    /// must implement it.
+    /// piped straight to the upstream, and the returned [`StreamingResponse`]'s
+    /// body is the upstream response piped straight back — neither buffered.
+    /// Called only when [`forward_plan`](Self::forward_plan) returned `true`; `req`
+    /// carries the parsed head (its `body` field is empty — the body is the `body`
+    /// argument). The default returns `500`, so a handler that opts in via
+    /// `forward_plan` must implement it.
     fn handle_forward(
         &self,
         _req: IngressRequest,
         _body: Incoming,
-    ) -> impl Future<Output = IngressResponse> + Send {
-        async { IngressResponse::json(500, br#"{"error":"forward_not_implemented"}"#.to_vec()) }
+    ) -> impl Future<Output = StreamingResponse> + Send {
+        async {
+            StreamingResponse::buffered(500, br#"{"error":"forward_not_implemented"}"#.to_vec())
+        }
     }
 
     /// Whether this `_bulk` request should be **stream-demuxed** (ADR-014 stage 4)

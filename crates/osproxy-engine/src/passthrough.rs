@@ -22,7 +22,7 @@
 
 use osproxy_core::ClusterId;
 use osproxy_observe::{DispatchInfo, RequestTrace};
-use osproxy_sink::{ByteBody, CursorOp, ForwardOp, Reader, Sink};
+use osproxy_sink::{ByteBody, CursorOp, ForwardOp, Reader, Sink, StreamingForward};
 use osproxy_tenancy::Router;
 
 use crate::endpoints::wire_trace;
@@ -130,16 +130,16 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     }
 
     /// Forwards `ctx` verbatim with its body supplied as a **stream**, piped
-    /// straight to the upstream without buffering (ADR-014 stage 2). The streaming
-    /// twin of [`forward`](Self::forward): same destination and verbatim semantics,
-    /// but the body never lands in memory. The response is still read buffered.
+    /// straight to the upstream — and returns the upstream response as a live
+    /// stream too, so neither direction lands in memory (ADR-014). The fully
+    /// streaming twin of [`forward`](Self::forward).
     pub(crate) async fn forward_stream(
         &self,
         ctx: &RequestCtx<'_>,
         policy: &PassthroughPolicy,
         body: ByteBody,
         trace: &mut RequestTrace,
-    ) -> Result<PipelineResponse, RequestError> {
+    ) -> Result<StreamingForward, RequestError> {
         let (cluster, endpoint) = policy.target();
         let op = ForwardOp::new(cluster.clone(), ctx.method(), ctx.path().to_owned())
             .with_endpoint(endpoint)
@@ -152,10 +152,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             upstream_status: outcome.status,
             pool_reuse: outcome.pool_reuse,
         });
-        Ok(PipelineResponse {
-            status: outcome.status,
-            body: outcome.body,
-        })
+        Ok(outcome)
     }
 }
 
