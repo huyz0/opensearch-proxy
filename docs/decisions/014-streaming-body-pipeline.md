@@ -184,6 +184,16 @@ single-doc write streaming deliberately not done (unsound).** Staged:
    safe tail to stream. The buffered single-doc path is already CPU-optimal
    (no tree, splice) and bounded by the 413 cap; converting it would weaken the
    isolation invariant for no real gain.
+3a. **Streaming responses (verbatim forward)** — DONE: the passthrough forward now
+   streams **both directions** — the upstream response is piped straight back to
+   the client (sink `forward_stream` → `StreamingForward` carrying a live
+   `ByteBody`; transport `Response<ResponseBody>` + `StreamingResponse`), never
+   buffered. The streamed forward is also exempt from the per-request body-size cap
+   (the cap bounds buffered memory; this path buffers nothing). A spawned-binary
+   memory test reads the proxy's own `/proc` RSS: a 64 MiB request and a 64 MiB
+   response each grow it ~3–4 MiB, not ~64 MiB. The buffered get-by-id/search
+   responses keep the `Value`/raw-strip path (they transform hits); end-to-end
+   response streaming for the *transformed* paths remains future work.
 4. **Bulk streaming demux** — DONE: the `_bulk` NDJSON is framed incrementally
    from the inbound stream (`NdjsonReader` over the body's frames) and each op is
    demuxed/dispatched as it is read, reusing the existing flush/gate/re-interleave
