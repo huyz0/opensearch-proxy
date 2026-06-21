@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::ack::OpResult;
 use crate::batch::DocOp;
 use crate::error::SinkError;
-use crate::opensearch::{buffered, UpstreamBody};
+use crate::opensearch::{buffered, ByteBody};
 
 /// Builds the upstream request for a document op, returning it together with the
 /// id to fall back to if the response omits `_id`.
@@ -21,7 +21,7 @@ pub(crate) fn build_request(
     base: &str,
     index: &IndexName,
     doc: &DocOp,
-) -> Result<(Request<UpstreamBody>, String), SinkError> {
+) -> Result<(Request<ByteBody>, String), SinkError> {
     let (method, uri, body, fallback_id) = request_parts(base, index, doc);
 
     let req = Request::builder()

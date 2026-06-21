@@ -47,26 +47,28 @@ use crate::wire::{build_request, doc_uri, parse_result};
 /// error here. Boxed so both fit one client type.
 pub type BodyError = Box<dyn std::error::Error + Send + Sync>;
 
-/// The upstream request body type. Boxed (unsync — the pooled client needs only
-/// `Send`) so a request can carry buffered bytes or a streamed (or head +
-/// stream-tail) body without changing the pooled client's type (ADR-014). Unsync
-/// so a downstream `hyper::body::Incoming`, which is `Send` but not `Sync`, can be
-/// streamed straight through.
-pub type UpstreamBody = UnsyncBoxBody<Bytes, BodyError>;
+/// A boxed byte-stream body, used both for the request sent **to** an upstream
+/// cluster and as the carrier for a downstream body streamed **through** the proxy
+/// (a verbatim forward, or a `_bulk` batch the engine frames). Boxed (unsync — the
+/// pooled client needs only `Send`, not `Sync`) so one type covers buffered bytes,
+/// a stream, or a head + stream-tail without changing the pooled client's type,
+/// and so a downstream `hyper::body::Incoming` (which is `Send` but not `Sync`) can
+/// be piped straight through (ADR-014).
+pub type ByteBody = UnsyncBoxBody<Bytes, BodyError>;
 
-/// Wraps fully-buffered bytes as an [`UpstreamBody`]. The buffered body is
-/// infallible; `match never {}` discharges its `Infallible` error into [`BodyError`].
+/// Wraps fully-buffered bytes as a [`ByteBody`]. The buffered body is infallible;
+/// `match never {}` discharges its `Infallible` error into [`BodyError`].
 #[must_use]
-pub fn buffered(bytes: Bytes) -> UpstreamBody {
+pub fn buffered(bytes: Bytes) -> ByteBody {
     Full::new(bytes)
         .map_err(|never| match never {})
         .boxed_unsync()
 }
 
-/// Adapts any streaming body into an [`UpstreamBody`] — e.g. the downstream
-/// `hyper::body::Incoming` for a verbatim forward, so its bytes flow straight to
-/// the upstream without buffering (ADR-014 stage 2).
-pub fn stream_body<B>(body: B) -> UpstreamBody
+/// Adapts any streaming body into a [`ByteBody`] — e.g. the downstream
+/// `hyper::body::Incoming` for a verbatim forward or a streamed `_bulk`, so its
+/// bytes flow through the proxy without buffering (ADR-014).
+pub fn stream_body<B>(body: B) -> ByteBody
 where
     B: hyper::body::Body<Data = Bytes> + Send + 'static,
     B::Error: Into<BodyError>,
@@ -74,7 +76,7 @@ where
     body.map_err(Into::into).boxed_unsync()
 }
 
-type HttpClient = Client<CountingConnector<HttpConnector>, UpstreamBody>;
+type HttpClient = Client<CountingConnector<HttpConnector>, ByteBody>;
 
 /// One cluster's base URL plus its own pooled HTTP/1.1 and HTTP/2 clients.
 ///
@@ -299,7 +301,7 @@ impl OpenSearchSink {
         &self,
         pool: &ClusterPool,
         protocol: Protocol,
-        mut req: Request<UpstreamBody>,
+        mut req: Request<ByteBody>,
         trace: Option<&TraceContext>,
         fail_kind: &'static str,
     ) -> Result<(Response<Incoming>, bool), SinkError> {
@@ -391,7 +393,7 @@ impl OpenSearchSink {
     async fn forward_raw(
         &self,
         op: &ForwardOp,
-        body: UpstreamBody,
+        body: ByteBody,
         fail_kind: &'static str,
     ) -> Result<CursorOutcome, SinkError> {
         reject_path_traversal(&op.path)?;
@@ -534,7 +536,7 @@ impl Reader for OpenSearchSink {
     async fn forward_stream(
         &self,
         op: ForwardOp,
-        body: UpstreamBody,
+        body: ByteBody,
     ) -> Result<CursorOutcome, SinkError> {
         // The verbatim-passthrough path: the body is a stream piped straight to the
         // upstream, never buffered (ADR-014 stage 2).

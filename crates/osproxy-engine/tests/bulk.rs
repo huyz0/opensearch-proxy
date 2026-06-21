@@ -108,7 +108,7 @@ async fn bulk(
 }
 
 /// Runs a `_bulk` through the **streaming** demux (ADR-014 stage 4): the body is
-/// supplied as an `UpstreamBody` and framed incrementally, never buffered whole.
+/// supplied as an `ByteBody` and framed incrementally, never buffered whole.
 async fn bulk_streamed(
     p: &Pipeline<TenancyRouter<SharedTenancy>, MemorySink>,
     body: &[u8],

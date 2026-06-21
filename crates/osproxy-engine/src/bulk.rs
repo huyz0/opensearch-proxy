@@ -29,7 +29,7 @@ use osproxy_core::{PartitionId, Target};
 use osproxy_rewrite::{
     parse_bulk, parse_bulk_action, parse_bulk_op, BulkAction, BulkItem, RewriteError,
 };
-use osproxy_sink::{OpResult, Sink, SinkError, UpstreamBody, WriteAck, WriteBatch};
+use osproxy_sink::{ByteBody, OpResult, Sink, SinkError, WriteAck, WriteBatch};
 use osproxy_spi::RequestCtx;
 use osproxy_tenancy::{Resolved, Router};
 use serde_json::{json, Value};
@@ -124,7 +124,7 @@ pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
     router: &R,
     sink: &S,
     ctx: &RequestCtx<'_>,
-    body: UpstreamBody,
+    body: ByteBody,
     retry: crate::RetryPolicy,
 ) -> Result<PipelineResponse, RequestError> {
     let mut reader = NdjsonReader::new(body);
@@ -174,7 +174,7 @@ pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
 /// rescanning, so framing a batch is linear in its size — never quadratic, even
 /// when one frame carries many lines.
 struct NdjsonReader {
-    body: UpstreamBody,
+    body: ByteBody,
     buf: BytesMut,
     /// How far into `buf` the newline search has already looked (no rescanning a
     /// prefix after a frame is appended).
@@ -183,7 +183,7 @@ struct NdjsonReader {
 }
 
 impl NdjsonReader {
-    fn new(body: UpstreamBody) -> Self {
+    fn new(body: ByteBody) -> Self {
         Self {
             body,
             buf: BytesMut::new(),

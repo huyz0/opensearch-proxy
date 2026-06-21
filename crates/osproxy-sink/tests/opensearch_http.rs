@@ -205,7 +205,7 @@ async fn cursor_passthrough_forwards_method_path_and_body_to_the_pinned_cluster(
 #[tokio::test]
 async fn forward_stream_pipes_a_streamed_body_to_the_pinned_cluster() {
     // The verbatim-passthrough path (ADR-014 stage 2): the body is supplied as a
-    // streaming `UpstreamBody` (here adapted from a body via `stream_body`, as the
+    // streaming `ByteBody` (here adapted from a body via `stream_body`, as the
     // transport will adapt the downstream `Incoming`) and forwarded verbatim.
     let (base, captured) = start_mock(r#"{"result":"created"}"#).await;
     let sink = OpenSearchSink::new();

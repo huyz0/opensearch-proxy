@@ -31,7 +31,7 @@ pub use batch::{DocOp, WriteBatch, WriteOp};
 pub use conn::PoolStats;
 pub use error::SinkError;
 pub use memory::MemorySink;
-pub use opensearch::{buffered, stream_body, BodyError, OpenSearchSink, UpstreamBody};
+pub use opensearch::{buffered, stream_body, BodyError, ByteBody, OpenSearchSink};
 pub use read::{
     CountOutcome, CursorOp, CursorOutcome, ForwardOp, ReadOp, ReadOutcome, Reader, SearchOp,
     SearchOutcome,

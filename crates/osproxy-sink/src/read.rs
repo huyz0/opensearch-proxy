@@ -312,7 +312,7 @@ impl CursorOp {
 
 /// A verbatim forward whose request body is a **stream**, not buffered bytes
 /// (ADR-014 stage 2): the same destination shape as [`CursorOp`] but the body is
-/// supplied separately as an [`UpstreamBody`](crate::UpstreamBody) so it can be
+/// supplied separately as a [`ByteBody`](crate::ByteBody) so it can be
 /// piped from the downstream connection straight to the upstream without ever
 /// being collected. Used by the tenant-agnostic passthrough path.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -490,7 +490,7 @@ pub trait Reader: Send + Sync {
     fn forward_stream(
         &self,
         _op: ForwardOp,
-        _body: crate::opensearch::UpstreamBody,
+        _body: crate::opensearch::ByteBody,
     ) -> impl std::future::Future<Output = Result<CursorOutcome, SinkError>> + Send {
         async {
             Err(SinkError::Transport {

@@ -22,7 +22,7 @@ use osproxy_observe::{
     DirectiveSet, DirectiveStore, DirectiveVerifier, EgressInfo, ExplainStore, NoVerifier,
     NoopDiagnosticSink, NoopExporter, RequestAttrs, RequestTrace, SpanExporter,
 };
-use osproxy_sink::{Reader, Sink, UpstreamBody};
+use osproxy_sink::{ByteBody, Reader, Sink};
 use osproxy_spi::{RequestCtx, SpiError};
 use osproxy_tenancy::Router;
 use serde_json::Value;
@@ -499,7 +499,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     pub async fn forward_streamed(
         &self,
         ctx: &RequestCtx<'_>,
-        body: UpstreamBody,
+        body: ByteBody,
     ) -> (Result<PipelineResponse, RequestError>, bool) {
         let mut trace = Self::begin_streamed_trace(ctx);
         let result = match self.passthrough.as_ref() {
@@ -522,7 +522,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     pub async fn handle_bulk_streamed(
         &self,
         ctx: &RequestCtx<'_>,
-        body: UpstreamBody,
+        body: ByteBody,
     ) -> (Result<PipelineResponse, RequestError>, bool) {
         // Bulk records its outcome positionally in the response, not per-stage, so
         // the trace passes straight from open to close with no mid-stage spans.

@@ -22,7 +22,7 @@
 
 use osproxy_core::ClusterId;
 use osproxy_observe::{DispatchInfo, RequestTrace};
-use osproxy_sink::{CursorOp, ForwardOp, Reader, Sink, UpstreamBody};
+use osproxy_sink::{ByteBody, CursorOp, ForwardOp, Reader, Sink};
 use osproxy_tenancy::Router;
 
 use crate::endpoints::wire_trace;
@@ -137,7 +137,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         &self,
         ctx: &RequestCtx<'_>,
         policy: &PassthroughPolicy,
-        body: UpstreamBody,
+        body: ByteBody,
         trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
         let (cluster, endpoint) = policy.target();
