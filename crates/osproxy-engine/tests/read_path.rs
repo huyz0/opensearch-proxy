@@ -157,6 +157,31 @@ async fn search(
     p.handle(&ctx).await.unwrap()
 }
 
+async fn search_streamed(
+    p: &Pipeline<TenancyRouter<SharedTenancy>, MemorySink>,
+    body: &[u8],
+) -> (u16, Vec<u8>) {
+    use http_body_util::BodyExt as _;
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("ss");
+    let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::Search,
+        Protocol::Http1,
+        "orders",
+        HeaderView::new(&headers),
+        body,
+    );
+    let (result, capture) = p.search_streamed(&ctx).await;
+    assert!(!capture, "streamed paths never offer capture");
+    let stream = result.unwrap();
+    let bytes = stream.body.collect().await.unwrap().to_bytes().to_vec();
+    (stream.status, bytes)
+}
+
 async fn count(
     p: &Pipeline<TenancyRouter<SharedTenancy>, MemorySink>,
     body: &[u8],
@@ -207,6 +232,31 @@ async fn search_filters_the_query_and_strips_hits() {
     assert_eq!(hit["_id"], "7");
     assert!(hit["_source"].get("_tenant").is_none());
     assert_eq!(hit["_source"]["msg"], "hello");
+}
+
+#[tokio::test]
+async fn streamed_search_strips_hits_identically_to_the_buffered_path() {
+    let p = pipeline();
+    write(&p, br#"{"tenant_id":"acme","id":7,"msg":"hello"}"#).await;
+    write(&p, br#"{"tenant_id":"acme","id":8,"msg":"there"}"#).await;
+
+    let (status, body) = search_streamed(&p, br#"{"query":{"match_all":{}}}"#).await;
+    assert_eq!(status, 200);
+    let streamed: Value = serde_json::from_slice(&body).unwrap();
+
+    // The injected tenancy field is gone and the logical view is presented.
+    let hit = &streamed["hits"]["hits"][0];
+    assert_eq!(hit["_index"], "orders");
+    assert!(hit["_source"].get("_tenant").is_none());
+    assert!(
+        !body.windows(7).any(|w| w == b"_tenant"),
+        "injected field leaked into the streamed response"
+    );
+
+    // And the streamed body equals the buffered search output semantically.
+    let buffered = search(&p, br#"{"query":{"match_all":{}}}"#).await;
+    let buffered_doc: Value = serde_json::from_slice(&buffered.body).unwrap();
+    assert_eq!(streamed, buffered_doc);
 }
 
 #[tokio::test]

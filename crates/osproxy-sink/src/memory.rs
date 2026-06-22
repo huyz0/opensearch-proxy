@@ -6,15 +6,25 @@
 //! full write→read round-trip be exercised in memory (the real `OpenSearchSink`
 //! is covered by a testcontainer round-trip). Not for production: it persists
 //! nothing.
+//
+// JUSTIFY(file-length): one cohesive in-memory double implementing the full
+// `Sink` + `Reader` surface (write/get/search/search_stream/count) over a single
+// shared store, plus its focused unit tests; splitting the trait impls from the
+// store they share would scatter one small test fixture across files.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+use bytes::Bytes;
+
 use crate::ack::{OpResult, WriteAck};
 use crate::batch::{DocOp, WriteBatch};
 use crate::error::SinkError;
-use crate::read::{CountOutcome, ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome};
+use crate::opensearch::buffered;
+use crate::read::{
+    CountOutcome, ReadOp, ReadOutcome, Reader, SearchOp, SearchOutcome, StreamingSearch,
+};
 use crate::sink::Sink;
 
 /// A non-persistent [`Sink`]/[`Reader`] that records batches, stores indexed
@@ -174,6 +184,19 @@ impl Reader for MemorySink {
             200,
             serde_json::to_vec(&body).unwrap_or_else(|_| b"{}".to_vec()),
         ))
+    }
+
+    async fn search_stream(&self, op: SearchOp) -> Result<StreamingSearch, SinkError> {
+        // Reuse the buffered match-all, then hand the bytes back as a (single-frame)
+        // stream so the engine's streaming hit-transform wiring can be exercised in
+        // memory (multi-frame resumability is covered by the scanner's fuzz test and
+        // the live RSS test).
+        let out = self.search(op).await?;
+        Ok(StreamingSearch {
+            status: out.status,
+            body: buffered(Bytes::from(out.body)),
+            pool_reuse: false,
+        })
     }
 
     async fn count(&self, op: SearchOp) -> Result<CountOutcome, SinkError> {

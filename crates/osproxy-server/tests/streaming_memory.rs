@@ -1,9 +1,11 @@
 //! Memory invariant for the streaming paths (ADR-014): a **very large** message
 //! flows through the proxy with **bounded** memory — the proxy never buffers the
-//! whole body. It spawns the real `osproxy` binary in tenant-agnostic passthrough
-//! mode pointed at an in-process mock upstream (no Docker), streams a large
-//! request through it, and reads the proxy's own resident set from
-//! `/proc/<pid>/statm` (so the figure is the proxy alone, not this harness).
+//! whole body. It spawns the real `osproxy` binary pointed at an in-process mock
+//! upstream (no Docker) — in tenant-agnostic passthrough mode for the verbatim
+//! request/response cases, and in tenancy mode for the streamed **search
+//! response** case (a huge `aggregations` sibling must pipe through the hit
+//! transform without being buffered) — and reads the proxy's own resident set
+//! from `/proc/<pid>/statm` (so the figure is the proxy alone, not this harness).
 //!
 //! `#[ignore]`: needs Linux `/proc` and moves a lot of bytes.
 //!   `cargo test -p osproxy-server --test streaming_memory -- --ignored --nocapture`
@@ -78,26 +80,80 @@ async fn start_drain_upstream(response_size: usize) -> String {
     format!("http://{addr}")
 }
 
+/// A mock upstream that drains each request and answers every call with a search
+/// envelope whose `aggregations` blob is `agg_size` bytes — empty hits, so the
+/// proxy's hit transform forwards the giant sibling verbatim without buffering.
+async fn start_search_upstream(agg_size: usize) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let body = Arc::new(search_envelope(agg_size));
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let body = Arc::clone(&body);
+            tokio::spawn(async move {
+                let io = TokioIo::new(stream);
+                let svc = move |req: Request<Incoming>| {
+                    let body = Arc::clone(&body);
+                    async move {
+                        let mut b = req.into_body();
+                        while let Some(frame) = b.frame().await {
+                            drop(frame);
+                        }
+                        Ok::<_, std::convert::Infallible>(Response::new(Full::new(
+                            body.as_ref().clone(),
+                        )))
+                    }
+                };
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(io, service_fn(svc))
+                    .await;
+            });
+        }
+    });
+    format!("http://{addr}")
+}
+
+/// A valid `_search` response envelope with empty hits and an `aggregations` blob
+/// of `agg_size` bytes — the genuinely-unbounded part of a real search response.
+fn search_envelope(agg_size: usize) -> Bytes {
+    let mut v =
+        br#"{"took":1,"hits":{"total":{"value":0},"hits":[]},"aggregations":{"blob":""#.to_vec();
+    v.resize(v.len() + agg_size, b'a');
+    v.extend_from_slice(br#""}}"#);
+    Bytes::from(v)
+}
+
 /// Spawns the real `osproxy` binary in whole-instance passthrough mode pointed at
 /// `upstream`. Returns the child guard, its base URL, and its pid.
 async fn spawn_passthrough_proxy(upstream: &str) -> (ProxyChild, String, u32) {
+    spawn_proxy(upstream, true).await
+}
+
+/// Spawns the real `osproxy` binary in tenancy mode (no passthrough), so a
+/// `_search` is routed, query-wrapped, and its response streamed through the hit
+/// transform.
+async fn spawn_tenancy_proxy(upstream: &str) -> (ProxyChild, String, u32) {
+    spawn_proxy(upstream, false).await
+}
+
+/// Spawns the binary against `upstream`, optionally in whole-instance passthrough.
+async fn spawn_proxy(upstream: &str, passthrough: bool) -> (ProxyChild, String, u32) {
     let port = {
         let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
         l.local_addr().unwrap().port()
     };
     let bind = format!("127.0.0.1:{port}");
-    let child = Command::new(env!("CARGO_BIN_EXE_osproxy"))
-        .env("OSPROXY_BIND", &bind)
-        // The tenancy upstream/index are required to build the pipeline but never
-        // consulted: whole-instance passthrough forwards every request verbatim.
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_osproxy"));
+    cmd.env("OSPROXY_BIND", &bind)
         .env("OSPROXY_UPSTREAM", upstream)
         .env("OSPROXY_INDEX", "osproxy-shared")
         .env("OSPROXY_TOKENS", "") // dev (open) auth
-        .env("OSPROXY_ALLOW_CLEARTEXT_MUTATION", "1")
-        .env("OSPROXY_PASSTHROUGH_CLUSTER", "mock")
-        .env("OSPROXY_PASSTHROUGH_ENDPOINT", upstream)
-        .spawn()
-        .expect("spawn osproxy binary");
+        .env("OSPROXY_ALLOW_CLEARTEXT_MUTATION", "1");
+    if passthrough {
+        cmd.env("OSPROXY_PASSTHROUGH_CLUSTER", "mock")
+            .env("OSPROXY_PASSTHROUGH_ENDPOINT", upstream);
+    }
+    let child = cmd.spawn().expect("spawn osproxy binary");
     let pid = child.id();
     (ProxyChild(child), format!("http://{bind}"), pid)
 }
@@ -109,6 +165,21 @@ fn passthrough_request(base: &str, size: usize) -> Request<Full<Bytes>> {
         .uri(format!("{base}/raw/_doc"))
         .header("content-type", "application/json")
         .body(Full::new(Bytes::from(vec![b'x'; size])))
+        .unwrap()
+}
+
+/// A `_search` against a logical index, carrying the tenant header the reference
+/// tenancy resolves the partition from. The query body is small; the response is
+/// what streams.
+fn search_request(base: &str) -> Request<Full<Bytes>> {
+    Request::builder()
+        .method(Method::POST)
+        .uri(format!("{base}/orders/_search"))
+        .header("content-type", "application/json")
+        .header("x-tenant", "acme")
+        .body(Full::new(Bytes::from_static(
+            br#"{"query":{"match_all":{}}}"#,
+        )))
         .unwrap()
 }
 
@@ -195,6 +266,43 @@ async fn a_large_passthrough_response_streams_with_bounded_memory() {
     .await;
 
     assert_bounded("response", idle, peak);
+    drop(proxy);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Linux /proc; run with --ignored --nocapture"]
+async fn a_large_search_response_streams_with_bounded_memory() {
+    let client: HttpClient = Client::builder(TokioExecutor::new()).build_http();
+    // The upstream returns a search envelope with a 64 MiB `aggregations` blob —
+    // the part of a real search response that is genuinely unbounded. The proxy
+    // routes the search, then streams the response back through the hit transform;
+    // the giant sibling must flow through verbatim without ever being buffered.
+    let upstream = start_search_upstream(BIG_BODY).await;
+    let (proxy, base, pid) = spawn_tenancy_proxy(&upstream).await;
+    assert!(
+        wait_ready(&client, &base).await,
+        "proxy did not become ready"
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let idle = rss_bytes(pid).expect("read idle RSS");
+
+    let peak = peak_rss_during(pid, async {
+        for _ in 0..4 {
+            let resp = client
+                .request(search_request(&base))
+                .await
+                .expect("search request");
+            assert!(
+                resp.status().is_success(),
+                "search status {}",
+                resp.status()
+            );
+            drain(resp.into_body()).await;
+        }
+    })
+    .await;
+
+    assert_bounded("search response", idle, peak);
     drop(proxy);
 }
 

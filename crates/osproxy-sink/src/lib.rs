@@ -34,6 +34,6 @@ pub use memory::MemorySink;
 pub use opensearch::{buffered, stream_body, BodyError, ByteBody, OpenSearchSink};
 pub use read::{
     CountOutcome, CursorOp, CursorOutcome, ForwardOp, ReadOp, ReadOutcome, Reader, SearchOp,
-    SearchOutcome, StreamingForward,
+    SearchOutcome, StreamingForward, StreamingSearch,
 };
 pub use sink::Sink;

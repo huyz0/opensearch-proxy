@@ -402,6 +402,28 @@ impl std::fmt::Debug for StreamingForward {
     }
 }
 
+/// The outcome of a **streaming** search (ADR-014, final stage): the upstream
+/// status and its response body as a live [`ByteBody`](crate::ByteBody) — piped
+/// back through the engine's hit transform without ever being collected. Like
+/// [`StreamingForward`], the body is one-shot, so this carries no derives.
+pub struct StreamingSearch {
+    /// The upstream HTTP status.
+    pub status: u16,
+    /// The upstream response body, streamed back to be transformed on the fly.
+    pub body: crate::ByteBody,
+    /// Whether this search rode a reused pooled connection (NFR-P telemetry).
+    pub pool_reuse: bool,
+}
+
+impl std::fmt::Debug for StreamingSearch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamingSearch")
+            .field("status", &self.status)
+            .field("pool_reuse", &self.pool_reuse)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The outcome of a cursor passthrough: the upstream status and raw body,
 /// forwarded back to the client verbatim.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -498,6 +520,27 @@ pub trait Reader: Send + Sync {
         async {
             Err(SinkError::Transport {
                 kind: "cursor passthrough not supported by this sink",
+            })
+        }
+    }
+
+    /// Runs a search whose **response** streams back (ADR-014, final stage): the
+    /// upstream hits envelope is piped to the engine's hit transform without being
+    /// collected, so a large response (e.g. heavy `aggregations`) never lands in
+    /// memory. The default is **unsupported**; `OpenSearchSink` overrides it with a
+    /// real streamed upstream call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SinkError`] if the sink does not support streaming search or the
+    /// upstream cannot be reached or returns a server error.
+    fn search_stream(
+        &self,
+        _op: SearchOp,
+    ) -> impl std::future::Future<Output = Result<StreamingSearch, SinkError>> + Send {
+        async {
+            Err(SinkError::Transport {
+                kind: "streaming search not supported by this sink",
             })
         }
     }

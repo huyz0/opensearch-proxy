@@ -79,6 +79,7 @@ hyper-util = { version = "0.1", default-features = false }
 # to count real TCP connection opens for pool-reuse telemetry (NFR-P).
 tower-service = { version = "0.3", default-features = false }
 http-body-util = "0.1"
+http-body = "1"
 bytes = "1"
 # etcd v3 client for the reference distributed `DirectiveStore` (osproxy-etcd).
 # default-features off keeps its TLS feature out, so this control-plane adapter

@@ -479,6 +479,54 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         response.with_header("x-request-id", request_id.as_str())
     }
 
+    fn wants_search_stream(&self, endpoint: EndpointKind, query: Option<&str>) -> bool {
+        // Capture must tee the buffered response, so streaming and capture are
+        // mutually exclusive. A scroll-opening search keeps the buffered path: its
+        // `_scroll_id` affinity wrap needs the whole response body. A PIT-pinned
+        // search is detected from the body inside the engine, which falls back to
+        // buffered there.
+        endpoint == EndpointKind::Search && !self.capture.enabled() && !opens_scroll(query)
+    }
+
+    async fn handle_search_stream(&self, req: IngressRequest) -> StreamingResponse {
+        let request_id = self.next_request_id();
+        // `wants_search_stream` does not gate; apply the same TLS + auth + authz
+        // gate as the buffered path before dispatching.
+        let principal = match self.gate(&req, &request_id).await {
+            Ok(principal) => principal,
+            Err(resp) => return to_streaming(resp),
+        };
+        let safe_headers = crate::bearer::without_authorization(&req.headers);
+        // Unlike the forward/bulk streams, the search query body *is* needed and is
+        // the buffered `req.body`; only the response streams.
+        let ctx = RequestCtx::new(
+            &principal,
+            &request_id,
+            req.method,
+            req.endpoint,
+            req.protocol,
+            &req.logical_index,
+            HeaderView::new(&safe_headers),
+            &req.body,
+        )
+        .with_doc_id(req.doc_id.as_deref())
+        .with_query(req.query.as_deref())
+        .with_path(&req.path);
+
+        let (result, _capture) = self.pipeline.search_streamed(&ctx).await;
+        let response = match result {
+            Ok(search) => {
+                self.after_streamed(&request_id, (200..300).contains(&search.status));
+                StreamingResponse::stream(search.status, search.body)
+            }
+            Err(err) => {
+                self.after_streamed(&request_id, false);
+                StreamingResponse::buffered(status_for(&err), error_body(&err))
+            }
+        };
+        response.with_header("x-request-id", request_id.as_str())
+    }
+
     fn wants_bulk_stream(&self, endpoint: EndpointKind, headers: &[(String, String)]) -> bool {
         // Capture must tee the buffered body, so streaming and capture are mutually
         // exclusive; only sync `_bulk` streams (async fan-out keeps the buffered
@@ -576,6 +624,16 @@ impl<A, Z> AppHandler<A, Z> {
             response_body: &response.body,
         });
     }
+}
+
+/// Whether the query string opens a scroll (`scroll=…`). Such a search returns a
+/// `_scroll_id` that must be affinity-wrapped against the whole response body, so
+/// it keeps the buffered path rather than streaming.
+fn opens_scroll(query: Option<&str>) -> bool {
+    query.is_some_and(|q| {
+        q.split('&')
+            .any(|p| p == "scroll" || p.starts_with("scroll="))
+    })
 }
 
 /// Carries a small buffered [`IngressResponse`] (e.g. an auth refusal) as a

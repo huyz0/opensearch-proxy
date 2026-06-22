@@ -241,8 +241,11 @@ pub(crate) fn shape_hits(
     serde_json::to_vec(&top).map_err(|_| internal())
 }
 
-/// Strips one search hit in place into the client's logical view.
-fn shape_hit(hit: &mut Value, logical_index: &str, partition: &str, shape: &ReadShape) {
+/// Strips one search hit in place into the client's logical view. Shared with the
+/// streaming search transform ([`crate::search_scan`]), which frames one hit at a
+/// time and reuses this exact (audited) per-hit strip rather than re-implementing
+/// it — so the isolation boundary lives in one place.
+pub(crate) fn shape_hit(hit: &mut Value, logical_index: &str, partition: &str, shape: &ReadShape) {
     let Some(obj) = hit.as_object_mut() else {
         return;
     };

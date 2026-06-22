@@ -191,9 +191,34 @@ single-doc write streaming deliberately not done (unsound).** Staged:
    buffered. The streamed forward is also exempt from the per-request body-size cap
    (the cap bounds buffered memory; this path buffers nothing). A spawned-binary
    memory test reads the proxy's own `/proc` RSS: a 64 MiB request and a 64 MiB
-   response each grow it ~3–4 MiB, not ~64 MiB. The buffered get-by-id/search
-   responses keep the `Value`/raw-strip path (they transform hits); end-to-end
-   response streaming for the *transformed* paths remains future work.
+   response each grow it ~3–4 MiB, not ~64 MiB. The buffered get-by-id response
+   keeps the `Value`/raw-strip path (it transforms the doc); end-to-end response
+   streaming for the *transformed* search path is the final stage below.
+3b. **Streaming the transformed search response** — DONE: a plain (non-cursor)
+   `_search` now streams its response end to end through the hit transform,
+   never buffering it. The sink gained `Reader::search_stream` →
+   `StreamingSearch` (a live `ByteBody`, sharing the request build/send with the
+   buffered `post_query` via `query_send`); the engine gained a resumable,
+   byte-level `SearchHitsScanner` (`search_scan`) that locates the `hits.hits`
+   array, frames each element and hands it to the **audited** `shape_hit` (the
+   isolation strip is reused, never re-implemented — the only new
+   isolation-relevant code is element *framing*), and forwards every sibling
+   (`took`/`_shards`/`aggregations`) verbatim; `shape_hits_stream`
+   (`search_stream`) wraps the upstream body as a transforming `ByteBody` via a
+   spawn-free `unfold`+`StreamBody` (no `tokio::spawn`); `Pipeline::search_streamed`
+   drives it with the streamed-trace lifecycle; the transport gained
+   `wants_search_stream`/`handle_search_stream` and the server wires them (only
+   when capture is off and the search is not scroll-opening; a PIT-pinned search
+   falls back to the buffered path inside the engine, since its `_scroll_id`
+   affinity wrap needs the whole body). Peak memory is one hit plus one upstream
+   frame, independent of response size. Carve-outs stay buffered: scroll/PIT,
+   `_msearch`, `_count`, get-by-id. **Verified:** a property test pins the
+   streamed output to the buffered `shape_hits` oracle for arbitrary envelopes
+   across arbitrary chunk splits (the single guarantee no framing bug can leak an
+   injected field); targeted scanner unit tests (split mid-string/mid-key, empty
+   hits, decoy sibling `hits` array, `_source` containing structural bytes); an
+   engine wiring test (streamed == buffered search); and a `/proc` RSS test — a
+   64 MiB `aggregations` response grows the proxy ~5 MiB, not ~64 MiB.
 4. **Bulk streaming demux** — DONE: the `_bulk` NDJSON is framed incrementally
    from the inbound stream (`NdjsonReader` over the body's frames) and each op is
    demuxed/dispatched as it is read, reusing the existing flush/gate/re-interleave

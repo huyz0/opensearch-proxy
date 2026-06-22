@@ -61,7 +61,7 @@ pub(crate) async fn serve_request<H: IngressHandler>(
     let c = classify(method, &path);
     // The head, sans body — built before any body work so the streaming decision
     // (which reads only the head) can avoid buffering entirely.
-    let mut head = IngressRequest {
+    let head = IngressRequest {
         method,
         protocol,
         path,
@@ -100,17 +100,27 @@ pub(crate) async fn serve_request<H: IngressHandler>(
         return render(handler.handle_bulk_stream(head, req.into_body()).await);
     }
 
-    // Buffered path: reserve the (declared, else worst-case) size against the
-    // global budget, collect under the cap, then handle. The reservation is held
-    // until the response is rendered.
+    serve_buffered(handler, req.into_body(), head, declared, limits, admission).await
+}
+
+/// The buffered path: reserve the (declared, else worst-case) size against the
+/// global budget, collect under the cap, then dispatch. A streamed-response
+/// `_search` (the query body is small and buffered here; only its response
+/// streams) is dispatched via `handle_search_stream`; everything else via the
+/// buffered `handle`. The reservation is held until the response is rendered.
+async fn serve_buffered<H: IngressHandler>(
+    handler: &H,
+    body: Incoming,
+    mut head: IngressRequest,
+    declared: Option<usize>,
+    limits: IngressLimits,
+    admission: &Arc<Admission>,
+) -> Response<ResponseBody> {
     let reserve = declared.unwrap_or(limits.max_body_bytes);
     let Some(_reservation): Option<Reservation> = admission.try_reserve(reserve) else {
         return render(overloaded_response());
     };
-    let body = match Limited::new(req.into_body(), limits.max_body_bytes)
-        .collect()
-        .await
-    {
+    let collected = match Limited::new(body, limits.max_body_bytes).collect().await {
         Ok(collected) => collected.to_bytes().to_vec(),
         Err(_) => {
             return render(IngressResponse::json(
@@ -119,7 +129,14 @@ pub(crate) async fn serve_request<H: IngressHandler>(
             ))
         }
     };
-    head.body = body;
+    head.body = collected;
+
+    // Streamed-response `_search` (ADR-014, final stage): the upstream hits
+    // envelope is piped back through the hit transform without buffering.
+    if handler.wants_search_stream(head.endpoint, head.query.as_deref()) {
+        return render_forward(handler.handle_search_stream(head).await);
+    }
+
     render(handler.handle(head).await)
 }
 

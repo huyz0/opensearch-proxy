@@ -29,6 +29,7 @@ use serde_json::Value;
 
 use crate::error::RequestError;
 use crate::observe::{error_context, logical_index};
+use crate::search_stream::StreamSearch;
 
 /// How many recent request explanations `/debug/explain` retains per instance.
 const EXPLAIN_CAPACITY: usize = 1024;
@@ -514,6 +515,32 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         match &result {
             Ok(f) => trace.record_egress(EgressInfo {
                 status: f.status,
+                response_bytes: 0,
+            }),
+            Err(err) => trace.record_error(error_context(err)),
+        }
+        self.explain.record(ctx.request_id().clone(), &trace);
+        (result, false)
+    }
+
+    /// Handles a `_search` whose response is streamed back through the hit
+    /// transform (ADR-014, final stage): the upstream body is never buffered — each
+    /// hit is shaped incrementally and every sibling (notably `aggregations`) is
+    /// forwarded verbatim. Same trace lifecycle as
+    /// [`forward_streamed`](Self::forward_streamed): the body length is unknown
+    /// until it flows, so egress records the status with zero bytes. The request
+    /// query body is small and already buffered in `ctx`; only the response
+    /// streams. Returns the result plus `false` — capture is never available on a
+    /// streamed path (and the caller only streams when capture is off).
+    pub async fn search_streamed(
+        &self,
+        ctx: &RequestCtx<'_>,
+    ) -> (Result<StreamSearch, RequestError>, bool) {
+        let mut trace = Self::begin_streamed_trace(ctx);
+        let result = self.run_search_stream(ctx, &mut trace).await;
+        match &result {
+            Ok(s) => trace.record_egress(EgressInfo {
+                status: s.status,
                 response_bytes: 0,
             }),
             Err(err) => trace.record_error(error_context(err)),

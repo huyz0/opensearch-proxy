@@ -31,6 +31,8 @@ mod pit;
 mod plan;
 mod read;
 mod retry;
+mod search_scan;
+mod search_stream;
 
 pub use admin::AdminPolicy;
 pub use asyncwrite::{
@@ -42,3 +44,4 @@ pub use passthrough::PassthroughPolicy;
 pub use pipeline::{Pipeline, PipelineResponse};
 pub use plan::build_write_batch;
 pub use retry::RetryPolicy;
+pub use search_stream::StreamSearch;

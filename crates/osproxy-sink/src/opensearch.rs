@@ -37,7 +37,7 @@ use crate::conn::{CountingConnector, PoolStats};
 use crate::error::SinkError;
 use crate::read::{
     CountOutcome, CursorOp, CursorOutcome, ForwardOp, ReadOp, ReadOutcome, Reader, SearchOp,
-    SearchOutcome, StreamingForward,
+    SearchOutcome, StreamingForward, StreamingSearch,
 };
 use crate::sink::Sink;
 use crate::wire::{build_request, doc_uri, parse_result};
@@ -337,11 +337,16 @@ impl OpenSearchSink {
 
     /// POSTs a (partition-filtered) query body to `{index}/{verb}` and returns
     /// the upstream status and raw response body. Shared by search and count.
-    async fn post_query(
+    /// Sends a query op to `verb` (`_search`/`_count`) and returns the raw
+    /// upstream response without reading the body — shared by the buffered
+    /// [`post_query`](Self::post_query) and the streaming
+    /// [`search_stream`](Reader::search_stream), which differ only in whether they
+    /// collect the body or pipe it.
+    async fn query_send(
         &self,
         verb: &str,
         op: &SearchOp,
-    ) -> Result<(u16, Vec<u8>, bool), SinkError> {
+    ) -> Result<(u16, Response<Incoming>, bool), SinkError> {
         let pool = self.pool_for(&op.target.cluster, op.target.endpoint.as_deref())?;
         let base = format!("{}/{}/{verb}", pool.base, op.target.index.as_str());
         // Append the engine's allow-listed query (e.g. `scroll=1m`); never the
@@ -370,6 +375,15 @@ impl OpenSearchSink {
             .await?;
         let status = resp.status().as_u16();
         reject_5xx(status)?;
+        Ok((status, resp, reused))
+    }
+
+    async fn post_query(
+        &self,
+        verb: &str,
+        op: &SearchOp,
+    ) -> Result<(u16, Vec<u8>, bool), SinkError> {
+        let (status, resp, reused) = self.query_send(verb, op).await?;
         let body = resp
             .into_body()
             .collect()
@@ -534,6 +548,17 @@ impl Reader for OpenSearchSink {
             .to_bytes()
             .to_vec();
         Ok(CursorOutcome::new(status, body).with_pool_reuse(reused))
+    }
+
+    async fn search_stream(&self, op: SearchOp) -> Result<StreamingSearch, SinkError> {
+        // The search response streams straight back to be transformed on the fly
+        // by the engine's hit scanner — never collected here (ADR-014).
+        let (status, resp, reused) = self.query_send("_search", &op).await?;
+        Ok(StreamingSearch {
+            status,
+            body: stream_body(resp.into_body()),
+            pool_reuse: reused,
+        })
     }
 
     async fn forward_stream(

@@ -47,6 +47,32 @@ pub trait IngressHandler: Send + Sync + 'static {
         }
     }
 
+    /// Whether this `_search` should have its **response streamed** back through
+    /// the hit transform (ADR-014, final stage) rather than buffered: decided from
+    /// the endpoint + query (e.g. a scroll-opening search keeps the buffered path).
+    /// The request body is still buffered first (it is small); only the response
+    /// streams. `false` by default.
+    fn wants_search_stream(&self, _endpoint: EndpointKind, _query: Option<&str>) -> bool {
+        false
+    }
+
+    /// Handles a streamed-response `_search`: `req` carries the (buffered) query
+    /// body; the returned [`StreamingResponse`]'s body is the upstream hits
+    /// envelope piped back through the hit transform without buffering. Called only
+    /// when [`wants_search_stream`](Self::wants_search_stream) returned `true`.
+    /// Default `500`.
+    fn handle_search_stream(
+        &self,
+        _req: IngressRequest,
+    ) -> impl Future<Output = StreamingResponse> + Send {
+        async {
+            StreamingResponse::buffered(
+                500,
+                br#"{"error":"search_stream_not_implemented"}"#.to_vec(),
+            )
+        }
+    }
+
     /// Whether this `_bulk` request should be **stream-demuxed** (ADR-014 stage 4)
     /// rather than buffered: decided from the endpoint + headers (e.g. the write
     /// mode) alone, so the transport can avoid buffering the whole batch. `false`

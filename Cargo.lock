@@ -1734,6 +1734,7 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "futures-util",
+ "http-body",
  "http-body-util",
  "osproxy-control",
  "osproxy-core",
