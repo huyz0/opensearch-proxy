@@ -229,12 +229,39 @@ mod fuzz {
             })
     }
 
-    /// A full search-response envelope: optional siblings (including an arbitrary
-    /// `aggregations` that may itself nest a `hits` array — which must be skipped),
-    /// wrapping the `hits.hits` array of generated hits.
+    /// The value placed at the top-level `hits` key. Weighted toward the real
+    /// OpenSearch shape (`{total, hits: [..]}`), but deliberately also generates
+    /// the degenerate shapes the buffered oracle handles by *not* shaping — a root
+    /// `hits` that is directly an array, an inner `hits` that is not an array, and
+    /// an arbitrary scalar/value — so the streamed↔buffered equality is fuzzed over
+    /// them too (the regression that motivated `(2, b'[')` lived in exactly this
+    /// class and was previously only a hand-written case).
+    fn hits_field() -> impl Strategy<Value = Value> {
+        prop_oneof![
+            // The real shape: `hits.hits` is the array the proxy shapes.
+            8 => prop::collection::vec(hit(), 0..5)
+                .prop_map(|hits: Vec<Value>| json!({ "total": { "value": hits.len() }, "hits": hits })),
+            // A root `hits` that is *directly* an array — no `hits.hits` to shape,
+            // so it must pass through verbatim (`_tenant` and all).
+            1 => prop::collection::vec(hit(), 0..5).prop_map(Value::Array),
+            // An object whose inner `hits` is not an array (object/scalar): nothing
+            // to shape.
+            1 => json_value().prop_map(|inner| json!({ "total": 1, "hits": inner })),
+            // An arbitrary value (scalar, array, or object that may itself nest a
+            // `hits` key the scanner must not mistake for the target).
+            1 => json_value(),
+        ]
+    }
+
+    /// A full search-response envelope. Most cases are a well-formed object with
+    /// optional siblings (`_shards`, an arbitrary `aggregations` that may itself
+    /// nest a `hits` array, which must be skipped) wrapping an optional [`hits_field`];
+    /// a fraction are a non-object root (array/scalar) with nothing to shape, to
+    /// exercise the `SeekRoot`→passthrough path. Every case is valid JSON, so the
+    /// oracle never errors and the assertion is pure streamed↔buffered equality.
     fn envelope() -> impl Strategy<Value = Value> {
-        (
-            prop::collection::vec(hit(), 0..5),
+        let structured = (
+            proptest::option::of(hits_field()),
             proptest::option::of(json_value()),
             proptest::option::of(json_value()),
         )
@@ -244,15 +271,19 @@ mod fuzz {
                 if let Some(s) = shards {
                     top.insert("_shards".to_owned(), s);
                 }
-                top.insert(
-                    "hits".to_owned(),
-                    json!({ "total": { "value": hits.len() }, "hits": hits }),
-                );
+                if let Some(h) = hits {
+                    top.insert("hits".to_owned(), h);
+                }
                 if let Some(a) = aggs {
                     top.insert("aggregations".to_owned(), a);
                 }
                 Value::Object(top)
-            })
+            });
+        prop_oneof![
+            10 => structured,
+            // A non-object root: valid JSON with no object to scan, forwarded whole.
+            1 => json_value(),
+        ]
     }
 
     proptest! {
