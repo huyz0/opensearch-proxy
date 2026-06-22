@@ -42,9 +42,21 @@ pub(crate) struct HitShaper {
 
 impl HitShaper {
     /// Transforms one framed hit (a complete JSON value) into the client's
-    /// logical view, reusing the audited [`shape_hit`]. A non-value element
-    /// cannot occur in well-formed upstream JSON; it is passed through so the
-    /// scanner never panics on malformed input.
+    /// logical view, reusing the audited [`shape_hit`].
+    ///
+    /// The framed bytes parse as a single hit, which `serde_json` deserializes
+    /// under its 128-level recursion limit — comfortably above OpenSearch's
+    /// default `index.mapping.depth.limit` of 20, so a real hit always parses and
+    /// is stripped. The fallback to raw bytes covers only the cases that cannot
+    /// occur from a well-formed upstream: a scalar element (no `_source` to strip,
+    /// so `shape_hit` no-ops anyway) or a hit so deeply nested that it exceeds the
+    /// recursion limit. The latter would forward the hit *unshaped*; that is a
+    /// deliberate, bounded trade — it discloses the proxy's internal field/id
+    /// scheme to the **same tenant** that owns the document (the isolation filter
+    /// guarantees a hit is never another tenant's), never cross-tenant data, and
+    /// it keeps the response structurally valid rather than dropping a hit and
+    /// corrupting the array framing. Reserialization cannot fail for a parsed
+    /// `Value`; that arm is unreachable in practice.
     fn transform(&self, raw: &[u8]) -> Vec<u8> {
         match serde_json::from_slice::<Value>(raw) {
             Ok(mut hit) => {
@@ -301,15 +313,18 @@ impl SearchHitsScanner {
         }
         self.out.push(b);
         if self.key_is_hits {
-            // The root `hits` value must be an object; the inner `hits` value must
-            // be an array. Anything else → no hits to shape (matching the buffered
-            // path) → forward.
+            // The target is `hits.hits` (the root `hits` is an object, whose inner
+            // `hits` is the array). The buffered oracle only shapes that nested
+            // array — a root-level `hits` whose value is *directly* an array is left
+            // untouched there (`Value::get_mut("hits")` on an array yields `None`),
+            // so it must pass through here too. Hence the array is entered only at
+            // `level` 2; anything else → no hits to shape → forward.
             match (self.level, b) {
                 (1, b'{') => {
                     self.level = 2;
                     self.phase = Phase::ObjExpectKey;
                 }
-                (_, b'[') => self.phase = Phase::ArrExpectElem,
+                (2, b'[') => self.phase = Phase::ArrExpectElem,
                 _ => self.phase = Phase::Passthrough,
             }
         } else {

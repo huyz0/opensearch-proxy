@@ -99,6 +99,18 @@ fn hits_value_not_an_object_passes_through() {
 }
 
 #[test]
+fn root_hits_directly_an_array_passes_through() {
+    // A degenerate root `hits` whose value is *directly* an array (not the real
+    // `hits.hits` nesting OpenSearch emits) must NOT be shaped: the buffered oracle
+    // only shapes the nested `hits.hits`, so a root-level array is forwarded
+    // verbatim — `_tenant` and all. The scanner must agree (the array is entered
+    // only at the inner level), or the two paths would diverge on this input.
+    assert_matches_oracle_for_all_splits(
+        br#"{"hits":[{"_index":"shared","_id":"acme:7","_source":{"_tenant":"acme"}}]}"#,
+    );
+}
+
+#[test]
 fn source_string_containing_structural_bytes() {
     // A `_source` string value that contains `]`, `}`, `"hits"`, and escaped
     // quotes must not confuse element framing.
