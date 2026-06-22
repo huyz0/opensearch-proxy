@@ -75,8 +75,10 @@ Edge cases that MUST be tested:
 `_search`, `_count`, `_msearch`:
 
 1. Resolve partition → single placement (single-cluster; never fan-out).
-2. `SharedIndex`: wrap client query in `bool { must:[client], filter:[term(field=P)] }`;
-   record `ResponseTransform::StripFields(injected)`.
+2. `SharedIndex`: wrap client query in `bool { must:[client], filter:[term(field=P)] }`.
+   The response field-strip is derived from the decision's `body_transform` (the
+   injected names), not a separate decision field — see `read::read_shape` /
+   `filter_terms` (`docs/02` §1).
 3. Dispatch to the one target.
 4. Response: strip injected fields from each hit (and from `fields`/`_source`
    projections) so the tenant sees the logical document.

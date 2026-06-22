@@ -169,9 +169,9 @@ pub enum PartitionKeySpec {
     /// A JSON path into the document body (ingest) — e.g. "$.tenant_id".
     BodyField(JsonPath),
     /// A request header carries it (e.g. resolved by an upstream auth gateway).
-    Header(HeaderName),
-    /// Derived from the authenticated principal.
-    Principal,
+    Header(String),
+    /// Derived from a named attribute of the authenticated principal.
+    PrincipalAttr(String),
     /// A composite: try in order until one resolves.
     AnyOf(Vec<PartitionKeySpec>),
 }
@@ -231,7 +231,7 @@ pub trait Authenticator: Send + Sync {
 /// evolve independently.
 pub trait Authorizer: Send + Sync {
     async fn authorize(&self, principal: &Principal, action: &Action)
-        -> Result<Authorized, AuthError>;
+        -> Result<(), AuthError>;
 }
 ```
 

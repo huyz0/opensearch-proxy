@@ -31,11 +31,24 @@ osproxy/
     osproxy-sink        # Sink trait + OpenSearchSink (Kafka/QueueSink later).
     osproxy-control     # watched-store client: placement table + diagnostics directives, epochs.
     osproxy-observe     # tracing layers, directive evaluation, /debug/explain assembly.
-    osproxy-config      # typed config load/validate (figment/serde), no business logic.
+    osproxy-otlp        # OTLP HTTP exporter (POSTs shape-only spans to a collector).
+    osproxy-etcd        # reference distributed DirectiveStore over etcd (opt-in `etcd` feature).
+    osproxy-config      # typed config load/validate (hand-rolled file→env→flags), no business logic.
+    osproxy-capture     # Capture seam for full-fidelity traffic capture (no broker dep).
+    osproxy-kafka       # queue-backed capture: CaptureEnvelope + Producer seam (opt-in).
+    osproxy-kafka-krafka# portable pure-Rust krafka producer (FIPS-clean).
+    osproxy-kafka-wal   # durable on-disk spill buffer (at-least-once capture).
+    osproxy-kafka-rdkafka # librdkafka binding; NOT a workspace member (native build).
+    osproxy-bench       # pure NFR-P harness (latency/scalability/footprint; test-only).
     osproxy-server      # the binary. Wires everything; owns main(), signals, lifecycle.
   xtask/                # build/test/lint/coverage automation (cargo xtask ...).
   docs/
 ```
+
+The optional crates (`otlp`, `etcd`, `capture`, the `kafka-*` family) are opt-in
+behind `osproxy-server` Cargo features, so the default binary links none of them.
+The authoritative, always-current crate list lives in
+[docs/guide/04-components.md](guide/04-components.md).
 
 **Dependency rules (enforced in CI, see [08](08-engineering-standards.md)):**
 

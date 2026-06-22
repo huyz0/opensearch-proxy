@@ -44,8 +44,8 @@ so you never touch `RouteDecision` plumbing.
 ```rust
 use osproxy_core::{ClusterId, Epoch, FieldName, IndexName, PartitionId};
 use osproxy_spi::{
-    DocIdRule, IdTemplate, InjectedField, InjectedValue, JsonPath, Placement, PlacementAt,
-    PartitionKeySpec, SensitivitySpec, SpiError, TenancySpi,
+    BodyDoc, DocIdRule, IdTemplate, InjectedField, InjectedValue, JsonPath, Placement, PlacementAt,
+    PartitionKeySpec, RequestCtx, SensitivitySpec, SpiError, TenancySpi,
 };
 
 struct MyTenancy;
@@ -54,11 +54,11 @@ impl TenancySpi for MyTenancy {
     /// Resolve the partition (tenant) id. Here we defer to the declarative
     /// resolver, naming a body field `tenant_id`. (Override the body to decode an
     /// encoded header or combine inputs — see "Deriving the partition with code".)
-    fn resolve_partition(&self, ctx: &RequestCtx<'_>, doc: Option<&serde_json::Value>)
+    fn resolve_partition(&self, ctx: &RequestCtx<'_>, body: BodyDoc<'_>)
         -> Result<PartitionId, SpiError>
     {
         osproxy_tenancy::resolve_partition_spec(
-            &PartitionKeySpec::BodyField(JsonPath::new("tenant_id")), ctx, doc)
+            &PartitionKeySpec::BodyField(JsonPath::new("tenant_id")), ctx, body)
     }
 
     /// How to build the physical document id. For SharedIndex the partition id is
@@ -142,12 +142,14 @@ attempted:
 When the id is not sitting in a header verbatim (a signed token, a base64 blob, a
 claim inside a structured header), write the `resolve_partition` body yourself.
 You get the full `RequestCtx` (headers, principal, path, query, body) and the
-parsed document, and **you** pick the order — decode first, then fall back to the
+body as a `BodyDoc` — a byte-scan view, **not** a parsed `serde_json::Value` tree
+(read a scalar with `body.scalar(path)`; the proxy never materializes the doc,
+ADR-014). **You** pick the order — decode first, then fall back to the
 declarative resolver if you like:
 
 ```rust
 impl TenancySpi for MyTenancy {
-    fn resolve_partition(&self, ctx: &RequestCtx<'_>, doc: Option<&serde_json::Value>)
+    fn resolve_partition(&self, ctx: &RequestCtx<'_>, body: BodyDoc<'_>)
         -> Result<PartitionId, SpiError>
     {
         if let Some(raw) = ctx.headers().get("x-tenant-token") {
@@ -159,7 +161,7 @@ impl TenancySpi for MyTenancy {
         }
         // Fall back to a declarative source for requests the token path misses.
         osproxy_tenancy::resolve_partition_spec(
-            &PartitionKeySpec::Header("x-tenant".to_owned()), ctx, doc)
+            &PartitionKeySpec::Header("x-tenant".to_owned()), ctx, body)
     }
     // … doc_id_rule / injected_fields / … as above.
 }
