@@ -1,7 +1,7 @@
 # 13: Security Model
 
 osproxy sits on the data path of a multi-tenant store, so its security posture is
-a first-class design concern, not an add-on. This doc consolidates the threat
+designed in from the start, not bolted on. This doc consolidates the threat
 model and names where each control lives; the controls themselves are specified
 in the docs referenced inline. The default posture is **fail-closed**: the safe
 direction is the default, and an unsafe configuration is a loud error, not a

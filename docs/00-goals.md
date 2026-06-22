@@ -2,11 +2,10 @@
 
 ## 1. One-sentence goal
 
-Build a high-performance, low-resource, low-latency OpenSearch routing proxy,
-consumable as a Rust library, that routes each request to the correct physical
-placement based on a pluggable partition-based placement policy, with
-first-class observability designed for LLM-driven debugging and a FIPS-capable
-crypto build.
+Build a low-latency, low-footprint OpenSearch routing proxy, consumable as a Rust
+library, that routes each request to the correct physical placement from a
+pluggable partition policy, with observability designed for LLM-driven debugging
+and a FIPS-capable crypto build.
 
 ## 2. Primary use cases
 

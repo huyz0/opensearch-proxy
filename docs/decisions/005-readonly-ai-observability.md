@@ -4,7 +4,7 @@
 
 ## Context
 
-A first-class requirement: develop with AI/LLMs such that a human never has to
+A core requirement: develop with AI/LLMs such that a human never has to
 drop in to debug. The user clarified the AI should **observe** to debug, not
 **change** things, and to be careful about security (sensitive data).
 
