@@ -55,8 +55,11 @@ impl HitShaper {
     /// scheme to the **same tenant** that owns the document (the isolation filter
     /// guarantees a hit is never another tenant's), never cross-tenant data, and
     /// it keeps the response structurally valid rather than dropping a hit and
-    /// corrupting the array framing. Reserialization cannot fail for a parsed
-    /// `Value`; that arm is unreachable in practice.
+    /// corrupting the array framing. The inner `unwrap_or_else` returns the
+    /// *unstripped* `raw` on a reserialization failure — which would re-expose the
+    /// injected fields of an already-stripped hit — but reserializing a parsed
+    /// `serde_json::Value` cannot fail, so that arm is unreachable; it is a
+    /// total-function fallback, not a real strip-bypass path.
     fn transform(&self, raw: &[u8]) -> Vec<u8> {
         match serde_json::from_slice::<Value>(raw) {
             Ok(mut hit) => {
