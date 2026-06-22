@@ -216,9 +216,31 @@ single-doc write streaming deliberately not done (unsound).** Staged:
    streamed output to the buffered `shape_hits` oracle for arbitrary envelopes
    across arbitrary chunk splits (the single guarantee no framing bug can leak an
    injected field); targeted scanner unit tests (split mid-string/mid-key, empty
-   hits, decoy sibling `hits` array, `_source` containing structural bytes); an
-   engine wiring test (streamed == buffered search); and a `/proc` RSS test — a
-   64 MiB `aggregations` response grows the proxy ~5 MiB, not ~64 MiB.
+   hits, decoy sibling `hits` array, `_source` containing structural bytes, a root
+   `hits` that is *directly* an array — which must pass through, matching the
+   oracle); engine wiring tests (streamed == buffered search; a streamed PIT search
+   falls back to the buffered cursor path and still routes to the pinned cluster);
+   streaming-glue tests over a real multi-frame `ByteBody` (reassembly across
+   arbitrary frame boundaries incl. single-byte frames, skipped empty frames, and
+   upstream-error propagation); and a `/proc` RSS test — a 64 MiB `aggregations`
+   response grows the proxy ~5 MiB, not ~64 MiB.
+
+   *Known, accepted limitations of the streamed search path (consequences of
+   committing the HTTP status before the body is seen):*
+   - **Errors cannot be reproduced after headers.** The buffered path can turn a
+     malformed/invalid-JSON upstream body into a request error; the streamed path
+     has already sent `200`, so a malformed body is forwarded as-is (and a
+     mid-stream upstream failure surfaces as a reset stream, not a clean error
+     body). This only affects a *broken upstream* — the trusted OpenSearch cluster
+     — and never leaks cross-tenant data (a non-hits body has nothing to strip).
+   - **One hit must parse under serde's 128-level recursion limit** to be stripped.
+     That is far above OpenSearch's default `index.mapping.depth.limit` (20), so a
+     real hit always parses; a hit beyond it is forwarded unshaped, disclosing the
+     proxy's internal id/field scheme to the *same* tenant that owns the document
+     (never another tenant — the isolation filter still bounds the result set).
+   - **`response_bytes` is recorded as 0** for a streamed search (the body is never
+     buffered to measure), so `/metrics` and `/debug/explain` under-report egress
+     size for this path. Shape-only telemetry (status, pool reuse, trace) is intact.
 4. **Bulk streaming demux** — DONE: the `_bulk` NDJSON is framed incrementally
    from the inbound stream (`NdjsonReader` over the body's frames) and each op is
    demuxed/dispatched as it is read, reusing the existing flush/gate/re-interleave

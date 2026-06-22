@@ -61,12 +61,21 @@ pub struct RouteDecision {
     pub upstream_protocol: Protocol,     // may differ from ingress protocol
     pub header_ops: Vec<HeaderOp>,       // Add | Remove | Replace
     pub body_transform: BodyTransform,   // None | Inject | ConstructId | Both
-    pub query_rewrite: QueryRewrite,     // None | PartitionFilter { field, value }
-    pub response_transform: ResponseTransform, // None | StripFields(Vec<FieldName>)
-    pub affinity: Affinity,              // None | Pin { cursor_kind } (scroll/PIT)
-    pub epoch: PlacementEpoch,           // stamped; mismatch at sink => retryable reject
+    pub epoch: Epoch,                    // stamped; mismatch at sink => retryable reject
 }
 ```
+
+> **Read-path transforms are derived, not separate fields.** An earlier draft of
+> this struct carried explicit `query_rewrite`, `response_transform`, and
+> `affinity` members. They were not added: the read path derives all three from
+> what the decision already carries, so they cannot drift out of sync with the
+> write path. The mandatory partition **query filter** and the response **field
+> strip** are both computed from `body_transform` (the injected `PartitionId`
+> field is the isolation key — see `osproxy-engine`'s `read::filter_terms` /
+> `read_shape`), and **cursor affinity** is handled by the engine's cursor signer
+> on the scroll/PIT endpoints rather than a per-decision flag. This is the real
+> shape in `osproxy-spi::decision`; the matching is what keeps write-inject and
+> read-strip provably inverse (the round-trip property test, [09](09-testing-and-quality.md)).
 
 `Target`, `BodyTransform`, etc. are defined in `osproxy-core` and documented
 there. Key ones:
@@ -104,10 +113,14 @@ pub trait TenancySpi: Send + Sync + 'static {
     /// declarative `osproxy_tenancy::resolve_partition_spec` (naming a body
     /// field / header / principal attr); override the body to decode an encoded
     /// header, parse a token, or combine inputs — you choose the order.
+    ///
+    /// `body` is a [`BodyDoc`] view, NOT a parsed `serde_json::Value`: the proxy
+    /// scans the raw bytes on demand for the one scalar the partition key needs,
+    /// so no JSON tree is built (ADR-014, INV-MEM). Read it with `body.scalar(path)`.
     fn resolve_partition(
         &self,
         ctx: &RequestCtx<'_>,
-        doc: Option<&serde_json::Value>,
+        body: BodyDoc<'_>,
     ) -> Result<PartitionId, SpiError>;
 
     /// Optional rule to construct the document `_id` (and `_routing`).
@@ -185,11 +198,28 @@ pub trait CryptoProvider: Send + Sync {
 }
 
 /// Where writes go. OpenSearchSink now; QueueSink (Kafka) later for the
-/// redundancy mode — same RouteDecision feeds both (docs/00 §non-goals).
+/// redundancy mode — same RouteDecision feeds both (docs/00 §non-goals). The
+/// per-op `Target` rides inside the batch (each `WriteOp` carries its own), so
+/// `write` takes no separate target argument.
 pub trait Sink: Send + Sync {
-    async fn write(&self, target: &Target, batch: WriteBatch)
-        -> Result<WriteAck, SinkError>;
+    async fn write(&self, batch: WriteBatch) -> Result<WriteAck, SinkError>;
 }
+
+/// The read side is a sibling trait, `Reader`, so a write-only sink need not
+/// implement it. It carries the by-id, search, count, and cursor ops, each with a
+/// buffered and (where memory matters) a streaming variant:
+///
+/// ```rust,ignore
+/// pub trait Reader: Send + Sync {
+///     async fn get(&self, op: ReadOp) -> Result<ReadOutcome, SinkError>;
+///     async fn search(&self, op: SearchOp) -> Result<SearchOutcome, SinkError>;
+///     async fn count(&self, op: SearchOp) -> Result<CountOutcome, SinkError>;
+///     async fn cursor(&self, op: CursorOp) -> Result<CursorOutcome, SinkError>;
+///     // Streaming variants (default: unsupported) — response piped back,
+///     // never buffered (ADR-014): `search_stream`, `forward_stream`.
+///     async fn search_stream(&self, op: SearchOp) -> Result<StreamingSearch, SinkError>;
+/// }
+/// ```
 
 /// Authenticates a client and returns the principal. mTLS + token.
 pub trait Authenticator: Send + Sync {

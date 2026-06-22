@@ -84,8 +84,13 @@ impl BodyTransform {
 /// from; it is stamped onto the write so the sink can reject a stale-epoch write
 /// during a migration (`docs/06` §2).
 ///
-/// Read-path concerns (query filter, response strip, cursor affinity) arrive in
-/// M2/M5 and will extend this struct additively (`docs/11`).
+/// Read-path concerns are **derived**, not separate fields: the mandatory
+/// partition query filter and the response field-strip are both computed from
+/// [`BodyTransform`] (the injected `PartitionId` field is the isolation key — see
+/// `osproxy-engine`'s `read` module), and cursor (scroll/PIT) affinity is handled
+/// by the engine's cursor signer on those endpoints. Deriving them from the same
+/// `body_transform` that drives the write-path inject is what keeps the two
+/// provably inverse (`docs/02`, round-trip property test in `docs/09`).
 ///
 /// # Examples
 ///

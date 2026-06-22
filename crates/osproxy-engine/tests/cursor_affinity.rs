@@ -442,6 +442,62 @@ async fn a_pit_search_routes_to_the_pit_cluster_and_substitutes_the_real_id() {
 }
 
 #[tokio::test]
+async fn a_streamed_pit_search_falls_back_to_the_buffered_cursor_path() {
+    use http_body_util::BodyExt as _;
+    // The streaming search entry point must detect a PIT in the body and fall back
+    // to the buffered cursor path (the `_scroll_id`/PIT affinity wrap needs the
+    // whole response body), routing to the PIT's pinned cluster exactly like the
+    // buffered `search()` — the carve-out the design relies on.
+    let signer = Arc::new(FnvSigner(17));
+    let pit = cursor::wrap(signer.as_ref(), &ClusterId::from("us-9"), "RAWPIT");
+    let (p, seen) = pipeline(Some(signer));
+    let principal = Principal::new(osproxy_core::PrincipalId::from("svc"));
+    let rid = RequestId::from("sps");
+    let headers: Vec<(String, String)> = vec![];
+    let body =
+        format!(r#"{{"query":{{"match_all":{{}}}},"pit":{{"id":"{pit}"}},"tenant_id":"acme"}}"#);
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::Search,
+        Protocol::Http1,
+        "",
+        HeaderView::new(&headers),
+        body.as_bytes(),
+    );
+
+    let (result, capture) = p.search_streamed(&ctx).await;
+    assert!(!capture, "streamed paths never offer capture");
+    let stream = result.expect("streamed pit search ok");
+    assert_eq!(stream.status, 200);
+    let bytes = stream.body.collect().await.unwrap().to_bytes().to_vec();
+
+    // It took the buffered PIT path: routed to the PIT's pinned cluster (not the
+    // tenant's resolved `eu-1`), substituting the real id and applying the filter.
+    let op = seen.lock().unwrap().clone().unwrap();
+    assert_eq!(
+        op.cluster,
+        ClusterId::from("us-9"),
+        "streamed PIT search must still route to the pinned cluster"
+    );
+    assert_eq!(op.path, "/_search");
+    let forwarded = String::from_utf8(op.body).unwrap();
+    assert!(forwarded.contains("RAWPIT"), "real pit id substituted");
+    assert!(
+        !forwarded.contains(&pit),
+        "wrapped id stripped before upstream"
+    );
+    assert!(
+        forwarded.contains(r#""term":{"_tenant":"acme"}"#),
+        "the partition filter must be applied to a streamed PIT search: {forwarded}"
+    );
+    // And the client receives the (buffered) hits envelope, not a stream error.
+    let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(doc.get("hits").is_some(), "buffered fallback body returned");
+}
+
+#[tokio::test]
 async fn a_forged_pit_in_a_search_body_fails_closed_without_dispatch() {
     // The PIT-search entry point is the isolation-critical one: a search whose
     // body carries a `pit.id` signed with a foreign key must be rejected before

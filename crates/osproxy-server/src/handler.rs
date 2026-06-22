@@ -387,19 +387,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         // partition header, `traceparent`, and `x-debug-directive` are preserved —
         // the engine still needs them.
         let safe_headers = crate::bearer::without_authorization(&req.headers);
-        let ctx = RequestCtx::new(
-            &principal,
-            &request_id,
-            req.method,
-            req.endpoint,
-            req.protocol,
-            &req.logical_index,
-            HeaderView::new(&safe_headers),
-            &req.body,
-        )
-        .with_doc_id(req.doc_id.as_deref())
-        .with_query(req.query.as_deref())
-        .with_path(&req.path);
+        let ctx = build_ctx(&req, &principal, &request_id, &safe_headers);
 
         // Echo the request id so a client (or LLM) can fetch its
         // /debug/explain/{id} afterward. `should_capture` is the live per-request
@@ -448,19 +436,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
 
         let safe_headers = crate::bearer::without_authorization(&req.headers);
         // The body is the streamed `body` argument, not `req.body` (empty here).
-        let ctx = RequestCtx::new(
-            &principal,
-            &request_id,
-            req.method,
-            req.endpoint,
-            req.protocol,
-            &req.logical_index,
-            HeaderView::new(&safe_headers),
-            &req.body,
-        )
-        .with_doc_id(req.doc_id.as_deref())
-        .with_query(req.query.as_deref())
-        .with_path(&req.path);
+        let ctx = build_ctx(&req, &principal, &request_id, &safe_headers);
 
         // Both directions stream: the request body pipes upstream, the upstream
         // response pipes back — neither buffered.
@@ -499,19 +475,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         let safe_headers = crate::bearer::without_authorization(&req.headers);
         // Unlike the forward/bulk streams, the search query body *is* needed and is
         // the buffered `req.body`; only the response streams.
-        let ctx = RequestCtx::new(
-            &principal,
-            &request_id,
-            req.method,
-            req.endpoint,
-            req.protocol,
-            &req.logical_index,
-            HeaderView::new(&safe_headers),
-            &req.body,
-        )
-        .with_doc_id(req.doc_id.as_deref())
-        .with_query(req.query.as_deref())
-        .with_path(&req.path);
+        let ctx = build_ctx(&req, &principal, &request_id, &safe_headers);
 
         let (result, _capture) = self.pipeline.search_streamed(&ctx).await;
         let response = match result {
@@ -544,19 +508,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         };
         let safe_headers = crate::bearer::without_authorization(&req.headers);
         // The body is the streamed NDJSON batch, not `req.body` (empty here).
-        let ctx = RequestCtx::new(
-            &principal,
-            &request_id,
-            req.method,
-            req.endpoint,
-            req.protocol,
-            &req.logical_index,
-            HeaderView::new(&safe_headers),
-            &req.body,
-        )
-        .with_doc_id(req.doc_id.as_deref())
-        .with_query(req.query.as_deref())
-        .with_path(&req.path);
+        let ctx = build_ctx(&req, &principal, &request_id, &safe_headers);
 
         let stream = osproxy_sink::stream_body(body);
         let (result, should_capture) = self.pipeline.handle_bulk_streamed(&ctx, stream).await;
@@ -645,6 +597,33 @@ fn to_streaming(resp: IngressResponse) -> StreamingResponse {
     streaming
 }
 
+/// Builds the engine [`RequestCtx`] from an authenticated request — the one place
+/// the four data-plane entry points (`handle`, `handle_forward`,
+/// `handle_search_stream`, `handle_bulk_stream`) share, so they cannot drift in
+/// which fields they wire. The borrows (`principal`, `request_id`, `safe_headers`)
+/// are caller-owned locals; the body always rides as `req.body` (empty on the
+/// streamed paths, where the real body travels beside the ctx).
+fn build_ctx<'a>(
+    req: &'a IngressRequest,
+    principal: &'a Principal,
+    request_id: &'a RequestId,
+    safe_headers: &'a [(String, String)],
+) -> RequestCtx<'a> {
+    RequestCtx::new(
+        principal,
+        request_id,
+        req.method,
+        req.endpoint,
+        req.protocol,
+        &req.logical_index,
+        HeaderView::new(safe_headers),
+        &req.body,
+    )
+    .with_doc_id(req.doc_id.as_deref())
+    .with_query(req.query.as_deref())
+    .with_path(&req.path)
+}
+
 /// Extracts client credentials from a request: a bearer token from
 /// `Authorization` and the verified mTLS client-certificate identity, if any.
 fn credentials_from(req: &IngressRequest) -> ClientCredentials {
@@ -684,3 +663,7 @@ fn error_body(err: &RequestError) -> Vec<u8> {
     )
     .into_bytes()
 }
+
+#[cfg(test)]
+#[path = "handler_tests.rs"]
+mod tests;

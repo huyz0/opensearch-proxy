@@ -162,8 +162,12 @@ async fn next_frame(stage: Stage) -> Option<(Result<Frame<Bytes>, BodyError>, St
             }
             Some(Err(err)) => return Some((Err(err), Stage::Done)),
             None => {
-                // Upstream ended: emit the scanner's final bytes (normally empty —
-                // everything is emitted incrementally), then stop.
+                // Upstream ended cleanly: emit the scanner's final bytes, then stop.
+                // For well-formed input this tail is always empty — every hit and
+                // sibling is emitted incrementally as it closes — so the non-empty
+                // arm is defensive (it would carry trailing bytes only if a future
+                // change deferred emission). A truncated body leaves its partial hit
+                // unparsed and unemitted, so it is dropped, never leaked unshaped.
                 let tail = active.scanner.finish();
                 return if tail.is_empty() {
                     None
@@ -174,3 +178,7 @@ async fn next_frame(stage: Stage) -> Option<(Result<Frame<Bytes>, BodyError>, St
         }
     }
 }
+
+#[cfg(test)]
+#[path = "search_stream_tests.rs"]
+mod tests;
