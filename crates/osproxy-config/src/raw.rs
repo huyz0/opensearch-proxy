@@ -30,6 +30,7 @@ pub(crate) const KEYS: &[&str] = &[
     "diag_baseline",
     "debug_directive_key",
     "directive_admin_token",
+    "debug_endpoints",
     "log_diagnostic_captures",
     "admin_passthrough_cluster",
     "admin_passthrough_prefixes",

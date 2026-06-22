@@ -23,10 +23,21 @@ fn defaults_apply_when_nothing_is_set() {
     assert!(cfg.cursor_affinity_key.is_none());
     assert_eq!(cfg.observability.diag_baseline, DiagBaseline::Shape);
     assert_eq!(cfg.observability.service_name, "osproxy");
+    assert!(cfg.observability.debug_endpoints, "/debug/* on by default");
     assert!(
         cfg.require_tls_for_mutation,
         "NFR-S1 enforced unless opted out"
     );
+}
+
+#[test]
+fn debug_endpoints_can_be_disabled() {
+    // Regression: `debug_endpoints` was missing from the key registry, so
+    // `OSPROXY_DEBUG_ENDPOINTS=false` was silently ignored and the pre-auth
+    // /debug/* surfaces stayed on despite the operator opting out (docs/guide/07).
+    let off = resolve(&[("debug_endpoints", "false")]).unwrap();
+    assert!(!off.observability.debug_endpoints);
+    assert!(resolve(&[("debug_endpoints", "maybe")]).is_err());
 }
 
 #[test]
