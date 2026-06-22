@@ -1733,6 +1733,7 @@ name = "osproxy-engine"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "divan",
  "futures-util",
  "http-body",
  "http-body-util",

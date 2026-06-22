@@ -241,6 +241,19 @@ single-doc write streaming deliberately not done (unsound).** Staged:
    - **`response_bytes` is recorded as 0** for a streamed search (the body is never
      buffered to measure), so `/metrics` and `/debug/explain` under-report egress
      size for this path. Shape-only telemetry (status, pool reuse, trace) is intact.
+
+   *Latency.* The streamed transform's CPU is comparable-to-faster than the
+   buffered `shape_hits` (divan bench `osproxy-engine/benches/search_transform.rs`,
+   `cargo xtask bench-local`): on a hit-heavy response it is faster (buffered
+   builds one large `Value` for the whole `hits` array; streaming parses one hit
+   at a time), and on an aggregation-heavy response it is faster too — once the
+   scanner's `Passthrough` phase **bulk-copies** the chunk tail rather than
+   dispatching every byte through the state machine, it never structurally scans
+   the (potentially multi-MiB) `aggregations`, whereas the buffered path's serde
+   parse must still delimit that `RawValue`. Without that bulk-copy the per-byte
+   scan made the aggregation-heavy case markedly slower than buffered; the
+   optimization is what makes streaming a no-regret default. So the streamed path
+   bounds peak memory to one hit *and* does not cost latency.
 4. **Bulk streaming demux** — DONE: the `_bulk` NDJSON is framed incrementally
    from the inbound stream (`NdjsonReader` over the body's frames) and each op is
    demuxed/dispatched as it is read, reusing the existing flush/gate/re-interleave

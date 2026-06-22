@@ -218,8 +218,22 @@ impl SearchHitsScanner {
     /// to emit (possibly empty — e.g. a chunk consumed entirely into a partial
     /// element).
     pub(crate) fn feed(&mut self, chunk: &[u8]) -> Vec<u8> {
-        for &b in chunk {
-            self.step(b);
+        let mut i = 0;
+        while i < chunk.len() {
+            // Once the `hits.hits` array has closed (or no array was found), every
+            // remaining byte — including the potentially huge `aggregations`
+            // sibling — is forwarded verbatim. Bulk-copy the rest of the chunk in
+            // one shot rather than dispatching each byte through `step`: for a
+            // multi-MiB aggregations blob this is the difference between a memcpy
+            // and a per-byte state-machine loop (see `benches/search_transform.rs`),
+            // which is what kept the buffered path ahead on aggregation-heavy
+            // responses.
+            if self.phase == Phase::Passthrough {
+                self.out.extend_from_slice(&chunk[i..]);
+                break;
+            }
+            self.step(chunk[i]);
+            i += 1;
         }
         std::mem::take(&mut self.out)
     }

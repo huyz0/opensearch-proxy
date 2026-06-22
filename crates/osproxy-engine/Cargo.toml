@@ -28,6 +28,11 @@ tokio = { workspace = true, features = ["time"] }
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 proptest = "1"
 http-body-util.workspace = true
+divan.workspace = true
+
+[[bench]]
+name = "search_transform"
+harness = false
 
 [lints]
 workspace = true

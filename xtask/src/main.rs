@@ -223,6 +223,7 @@ fn bench() -> Result<(), String> {
 fn bench_local() -> Result<(), String> {
     for (pkg, bench) in [
         ("osproxy-rewrite", "hot_paths"),
+        ("osproxy-engine", "search_transform"),
         ("osproxy-transport", "classify"),
         ("osproxy-observe", "directive"),
     ] {
