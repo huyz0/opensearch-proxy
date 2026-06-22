@@ -1,10 +1,10 @@
 //! Cursor (scroll) affinity (`docs/03` §6): a continued scroll routes to the
-//! cluster pinned in its signed envelope — recovered from the token alone, so any
-//! fleet instance resolves it — and fails closed (never a blind dispatch) when
+//! cluster pinned in its signed envelope, recovered from the token alone, so any
+//! fleet instance resolves it, and fails closed (never a blind dispatch) when
 //! affinity is off or the envelope does not verify.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-// JUSTIFY(file-length): one cohesive cursor-affinity suite — the shared
+// JUSTIFY(file-length): one cohesive cursor-affinity suite, the shared
 // RecordingSink / StubTenancy / signer scaffolding backs every scroll and PIT
 // scenario (continue, path-form, re-wrap, create, search, close, fail-closed);
 // splitting would duplicate that scaffold across files for no real separation.
@@ -31,7 +31,7 @@ use osproxy_tenancy::TenancyRouter;
 /// stays readable in signatures.
 type StubPipeline = Pipeline<TenancyRouter<StubTenancy>, RecordingSink>;
 
-/// A deterministic stand-in for the HMAC signer (keyed FNV-1a fold) — same key on
+/// A deterministic stand-in for the HMAC signer (keyed FNV-1a fold), same key on
 /// every instance, so a token wrapped on one verifies on another.
 struct FnvSigner(u64);
 impl CursorSigner for FnvSigner {
@@ -396,7 +396,7 @@ async fn a_pit_create_resolves_the_index_cluster_and_wraps_the_returned_id() {
 async fn a_pit_search_routes_to_the_pit_cluster_and_substitutes_the_real_id() {
     let signer = Arc::new(FnvSigner(17));
     // The PIT was created on `us-9`; the search must route *there*, not to the
-    // tenant's resolved cluster (`eu-1`) — while still resolving for the filter.
+    // tenant's resolved cluster (`eu-1`), while still resolving for the filter.
     let pit = cursor::wrap(signer.as_ref(), &ClusterId::from("us-9"), "RAWPIT");
     let (p, seen) = pipeline(Some(signer));
     let principal = Principal::new(osproxy_core::PrincipalId::from("svc"));
@@ -433,7 +433,7 @@ async fn a_pit_search_routes_to_the_pit_cluster_and_substitutes_the_real_id() {
         !forwarded.contains(&pit),
         "the wrapped pit id must be stripped before upstream"
     );
-    // Isolation (NFR-S4): the query was wrapped in the partition filter — pinning
+    // Isolation (NFR-S4): the query was wrapped in the partition filter, pinning
     // the PIT's cluster did NOT bypass tenancy.
     assert!(
         forwarded.contains(r#""term":{"_tenant":"acme"}"#),
@@ -447,7 +447,7 @@ async fn a_streamed_pit_search_falls_back_to_the_buffered_cursor_path() {
     // The streaming search entry point must detect a PIT in the body and fall back
     // to the buffered cursor path (the `_scroll_id`/PIT affinity wrap needs the
     // whole response body), routing to the PIT's pinned cluster exactly like the
-    // buffered `search()` — the carve-out the design relies on.
+    // buffered `search()`, the carve-out the design relies on.
     let signer = Arc::new(FnvSigner(17));
     let pit = cursor::wrap(signer.as_ref(), &ClusterId::from("us-9"), "RAWPIT");
     let (p, seen) = pipeline(Some(signer));
@@ -501,7 +501,7 @@ async fn a_streamed_pit_search_falls_back_to_the_buffered_cursor_path() {
 async fn a_forged_pit_in_a_search_body_fails_closed_without_dispatch() {
     // The PIT-search entry point is the isolation-critical one: a search whose
     // body carries a `pit.id` signed with a foreign key must be rejected before
-    // any resolve or dispatch — never routed, never leaked.
+    // any resolve or dispatch, never routed, never leaked.
     let real = Arc::new(FnvSigner(1));
     let foreign = FnvSigner(2);
     let pit = cursor::wrap(&foreign, &ClusterId::from("us-9"), "RAWPIT");

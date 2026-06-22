@@ -1,4 +1,4 @@
-//! The high-level tenancy contract — what most implementers provide.
+//! The high-level tenancy contract, what most implementers provide.
 
 use osproxy_core::{ClusterId, Epoch, PartitionId};
 
@@ -9,8 +9,8 @@ use crate::rules::{DocIdRule, InjectedField, SensitivitySpec};
 
 /// The tenancy-focused contract most implementers provide.
 ///
-/// It declares tenancy *rules* — how to find the partition, how to build the
-/// document `_id`, which fields to inject, which are sensitive — plus a
+/// It declares tenancy *rules*, how to find the partition, how to build the
+/// document `_id`, which fields to inject, which are sensitive, plus a
 /// placement lookup. `osproxy-tenancy` turns this into a [`crate::RoutingSpi`],
 /// so tenancy implementers never touch [`crate::RouteDecision`] plumbing
 /// (`docs/02` §2).
@@ -74,7 +74,7 @@ pub trait TenancySpi: Send + Sync + 'static {
     ///
     /// `body` is a [`BodyDoc`] view over the document: the whole request for
     /// single-doc ingest, or one operation's source line for `_bulk`. Read the
-    /// partition key from it with [`BodyDoc::scalar`] — the proxy scans the bytes
+    /// partition key from it with [`BodyDoc::scalar`], the proxy scans the bytes
     /// on demand, so no JSON tree is built (ADR-014).
     ///
     /// Most implementations just defer to the declarative resolver
@@ -91,8 +91,8 @@ pub trait TenancySpi: Send + Sync + 'static {
     /// ```
     ///
     /// Compose [`BodyDoc::scalar`] with header/principal lookups for cases the
-    /// declarative sources cannot express — combining several inputs, decoding a
-    /// structured token — without ever parsing raw bytes yourself. You choose the
+    /// declarative sources cannot express, combining several inputs, decoding a
+    /// structured token, without ever parsing raw bytes yourself. You choose the
     /// order; nothing is tried implicitly before you.
     ///
     /// # Errors
@@ -127,7 +127,7 @@ pub trait TenancySpi: Send + Sync + 'static {
     }
 
     /// Resolves a partition to its current placement and the epoch it was read
-    /// at. NOT a pure function — migration mutates the placement state.
+    /// at. NOT a pure function, migration mutates the placement state.
     ///
     /// # Errors
     ///

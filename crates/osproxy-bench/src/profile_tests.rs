@@ -1,4 +1,4 @@
-//! Tests for [`NfrProfile`] — added latency is a derived, saturating difference,
+//! Tests for [`NfrProfile`], added latency is a derived, saturating difference,
 //! and the profile round-trips as JSON.
 #![allow(clippy::unwrap_used)]
 

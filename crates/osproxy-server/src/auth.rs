@@ -2,7 +2,7 @@
 //!
 //! A minimal token authenticator: a configured `token -> principal` map. With
 //! no tokens configured it runs in **dev mode**, accepting any caller as an
-//! anonymous (or token-named) principal — convenient for local runs, never for
+//! anonymous (or token-named) principal, convenient for local runs, never for
 //! production. Real consumers provide their own [`Authenticator`] (mTLS, JWT, an
 //! external identity provider, …).
 

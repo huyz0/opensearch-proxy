@@ -1,7 +1,7 @@
 //! The ingress handler: authenticates the caller, builds a request context, and
 //! drives the engine pipeline, mapping the outcome to an HTTP response.
 //
-// JUSTIFY(file-length): the single ingress-orchestration point — pre-auth
+// JUSTIFY(file-length): the single ingress-orchestration point, pre-auth
 // introspection routing, the TLS and auth/authz gates, and data-plane dispatch
 // are one cohesive flow over the handler's private state; splitting it would
 // force those fields pub(crate) and scatter the request lifecycle across files.
@@ -43,7 +43,7 @@ pub type AppPipeline = Pipeline<TenancyRouter<ReferenceTenancy>, OpenSearchSink>
 /// Adapts the engine pipeline to the transport's [`IngressHandler`] contract,
 /// authenticating each request with the configured [`Authenticator`] and, after
 /// authentication, authorizing it with the configured [`Authorizer`] (default
-/// [`AllowAllAuthorizer`] — no second policy layer until one is supplied).
+/// [`AllowAllAuthorizer`], no second policy layer until one is supplied).
 pub struct AppHandler<A, Z = AllowAllAuthorizer> {
     pipeline: AppPipeline,
     authenticator: A,
@@ -53,7 +53,7 @@ pub struct AppHandler<A, Z = AllowAllAuthorizer> {
     directive_admin: Option<DirectiveAdmin>,
     metrics: Metrics,
     /// When true (default), a body-mutating request over cleartext is refused
-    /// (NFR-S1) — the proxy must terminate TLS to rewrite the stream. An operator
+    /// (NFR-S1), the proxy must terminate TLS to rewrite the stream. An operator
     /// on a trusted network can opt out.
     require_tls_for_mutation: bool,
     /// When true (default), the pre-auth `/debug/explain` and `/debug/breakglass`
@@ -144,7 +144,7 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
         self
     }
 
-    /// The pipeline this handler serves — a read-only accessor for introspection
+    /// The pipeline this handler serves, a read-only accessor for introspection
     /// (e.g. the perf harness reading upstream `pool_stats` after a load run).
     #[must_use]
     pub fn pipeline(&self) -> &AppPipeline {
@@ -204,7 +204,7 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
 
     /// Handles `POST /admin/directives`: publishes a fleet directive set into the
     /// shared store when enabled and the bearer token matches. Fail-closed at
-    /// every step — disabled, wrong method, bad token, or malformed body all leave
+    /// every step, disabled, wrong method, bad token, or malformed body all leave
     /// the active set unchanged.
     fn publish_directives(&self, req: &IngressRequest) -> IngressResponse {
         let Some(admin) = &self.directive_admin else {
@@ -275,7 +275,7 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
                 self.metrics_snapshot().into_bytes(),
             ));
         }
-        // /admin/directives: privileged control-plane settings — GET introspects
+        // /admin/directives: privileged control-plane settings, GET introspects
         // what this instance applies, POST publishes a new set; both token-gated
         // and fail-closed (a forged token reveals/changes nothing, `docs/05` §3).
         if req.path == "/admin/directives" {
@@ -288,7 +288,7 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
     }
 
     /// Handles `GET /admin/directives`: returns the control-plane settings this
-    /// instance is currently applying — the read side of the directive store, so
+    /// instance is currently applying, the read side of the directive store, so
     /// an agent can see what is in effect (per instance; the replicating store
     /// keeps the fleet consistent). Token-gated like the publish path (the
     /// targeting selectors are operator config) and fail-closed: disabled or a bad
@@ -343,7 +343,7 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
         Ok(principal)
     }
 
-    /// Maps a streamed pipeline outcome to a response, tallying side effects — the
+    /// Maps a streamed pipeline outcome to a response, tallying side effects, the
     /// shared tail of the streaming forward and bulk paths.
     fn finish_streamed(
         &self,
@@ -384,7 +384,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
 
         // The credentials were consumed above; strip the `Authorization` header so
         // the bearer token never reaches the pipeline, observability, or logs. The
-        // partition header, `traceparent`, and `x-debug-directive` are preserved —
+        // partition header, `traceparent`, and `x-debug-directive` are preserved,
         // the engine still needs them.
         let safe_headers = crate::bearer::without_authorization(&req.headers);
         let ctx = build_ctx(&req, &principal, &request_id, &safe_headers);
@@ -409,12 +409,12 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
 
     fn forward_plan(&self, path: &str, logical_index: &str) -> bool {
         // Full-fidelity capture tees the raw exchange, which needs the body in
-        // memory — so when capture is wired, buffer (take the `handle` path) rather
+        // memory, so when capture is wired, buffer (take the `handle` path) rather
         // than stream. Streaming and capture are mutually exclusive by nature.
         if self.capture.enabled() {
             return false;
         }
-        // Never stream-forward the proxy-internal surfaces — they are served
+        // Never stream-forward the proxy-internal surfaces, they are served
         // pre-auth in `handle` and must not be forwarded to a cluster, even under
         // a whole-instance passthrough policy (which matches every index).
         if path.starts_with("/debug/") || path == "/metrics" || path == "/admin/directives" {
@@ -439,7 +439,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         let ctx = build_ctx(&req, &principal, &request_id, &safe_headers);
 
         // Both directions stream: the request body pipes upstream, the upstream
-        // response pipes back — neither buffered.
+        // response pipes back, neither buffered.
         let upstream = osproxy_sink::stream_body(body);
         let (result, _capture) = self.pipeline.forward_streamed(&ctx, upstream).await;
         let response = match result {
@@ -552,7 +552,7 @@ impl<A, Z> AppHandler<A, Z> {
 
     /// Full-fidelity capture: tee the raw exchange for replay/audit when a capture
     /// sink is wired *and* `should_capture` (the live directive decision) selected
-    /// this request — so capture is on demand, not whenever a sink exists. The
+    /// this request, so capture is on demand, not whenever a sink exists. The
     /// original request headers pass through; redaction (e.g. dropping
     /// `Authorization`) is composed via `RedactingCapture`.
     fn tee_capture(
@@ -589,7 +589,7 @@ fn opens_scroll(query: Option<&str>) -> bool {
 }
 
 /// Carries a small buffered [`IngressResponse`] (e.g. an auth refusal) as a
-/// [`StreamingResponse`], preserving its status and headers — so the streamed
+/// [`StreamingResponse`], preserving its status and headers, so the streamed
 /// forward path has one return type for both the gate refusal and the stream.
 fn to_streaming(resp: IngressResponse) -> StreamingResponse {
     let mut streaming = StreamingResponse::buffered(resp.status, resp.body);
@@ -597,7 +597,7 @@ fn to_streaming(resp: IngressResponse) -> StreamingResponse {
     streaming
 }
 
-/// Builds the engine [`RequestCtx`] from an authenticated request — the one place
+/// Builds the engine [`RequestCtx`] from an authenticated request, the one place
 /// the four data-plane entry points (`handle`, `handle_forward`,
 /// `handle_search_stream`, `handle_bulk_stream`) share, so they cannot drift in
 /// which fields they wire. The borrows (`principal`, `request_id`, `safe_headers`)

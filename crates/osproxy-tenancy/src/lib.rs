@@ -7,9 +7,9 @@
 //!
 //! Two pieces:
 //!
-//! - [`PlacementTable`] — the in-memory, epoch-versioned partition→placement map
+//! - [`PlacementTable`], the in-memory, epoch-versioned partition→placement map
 //!   that backs an implementer's `placement_for` lookup (M1; fleet store in M7).
-//! - [`TenancyRouter`] — adapts a [`TenancySpi`] into a
+//! - [`TenancyRouter`], adapts a [`TenancySpi`] into a
 //!   [`RoutingSpi`](osproxy_spi::RoutingSpi), resolving the partition, looking up
 //!   placement, and assembling the body transform.
 //!

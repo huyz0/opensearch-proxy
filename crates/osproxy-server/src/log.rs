@@ -1,13 +1,13 @@
 //! Structured per-request logging.
 //!
-//! Each handled request can emit one **structured JSON log line** — the same
+//! Each handled request can emit one **structured JSON log line**, the same
 //! shape-only `/debug/explain` document, which already carries the request's
 //! `trace_id` (`docs/05`). So logs correlate with the distributed trace and the
 //! OTLP spans by `trace_id`, and an aggregator can join them. The document is
 //! shape-only by construction, so the log line can never carry a tenant value.
 //!
 //! Logging is **opt-in**: the default [`NoLog`] reports [`RequestLog::enabled`]
-//! `false`, so the handler skips even fetching the document — "off" is near-zero
+//! `false`, so the handler skips even fetching the document, "off" is near-zero
 //! cost.
 
 use osproxy_observe::DiagnosticSink;
@@ -40,7 +40,7 @@ impl RequestLog for NoLog {
     fn emit(&self, _record: &Value) {}
 }
 
-/// Writes each record as one compact JSON line to stdout — the conventional
+/// Writes each record as one compact JSON line to stdout, the conventional
 /// structured-logging sink for a containerized service (the platform's log
 /// collector scrapes stdout).
 #[derive(Clone, Copy, Debug, Default)]
@@ -54,7 +54,7 @@ impl RequestLog for StdoutJsonLog {
 }
 
 /// A [`DiagnosticSink`] that writes each directive-selected capture as one tagged
-/// JSON line to stdout — the fleet-coherent counterpart of the local break-glass
+/// JSON line to stdout, the fleet-coherent counterpart of the local break-glass
 /// ring. The platform's log collector scrapes it, so an aggregator can serve the
 /// capture by the `trace_id` the explain doc carries, on any instance. Tagged
 /// `"kind":"diagnostic_capture"` so it is distinguishable from a request log line.

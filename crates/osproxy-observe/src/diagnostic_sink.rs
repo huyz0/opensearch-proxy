@@ -2,7 +2,7 @@
 //! instance* (`docs/05` §5).
 //!
 //! A proxy fleet serves a request on whichever instance the load balancer picked,
-//! so a captured `/debug/explain` document lands on *that* instance — its local
+//! so a captured `/debug/explain` document lands on *that* instance, its local
 //! break-glass ring and `/debug/explain` store are invisible to the others. To
 //! diagnose "why did request X route there" across a fleet, the capture must leave
 //! the instance, keyed by `trace_id` (which the explain doc already carries), so an
@@ -11,7 +11,7 @@
 //! This seam is the **fleet-coherent counterpart of the break-glass ring**: the
 //! same `ring_buffer`/`capture` directive that fills the local tape also hands the
 //! shape-only explain doc to a [`DiagnosticSink`]. It is distinct from the
-//! per-request request-log (all-or-none) — it pushes only the *directive-selected*
+//! per-request request-log (all-or-none), it pushes only the *directive-selected*
 //! captures. The doc is shape-only by construction (it is the explain doc), so the
 //! sink never carries a tenant value.
 
@@ -23,7 +23,7 @@ use serde_json::Value;
 ///
 /// Implementations MUST NOT block: `emit` is called inline on the request path
 /// (only for captured requests), so any network I/O belongs in a spawned task.
-/// They MUST NOT panic. Delivery is best-effort — a slow or down sink must never
+/// They MUST NOT panic. Delivery is best-effort, a slow or down sink must never
 /// affect the request.
 pub trait DiagnosticSink: Send + Sync + 'static {
     /// Whether this sink will do anything. The pipeline checks this before building

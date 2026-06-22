@@ -2,8 +2,8 @@
 //! reads back through the proxy as the client's **original logical document**
 //! (`docs/11` M2, `docs/03`).
 //!
-//! This is the full write→read round-trip — not just the write-side inverse the
-//! `osproxy-rewrite` symmetry test proves — exercised over arbitrary documents
+//! This is the full write→read round-trip, not just the write-side inverse the
+//! `osproxy-rewrite` symmetry test proves, exercised over arbitrary documents
 //! against an in-memory sink that faithfully emulates the OpenSearch get-by-id
 //! envelope. Whatever the ingest path injects (the `_tenant` field, the
 //! partition-prefixed `_id`, `_routing`), the read path strips, so the tenant
@@ -173,7 +173,7 @@ proptest! {
             let got: Value = serde_json::from_slice(&r.body).unwrap();
 
             // The client sees its logical id, the logical index, and no tenancy
-            // machinery — and the `_source` is exactly the document it wrote.
+            // machinery, and the `_source` is exactly the document it wrote.
             prop_assert_eq!(&got["_id"], &json!(id.to_string()));
             prop_assert_eq!(&got["_index"], &json!(LOGICAL_INDEX));
             prop_assert!(got.get("_routing").is_none());

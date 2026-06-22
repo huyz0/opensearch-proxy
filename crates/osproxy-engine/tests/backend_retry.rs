@@ -127,7 +127,7 @@ async fn ingest(
 
 #[tokio::test]
 async fn a_transient_backend_blip_is_retried_and_the_write_succeeds() {
-    // Two failures then success — within the 3-attempt budget.
+    // Two failures then success, within the 3-attempt budget.
     let p = pipeline(2);
     let resp = ingest(&p).await.unwrap();
     assert!(resp.status >= 200 && resp.status < 300);

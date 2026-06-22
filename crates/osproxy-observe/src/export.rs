@@ -2,10 +2,10 @@
 //!
 //! Export is **read-only and off the request's critical path** (`docs/05`): the
 //! pipeline hands a finished payload to [`SpanExporter::export`], which returns
-//! immediately — a concrete exporter ships it in the background and an export
+//! immediately, a concrete exporter ships it in the background and an export
 //! failure never affects the request. When no exporter is configured the default
 //! [`NoopExporter`] reports [`SpanExporter::enabled`] `false`, so the pipeline
-//! skips even *encoding* the payload — "Off" is near-zero cost.
+//! skips even *encoding* the payload, "Off" is near-zero cost.
 
 use serde_json::Value;
 

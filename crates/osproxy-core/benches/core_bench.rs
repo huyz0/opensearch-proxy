@@ -1,7 +1,7 @@
 //! Deterministic microbenchmarks (docs/12).
 //!
 //! Measured in **instruction counts** via callgrind, not wall-clock time, so the
-//! numbers are reproducible run-to-run and machine-to-machine — a real perf
+//! numbers are reproducible run-to-run and machine-to-machine, a real perf
 //! regression gate rather than noise. Run in CI under valgrind:
 //! `cargo xtask bench`.
 
@@ -31,7 +31,7 @@ impl CursorSigner for StubSigner {
     }
 }
 
-// `cursor::wrap`: frame a pinned cluster + upstream cursor into a signed token —
+// `cursor::wrap`: frame a pinned cluster + upstream cursor into a signed token,
 // runs on every scroll/PIT response.
 #[library_benchmark]
 fn cursor_wrap() -> String {
@@ -43,7 +43,7 @@ fn cursor_wrap() -> String {
     )
 }
 
-// `cursor::unwrap`: verify and split a token back to (cluster, cursor) — runs on
+// `cursor::unwrap`: verify and split a token back to (cluster, cursor), runs on
 // every scroll/PIT continue. Fail-closed verify is the per-request read cost.
 #[library_benchmark]
 fn cursor_unwrap() -> Option<(ClusterId, String)> {
@@ -52,7 +52,7 @@ fn cursor_unwrap() -> Option<(ClusterId, String)> {
     cursor::unwrap(&StubSigner, black_box(&token))
 }
 
-// `TraceContext::parse`: parse a W3C `traceparent` — runs on every request that
+// `TraceContext::parse`: parse a W3C `traceparent`, runs on every request that
 // carries one.
 #[library_benchmark]
 fn trace_parse() -> Option<TraceContext> {
@@ -62,7 +62,7 @@ fn trace_parse() -> Option<TraceContext> {
 }
 
 // `TraceContext::propagate`: continue (or mint) a trace and derive this hop's
-// span — runs on every request.
+// span, runs on every request.
 #[library_benchmark]
 fn trace_propagate() -> TraceContext {
     let rid = RequestId::from("req-1");

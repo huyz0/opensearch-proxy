@@ -1,6 +1,6 @@
 //! Live round-trip of the etcd-backed directive store against a real etcd v3.
 //!
-//! Needs a Docker daemon, so it is `#[ignore]`'d — run with `--ignored`. It
+//! Needs a Docker daemon, so it is `#[ignore]`'d, run with `--ignored`. It
 //! proves the watch-and-cache contract end to end: an initial publish is read at
 //! connect, a later publish propagates to `load()` without a restart, and a key
 //! delete flips the fleet back to "no directives".
@@ -64,7 +64,7 @@ async fn directives_published_to_etcd_propagate_to_the_store() {
         .expect("store connects and reads the initial set");
     assert_eq!(store.load().len(), 1, "initial set read at connect");
 
-    // Publish a larger set — the watch must propagate it with no restart.
+    // Publish a larger set, the watch must propagate it with no restart.
     client.put(KEY, TWO, None).await.unwrap();
     assert_eq!(await_len(&store, 2).await, 2, "the update propagated live");
 

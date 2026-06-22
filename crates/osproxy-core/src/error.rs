@@ -6,7 +6,7 @@
 //! LLM diagnose a failure from telemetry alone, with no source reading
 //! (`docs/02` §4, `docs/05`, NFR-T5).
 //!
-//! The context carries **ids and shapes only — never tenant values or secrets**
+//! The context carries **ids and shapes only, never tenant values or secrets**
 //! (`docs/05` §7).
 
 use std::fmt;
@@ -40,7 +40,7 @@ pub enum ErrorCode {
     UpstreamFailed,
     /// The proxy is shedding load.
     Overloaded,
-    /// A scroll/PIT cursor could not be resolved to its pinned cluster — its
+    /// A scroll/PIT cursor could not be resolved to its pinned cluster, its
     /// affinity envelope is missing, malformed, or unverifiable. The client must
     /// re-issue the originating search (`docs/03` §6).
     CursorUnresolvable,
@@ -148,7 +148,7 @@ mod tests {
 
     /// Every variant's slug and Display, so each `as_slug` arm is exercised and
     /// slugs stay stable, distinct, and lowercase (they are part of the public
-    /// contract — operators and LLMs match on them).
+    /// contract, operators and LLMs match on them).
     #[test]
     fn every_error_code_has_a_stable_distinct_slug() {
         let all = [

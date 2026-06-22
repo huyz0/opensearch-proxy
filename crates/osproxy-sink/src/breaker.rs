@@ -3,7 +3,7 @@
 //! Health is observed **passively** from request outcomes rather than by active
 //! probing: a run of transport/timeout failures to a cluster *opens* the
 //! breaker, so subsequent requests fail fast (no doomed connection attempt)
-//! until a cooldown elapses. After the cooldown one trial request is allowed —
+//! until a cooldown elapses. After the cooldown one trial request is allowed,
 //! a success closes the breaker, a failure re-opens it. Time comes from an
 //! injected [`Clock`](osproxy_core::Clock), so the cooldown is deterministic in
 //! tests (`docs/12`).
@@ -59,7 +59,7 @@ impl Breaker {
         }
     }
 
-    /// Locks the state, recovering a poisoned lock — the breaker is inert health
+    /// Locks the state, recovering a poisoned lock, the breaker is inert health
     /// data with no invariant a panicking holder could tear (NFR-R1).
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state

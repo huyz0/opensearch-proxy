@@ -1,7 +1,7 @@
 //! Wall-clock micro-benchmarks of the rewrite hot paths (`cargo xtask bench`).
 //!
 //! These measure the per-request CPU cost of the body/query transforms and the
-//! demux parses — the proxy's *added compute* over a direct-to-cluster call
+//! demux parses, the proxy's *added compute* over a direct-to-cluster call
 //! (a component of NFR-P1/P7). Wall-clock numbers are host-specific and noisy,
 //! so this is a **local calibration tool, not a CI gate**: the deterministic
 //! gates are the dhat allocation budgets (`tests/memory.rs`) and, in CI where
@@ -40,7 +40,7 @@ fn bench_inject_fields(bencher: divan::Bencher) {
         });
 }
 
-/// `strip_fields`: the read-path inverse — remove the tenancy key from a hit.
+/// `strip_fields`: the read-path inverse, remove the tenancy key from a hit.
 #[divan::bench]
 fn bench_strip_fields(bencher: divan::Bencher) {
     let names = vec![FieldName::from("_tenant")];
@@ -53,7 +53,7 @@ fn bench_strip_fields(bencher: divan::Bencher) {
 }
 
 /// `wrap_query`: nest a client query under the mandatory partition filter and
-/// re-serialize — the heaviest per-search transform.
+/// re-serialize, the heaviest per-search transform.
 #[divan::bench]
 fn bench_wrap_query(bencher: divan::Bencher) {
     let body = br#"{"query":{"match":{"msg":"hi"}}}"#;
@@ -92,7 +92,7 @@ fn padded_doc(size: usize) -> Vec<u8> {
 
 /// The cost attacked on the bulk source path: today every source document is
 /// parsed into a `Value` and re-serialized. This benches that round-trip by
-/// document size — the headroom a raw-bytes (verbatim / splice) source path
+/// document size, the headroom a raw-bytes (verbatim / splice) source path
 /// would unlock for `_bulk`.
 #[divan::bench(args = [256, 4096, 65536])]
 fn bench_source_parse_reserialize(bencher: divan::Bencher, size: usize) {

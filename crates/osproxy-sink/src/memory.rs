@@ -2,7 +2,7 @@
 //!
 //! Records every batch it receives and acknowledges each operation as a
 //! success, without any network. It also keeps the indexed documents by
-//! `(index, id)` so it can serve get-by-id [`Reader`] requests — which lets the
+//! `(index, id)` so it can serve get-by-id [`Reader`] requests, which lets the
 //! full write→read round-trip be exercised in memory (the real `OpenSearchSink`
 //! is covered by a testcontainer round-trip). Not for production: it persists
 //! nothing.

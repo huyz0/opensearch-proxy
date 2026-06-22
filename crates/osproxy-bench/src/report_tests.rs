@@ -1,4 +1,4 @@
-//! Tests for the Markdown briefs — they surface the load-bearing numbers and the
+//! Tests for the Markdown briefs, they surface the load-bearing numbers and the
 //! pass/fail verdict, and reflect the verdict's polarity.
 #![allow(clippy::unwrap_used)]
 

@@ -50,7 +50,7 @@ pub fn inject_fields(doc: &mut Value, fields: &[(FieldName, Value)]) -> Result<(
 }
 
 /// Splices `fields` into the top level of the JSON object in `body`, returning
-/// the new bytes — **without parsing `body` into a `Value` or re-serializing it**
+/// the new bytes, **without parsing `body` into a `Value` or re-serializing it**
 /// (ADR-014). The body is scanned once for its top-level keys (to reject a
 /// spoofed reserved field) and the injected fields are written right after the
 /// opening `{`; the rest of the document is copied verbatim. The byte-level twin

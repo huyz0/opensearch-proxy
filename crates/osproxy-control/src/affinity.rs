@@ -5,8 +5,8 @@
 //! continuation sent elsewhere is meaningless. So when affinity is **on**
 //! ([`Affinity::Pin`]), the proxy records `cursor_id -> cluster` when a cursor is
 //! created and resolves follow-ups to that cluster, bypassing the normal
-//! partition-resolution path. The binding is **bounded and TTL'd** — it expires
-//! with the cursor's keep-alive and the map is capacity-capped — so a flood of
+//! partition-resolution path. The binding is **bounded and TTL'd**, it expires
+//! with the cursor's keep-alive and the map is capacity-capped, so a flood of
 //! cursors cannot grow memory without limit (NFR-P). Affinity is opt-in and off
 //! by default, so deployments that do not use cursors pay no state cost.
 //!
@@ -26,7 +26,7 @@ pub const DEFAULT_CURSOR_TTL: Duration = Duration::from_secs(300);
 pub const DEFAULT_CAPACITY: usize = 100_000;
 
 /// Whether the proxy pins cursor follow-ups to the cluster that created them.
-/// Opt-in, off by default — deployments without cursors pay no state cost
+/// Opt-in, off by default, deployments without cursors pay no state cost
 /// (`docs/03` §6).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Affinity {
@@ -110,7 +110,7 @@ impl CursorAffinity {
     }
 
     /// The cluster `cursor_id` is pinned to, or `None` if it is unknown or its
-    /// binding has expired (lazy expiry — a stale binding is never returned).
+    /// binding has expired (lazy expiry, a stale binding is never returned).
     #[must_use]
     pub fn resolve(&self, cursor_id: &str) -> Option<ClusterId> {
         let now = self.clock.now();
@@ -143,7 +143,7 @@ impl CursorAffinity {
         now.saturating_duration_since(p.pinned_at) >= self.ttl
     }
 
-    /// Locks the map, recovering a poisoned lock — it is plain cache data with no
+    /// Locks the map, recovering a poisoned lock, it is plain cache data with no
     /// invariant a panicking holder could tear (NFR-R1).
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Pinned>> {
         self.entries

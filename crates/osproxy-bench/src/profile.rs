@@ -9,8 +9,8 @@ use crate::summary::LatencySummary;
 /// to-cluster baseline under the same workload, plus the steady-state numbers the
 /// NFRs bound.
 ///
-/// The two summaries are gathered the same way against the same cluster — the
-/// only difference is whether the request went *through the proxy* or *direct* —
+/// The two summaries are gathered the same way against the same cluster, the
+/// only difference is whether the request went *through the proxy* or *direct*,
 /// so their difference isolates the proxy's overhead. That difference is computed
 /// by [`NfrProfile::added_p50_ns`] / [`NfrProfile::added_p99_ns`] rather than
 /// stored, so "added latency" is defined in exactly one place and a profile can
@@ -21,7 +21,7 @@ pub struct NfrProfile {
     pub samples: u64,
     /// Concurrency the run was driven at (the in-flight request count).
     pub concurrency: u32,
-    /// Latency talking **directly** to the cluster — the baseline.
+    /// Latency talking **directly** to the cluster, the baseline.
     pub baseline: LatencySummary,
     /// Latency talking to the cluster **through the proxy**.
     pub proxy: LatencySummary,
@@ -53,7 +53,7 @@ impl NfrProfile {
         self.proxy.p99_ns.saturating_sub(self.baseline.p99_ns)
     }
 
-    /// The profile as pretty JSON — the artifact a load run writes out and a
+    /// The profile as pretty JSON, the artifact a load run writes out and a
     /// judge (human or LLM) reads. Serialization of plain numeric fields cannot
     /// fail, so a serializer error collapses to an explicit error string rather
     /// than a panic.

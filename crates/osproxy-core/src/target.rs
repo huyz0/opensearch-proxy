@@ -2,7 +2,7 @@
 //!
 //! A [`Target`] is the physical destination a routing decision resolves to: a
 //! concrete cluster and a concrete index. In v1 every request resolves to
-//! exactly one target — there is no synchronous fan-out (`docs/00` non-goals,
+//! exactly one target, there is no synchronous fan-out (`docs/00` non-goals,
 //! ADR-002). The tenancy layer turns a partition's placement into a `Target`;
 //! the sink and upstream pool consume it.
 

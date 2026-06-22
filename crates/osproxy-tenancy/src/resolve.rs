@@ -3,7 +3,7 @@
 use osproxy_core::PartitionId;
 use osproxy_spi::{BodyDoc, PartitionKeySpec, PartitionKeySpecKind, RequestCtx, SpiError};
 
-/// Resolves the partition id by trying `spec`'s sources in order — the
+/// Resolves the partition id by trying `spec`'s sources in order, the
 /// declarative resolver most [`osproxy_spi::TenancySpi::resolve_partition`]
 /// implementations defer to.
 ///

@@ -1,8 +1,8 @@
 //! The partition migration state machine (`docs/06`).
 //!
 //! A partition is either settled at one [`Placement`] (`Active`) or moving
-//! between two (`Migrating`). The proxy never copies data — an external tool
-//! does — so migration here is a *pointer flip guarded by phases*, designed so
+//! between two (`Migrating`). The proxy never copies data, an external tool
+//! does, so migration here is a *pointer flip guarded by phases*, designed so
 //! the only window that rejects writes is the brief `Cutover`, and reads always
 //! resolve to a single placement (never a split view).
 //!
@@ -44,7 +44,7 @@ pub enum PartitionState {
 }
 
 impl PartitionState {
-    /// The single placement reads resolve to right now — `from` until the
+    /// The single placement reads resolve to right now, `from` until the
     /// migration completes, never a split of both (INV-M4).
     #[must_use]
     pub fn read_placement(&self) -> &Placement {
@@ -54,7 +54,7 @@ impl PartitionState {
     }
 
     /// The placement a write may commit to right now, or `None` if writes are
-    /// currently blocked — the `Cutover` window (INV-M1).
+    /// currently blocked, the `Cutover` window (INV-M1).
     #[must_use]
     pub fn write_placement(&self) -> Option<&Placement> {
         match self {

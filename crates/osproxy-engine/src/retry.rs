@@ -5,7 +5,7 @@
 //! the write to the client: we retry with exponential backoff up to a small
 //! budget, then surface the (retryable) error so the client can try later.
 //!
-//! Only a **retryable** [`SpiError`] (the backend is unavailable) is retried — a
+//! Only a **retryable** [`SpiError`] (the backend is unavailable) is retried, a
 //! definitive routing answer (partition unresolved, placement missing, or a
 //! migration *reject*) is returned immediately, never retried in-proxy.
 

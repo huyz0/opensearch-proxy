@@ -25,7 +25,7 @@ pub struct Resolved {
     /// The routing decision derived from the partition's placement.
     pub decision: RouteDecision,
     /// The partition's migration phase at resolve time (shape-only, for
-    /// observability — `docs/06` §5).
+    /// observability, `docs/06` §5).
     pub migration: MigrationPhase,
 }
 
@@ -69,7 +69,7 @@ impl<T: TenancySpi> TenancyRouter<T> {
                 endpoint: ctx.endpoint(),
             });
         }
-        // The body is scanned on demand for the partition key — never parsed into
+        // The body is scanned on demand for the partition key, never parsed into
         // a JSON tree (ADR-014).
         let partition = self.resolve_partition(ctx, BodyDoc::new(ctx.body()))?;
         self.resolve_placement(ctx, partition, ctx.logical_index())
@@ -109,7 +109,7 @@ impl<T: TenancySpi> TenancyRouter<T> {
     ) -> Result<Resolved, SpiError> {
         let at = self.spi.placement_for(&partition).await?;
         // Carry the cluster's endpoint (from the placement result) onto the
-        // target so the sink can pool it — the tenancy is the source of truth for
+        // target so the sink can pool it, the tenancy is the source of truth for
         // where each cluster lives.
         let target = target_for(&at.placement, logical_index).with_endpoint(at.endpoint.clone());
         let body_transform = self.build_transform(&at.placement, &partition, ctx)?;
@@ -144,7 +144,7 @@ impl<T: TenancySpi> TenancyRouter<T> {
         // In SharedIndex mode the partition id is MANDATORY in the doc-id template
         // (docs/03 §4): by-id reads/writes (`_doc/{id}`) bypass the query filter and
         // hit the physical id directly, so without a partition-scoped id two tenants
-        // collide on the same `_id` — a cross-tenant overwrite on write and a
+        // collide on the same `_id`, a cross-tenant overwrite on write and a
         // cross-tenant read on get. A *missing* rule is as unsafe as a partition-free
         // one, so reject both here rather than only validating a rule that happens to
         // be present.
@@ -174,7 +174,7 @@ impl<T: TenancySpi> RoutingSpi for TenancyRouter<T> {
 
 /// The partition-aware routing seam the engine pipeline drives.
 ///
-/// [`RoutingSpi`] yields only a [`RouteDecision`]; the engine needs more — the
+/// [`RoutingSpi`] yields only a [`RouteDecision`]; the engine needs more, the
 /// resolved partition (to construct `_id`/`_routing` and to demux bulk per
 /// document), the epoch and migration phase (the write gate), and a split
 /// resolve so a bulk request can resolve the partition per document but cache the

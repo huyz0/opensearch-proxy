@@ -58,7 +58,7 @@ fn malformed_bodies_are_rejected_whole() {
             r#"{"directives":[{"id":"a","level":"Shape","ttl_secs":60,"sample_per_mille":1001}]}"#,
             "bad_sample_rate",
         ),
-        // A misspelled targeting key must be rejected, not silently dropped —
+        // A misspelled targeting key must be rejected, not silently dropped,
         // otherwise "tennant" would publish a fleet-wide directive by accident.
         (
             r#"{"directives":[{"id":"a","level":"Shape","ttl_secs":60,"tennant":"acme"}]}"#,

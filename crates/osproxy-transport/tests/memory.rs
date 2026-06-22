@@ -33,7 +33,7 @@ fn classify_allocation_budgets() {
     }
     let _profiler = Profiler::builder().testing().build();
 
-    // Ingest-by-id: only the owned logical index and doc id — the path segments
+    // Ingest-by-id: only the owned logical index and doc id, the path segments
     // are matched on a stack array, not a heap Vec. Pin the count so a future
     // matcher change can't quietly add allocations to the hottest path in the
     // proxy.

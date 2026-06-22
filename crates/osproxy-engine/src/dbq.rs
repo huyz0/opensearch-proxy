@@ -4,7 +4,7 @@
 //! query-driven mutation the fan-out queue cannot carry as a single op. In async
 //! mode, with expansion opted in, the proxy instead runs the **partition-scoped**
 //! query itself (the same mandatory isolation filter as a normal search), caps
-//! the match set, and enqueues a concrete delete per matched physical id — so the
+//! the match set, and enqueues a concrete delete per matched physical id, so the
 //! op stream stays self-contained and idempotent. Anything else is rejected:
 //! sync mode, expansion disabled, no queue, or a match set over the cap.
 
@@ -72,7 +72,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         let (deleted, failures) = self.enqueue_deletes(&resolved, ctx, ids).await;
 
         // A delete-by-query-shaped acknowledgement: `deleted` counts what was
-        // durably enqueued (not yet applied — async semantics), `total` what
+        // durably enqueued (not yet applied, async semantics), `total` what
         // matched. No version conflicts can arise at enqueue time.
         let body = json!({
             "took": 0,

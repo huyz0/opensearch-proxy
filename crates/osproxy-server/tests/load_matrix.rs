@@ -1,12 +1,12 @@
 //! Parameterized load matrix (no Docker): end-to-end throughput + latency across
 //! **payload size × concurrent connections × write mode** (sync forward vs async
-//! fan-out enqueue). This is the "realistic load profile" view — what you actually
-//! get at a given payload/concurrency/mode — as opposed to the isolated hot-path
+//! fan-out enqueue). This is the "realistic load profile" view, what you actually
+//! get at a given payload/concurrency/mode, as opposed to the isolated hot-path
 //! micro-numbers in `osproxy-observe`'s contention bench.
 //!
 //! In-process mock upstream + co-located load generator, so absolute numbers are
 //! host-bound and the generator competes with the proxy for cores; reported, never
-//! asserted. `#[ignore]` — run on demand or in the CI integration lane. See
+//! asserted. `#[ignore]`, run on demand or in the CI integration lane. See
 //! `docs/guide/11-performance.md`.
 #![allow(
     clippy::unwrap_used,
@@ -45,8 +45,8 @@ const CONNS: &[usize] = &[16, 64, 256];
 const REQS_PER_CONN: usize = 60;
 
 /// An in-memory write queue that accepts every op (the downstream apply is out of
-/// scope here): it isolates the proxy's async fan-out path — resolve + rewrite +
-/// enqueue + `202` — from any broker, the mirror of the sync path's upstream call.
+/// scope here): it isolates the proxy's async fan-out path, resolve + rewrite +
+/// enqueue + `202`, from any broker, the mirror of the sync path's upstream call.
 struct MemQueue;
 impl WriteQueue for MemQueue {
     fn enabled(&self) -> bool {
@@ -192,7 +192,7 @@ async fn load_matrix_payload_x_connections_x_mode() {
     let sync = spawn_proxy(upstream.clone(), false).await;
     let r#async = spawn_proxy(upstream, true).await;
 
-    println!("load matrix — rps / p50ms / p99ms (co-located harness, host-bound):");
+    println!("load matrix: rps / p50ms / p99ms (co-located harness, host-bound):");
     println!(
         "{:<6} {:>6} | {:>24} | {:>24}",
         "payload", "conns", "sync (forward upstream)", "async (fan-out enqueue)"

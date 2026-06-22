@@ -125,7 +125,7 @@ async fn a_handled_request_exports_one_span_with_the_explain_trace_id() {
     let payloads = exporter.0.lock().unwrap();
     assert_eq!(payloads.len(), 1, "exactly one span exported per request");
     let span = &payloads[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0];
-    // Same trace id the operator would see in /debug/explain — the two correlate.
+    // Same trace id the operator would see in /debug/explain, the two correlate.
     let explain_trace_id = p.explain(&rid).unwrap()["trace_id"].clone();
     assert_eq!(span["traceId"], explain_trace_id);
     assert_eq!(
@@ -137,7 +137,7 @@ async fn a_handled_request_exports_one_span_with_the_explain_trace_id() {
 #[tokio::test]
 async fn the_default_pipeline_exports_nothing() {
     // No exporter configured (NoopExporter is disabled): a request still succeeds
-    // and nothing is shipped — verified by the absence of any export side effect.
+    // and nothing is shipped, verified by the absence of any export side effect.
     let exporter = RecordingExporter::default();
     let p = pipeline(); // default: no exporter
     ingest(&p, &RequestId::from("r")).await;
@@ -207,7 +207,7 @@ async fn publishing_to_the_fleet_store_flips_export_without_rebuilding_the_pipel
         "empty fleet store exports nothing"
     );
 
-    // The operator publishes a fleet-wide directive — the running pipeline picks
+    // The operator publishes a fleet-wide directive, the running pipeline picks
     // it up on the next request.
     store.publish(DirectiveSet::from_directives(vec![DiagnosticsDirective {
         id: "fleet-on".to_owned(),
@@ -226,7 +226,7 @@ async fn publishing_to_the_fleet_store_flips_export_without_rebuilding_the_pipel
     );
 
     // The reverse edge: publishing an empty set flips export back off, again
-    // without rebuilding — the operator "turn it off" path.
+    // without rebuilding, the operator "turn it off" path.
     store.publish(DirectiveSet::new());
     ingest(&p, &RequestId::from("r")).await;
     assert_eq!(
@@ -316,7 +316,7 @@ impl DiagnosticSink for RecordingDiagnosticSink {
 async fn a_capture_directive_pushes_the_explain_doc_to_the_diagnostic_sink() {
     // The fleet-coherent counterpart of the break-glass tape: a directive-selected
     // capture is pushed off-instance, keyed by the same trace_id /debug/explain
-    // shows — so an aggregator can serve it regardless of which instance served it.
+    // shows, so an aggregator can serve it regardless of which instance served it.
     let clock = Arc::new(ManualClock::new());
     let sink = RecordingDiagnosticSink::default();
     let store = Arc::new(InMemoryDirectiveStore::new());

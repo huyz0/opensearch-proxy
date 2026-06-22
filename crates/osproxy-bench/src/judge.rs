@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::profile::NfrProfile;
 
-/// The bounds a [`NfrProfile`] is judged against — one field per quantitative
+/// The bounds a [`NfrProfile`] is judged against, one field per quantitative
 /// NFR-P target (`docs/01`). The targets themselves are `[CALIBRATE]` in the
 /// architecture doc: the *method* is fixed (this judge) but the numbers are set
 /// once a real baseline exists, so these are constructed explicitly by the caller
@@ -25,7 +25,7 @@ impl NfrThresholds {
     /// The doc's *suggested* starting bounds (`docs/01`: added p50 ~1–2 ms, reuse
     /// ≥99 %) as a provisional placeholder. Named "provisional" deliberately:
     /// until a calibration run sets real numbers these are a sketch, not a
-    /// validated SLO — callers gating CI must pass their own measured bounds.
+    /// validated SLO, callers gating CI must pass their own measured bounds.
     #[must_use]
     pub fn provisional() -> Self {
         Self {
@@ -59,7 +59,7 @@ pub struct Verdict {
 }
 
 impl Verdict {
-    /// The verdict as pretty JSON — the gate's machine-readable output.
+    /// The verdict as pretty JSON, the gate's machine-readable output.
     #[must_use]
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self)
@@ -72,7 +72,7 @@ impl Verdict {
 /// findings pass.
 ///
 /// The profile's `throughput_rps` and `samples`/`concurrency` are *not* gated
-/// here — they are recorded context until a steady-state target is calibrated, so
+/// here, they are recorded context until a steady-state target is calibrated, so
 /// a green verdict means "the gated NFRs held", not "all of NFR-P passed".
 ///
 /// Fails closed on a non-finite reuse rate: a `NaN` (e.g. a zero-traffic run's

@@ -3,7 +3,7 @@
 //! Owns process lifecycle and wires the crates together (`docs/01` §3): it
 //! builds a concrete tenancy + sink, drives them through the engine pipeline,
 //! and serves that over the HTTP/1.1 ingress. It holds no business logic of its
-//! own — the tenancy here is a minimal *reference* implementation showing how a
+//! own, the tenancy here is a minimal *reference* implementation showing how a
 //! library consumer wires the SPI.
 //!
 //! M1 serves single-document ingest over HTTP/1.1, cleartext or TLS
@@ -165,7 +165,7 @@ fn spawn_grpc<H: IngressHandler>(
 /// (shut down rather than ignore the operator's intent).
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
-    println!("osproxy: shutdown signal received — draining in-flight requests");
+    println!("osproxy: shutdown signal received, draining in-flight requests");
 }
 
 /// The structured per-request logger: stdout JSON lines (each the shape-only
@@ -228,7 +228,7 @@ fn with_diagnostic_capture_log<R: Router, S: Sink + Reader>(
 
 /// Sets the pipeline's baseline diagnostics level from the validated config
 /// (`diag_baseline`, default `shape`). Set it to `off` so nothing is exported
-/// until a directive — fleet store or signed `X-Debug-Directive` header — selects
+/// until a directive, fleet store or signed `X-Debug-Directive` header, selects
 /// a request. The value was already validated at load, so this cannot fail.
 fn with_diag_baseline<R: Router, S: Sink + Reader>(
     pipeline: Pipeline<R, S>,

@@ -1,6 +1,6 @@
 //! Fault-injection / chaos suite (NFR-R7, `docs/09` §5): the proxy must survive
-//! the failure catalogue — slow/dropped upstreams, upstream 4xx/5xx, stale-epoch
-//! conflicts, malformed bodies, partial bulk failures — **without a panic, a
+//! the failure catalogue, slow/dropped upstreams, upstream 4xx/5xx, stale-epoch
+//! conflicts, malformed bodies, partial bulk failures, **without a panic, a
 //! stuck request, or an untyped error**. Every failure surfaces as a typed
 //! [`RequestError`] carrying a code, a retryable classification, and a
 //! remediation in the `/debug/explain` chain (NFR-R4/R5/T5).
@@ -8,9 +8,9 @@
 //! **Deterministic** (`docs/09` §exit): no sleeps, no wall-clock, no network. The
 //! suite injects the *outcome* of each fault through a programmable tenancy/sink
 //! and asserts the engine's handling. The "no stuck request" guarantee for a
-//! genuinely slow or dropped upstream is enforced where the deadline lives — the
+//! genuinely slow or dropped upstream is enforced where the deadline lives, the
 //! sink's per-request timeout (`osproxy-sink`'s
-//! `a_stuck_upstream_times_out_and_is_retryable`) — not re-simulated with a real
+//! `a_stuck_upstream_times_out_and_is_retryable`), not re-simulated with a real
 //! sleep here. That a test simply *returns* is the no-panic proof; a panic on the
 //! request path would unwind into it.
 //!
@@ -48,7 +48,7 @@ use osproxy_spi::{
 };
 use osproxy_tenancy::TenancyRouter;
 
-/// How routing behaves — the resolution-stage fault lever.
+/// How routing behaves, the resolution-stage fault lever.
 #[derive(Clone, Copy)]
 enum Placed {
     Ok,
@@ -56,19 +56,19 @@ enum Placed {
     BackendDown,
 }
 
-/// What the upstream does — the delivery-stage fault lever, covering the
+/// What the upstream does, the delivery-stage fault lever, covering the
 /// `docs/09` §5 catalogue.
 #[derive(Clone, Copy, Debug)]
 enum Fault {
-    /// A dropped connection (transport reset) — retryable.
+    /// A dropped connection (transport reset), retryable.
     Reset,
-    /// A slow upstream that timed out — retryable (the sink enforces the deadline).
+    /// A slow upstream that timed out, retryable (the sink enforces the deadline).
     Timeout,
-    /// Upstream 5xx — retryable.
+    /// Upstream 5xx, retryable.
     Upstream5xx,
-    /// Upstream 4xx — terminal (not the proxy's to retry).
+    /// Upstream 4xx, terminal (not the proxy's to retry).
     Upstream4xx,
-    /// A migrating partition rejected the stamped epoch — retryable after
+    /// A migrating partition rejected the stamped epoch, retryable after
     /// re-resolution.
     StaleEpoch,
 }
@@ -319,7 +319,7 @@ async fn malformed_bodies_never_panic_and_stay_typed() {
     for body in cases {
         let (result, rid, pipeline) = ingest(Placed::Ok, None, body).await;
         // A malformed body is the client's fault: it must fail (never silently
-        // succeed) with a typed, terminal error — and never panic.
+        // succeed) with a typed, terminal error, and never panic.
         let err = result.expect_err(&format!("malformed body should fail: {body:?}"));
         assert!(
             !err.retryable(),
@@ -332,7 +332,7 @@ async fn malformed_bodies_never_panic_and_stay_typed() {
 #[tokio::test]
 async fn the_whole_catalogue_resolves_to_a_typed_outcome() {
     // Cross-cutting: every (routing × upstream) combination resolves to either a
-    // success or a typed error with a complete decision chain — never a panic.
+    // success or a typed error with a complete decision chain, never a panic.
     for placed in [Placed::Ok, Placed::Missing, Placed::BackendDown] {
         for fault in Fault::ALL.map(Some).into_iter().chain([None]) {
             let (result, rid, pipeline) = ingest(placed, fault, GOOD_BODY).await;

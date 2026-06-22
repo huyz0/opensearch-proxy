@@ -10,7 +10,7 @@
 //! in-memory [`MemorySink`] for tests and dry-run, and the [`OpenSearchSink`]
 //! that writes directly to a cluster over a pooled HTTP connection. M2 adds the
 //! [`Reader`] seam for get-by-id reads (kept separate because a read is always
-//! direct-to-cluster — a redundancy `QueueSink` can absorb writes but cannot
+//! direct-to-cluster, a redundancy `QueueSink` can absorb writes but cannot
 //! answer a read); both `MemorySink` and `OpenSearchSink` implement it.
 #![deny(missing_docs)]
 

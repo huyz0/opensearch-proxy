@@ -1,12 +1,12 @@
 //! Proves mutual-TLS: a client presenting a certificate signed by the trusted
 //! CA completes the handshake, the proxy derives a stable identity from that
-//! certificate (a SHA-256 fingerprint), and surfaces it to the handler — while a
+//! certificate (a SHA-256 fingerprint), and surfaces it to the handler, while a
 //! client presenting no certificate is refused at the TLS layer.
 
 // Test scaffolding (helpers + spawned server, not `#[test]` fns) needs the
 // unwrap allowance the test-only config does not reach.
 #![allow(clippy::unwrap_used)]
-// Builds the `ring` provider directly — part of the non-fips test surface.
+// Builds the `ring` provider directly, part of the non-fips test surface.
 #![cfg(feature = "non-fips")]
 
 use std::sync::Arc;
@@ -194,7 +194,7 @@ async fn client_without_cert_is_refused() {
         .connect(ServerName::try_from("localhost").unwrap(), tcp)
         .await
     else {
-        return; // refused at the TLS layer — correct.
+        return; // refused at the TLS layer, correct.
     };
     let Ok((mut sender, conn)) = hyper::client::conn::http1::handshake(TokioIo::new(tls)).await
     else {

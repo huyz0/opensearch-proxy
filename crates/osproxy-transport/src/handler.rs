@@ -32,9 +32,9 @@ pub trait IngressHandler: Send + Sync + 'static {
 
     /// Handles a streamed verbatim forward: `body` is the downstream request body
     /// piped straight to the upstream, and the returned [`StreamingResponse`]'s
-    /// body is the upstream response piped straight back — neither buffered.
+    /// body is the upstream response piped straight back, neither buffered.
     /// Called only when [`forward_plan`](Self::forward_plan) returned `true`; `req`
-    /// carries the parsed head (its `body` field is empty — the body is the `body`
+    /// carries the parsed head (its `body` field is empty, the body is the `body`
     /// argument). The default returns `500`, so a handler that opts in via
     /// `forward_plan` must implement it.
     fn handle_forward(

@@ -1,4 +1,4 @@
-//! Tests for the footprint profile — growth is a saturating difference, the
+//! Tests for the footprint profile, growth is a saturating difference, the
 //! ratio guards a zero idle reading, and the judge gates idle + growth.
 #![allow(clippy::unwrap_used)]
 
@@ -54,7 +54,7 @@ fn an_oversized_idle_footprint_fails_nfr_p6() {
 #[test]
 fn a_small_idle_with_a_modest_absolute_gain_passes_on_the_absolute_bound() {
     // 12 -> 23 MiB is ~1.9x (over the 1.5x ratio) but only +11 MiB absolute
-    // (under the 64 MiB floor) — a normal working set, not a leak.
+    // (under the 64 MiB floor), a normal working set, not a leak.
     let p = profile(12, 23, 50_000);
     let v = judge_footprint(&p, &FootprintThresholds::provisional());
     assert!(v.pass, "small absolute growth is fine: {:?}", v.findings);
@@ -62,7 +62,7 @@ fn a_small_idle_with_a_modest_absolute_gain_passes_on_the_absolute_bound() {
 
 #[test]
 fn unbounded_growth_fails_both_bounds() {
-    // 5x ratio AND +320 MiB absolute — past both the ratio and the byte floor.
+    // 5x ratio AND +320 MiB absolute, past both the ratio and the byte floor.
     let p = profile(80, 400, 1_000_000);
     let v = judge_footprint(&p, &FootprintThresholds::provisional());
     assert!(!v.pass);

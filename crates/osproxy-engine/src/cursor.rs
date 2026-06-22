@@ -7,7 +7,7 @@
 use osproxy_core::{ClusterId, CursorSigner};
 use osproxy_spi::RequestCtx;
 
-/// The only client query params the proxy forwards upstream — the cursor
+/// The only client query params the proxy forwards upstream, the cursor
 /// lifecycle knobs. Everything else (notably query-affecting params like `q`,
 /// `source`, `analyzer`) is dropped, so a client cannot bypass the mandatory
 /// body partition filter via the URL (NFR-S4).
@@ -31,7 +31,7 @@ pub(crate) fn forwardable_query(raw: Option<&str>) -> Option<String> {
     }
 }
 
-/// Whether a response body mentions `_scroll_id` at all — a cheap pre-filter so a
+/// Whether a response body mentions `_scroll_id` at all, a cheap pre-filter so a
 /// plain (non-scroll) search never pays for a JSON parse just to find none.
 pub(crate) fn has_scroll_id(body: &[u8]) -> bool {
     const NEEDLE: &[u8] = b"_scroll_id";
@@ -57,8 +57,8 @@ pub(crate) fn wrap_scroll_id_in_response(
     serde_json::to_vec(&v).unwrap_or(body)
 }
 
-/// The wrapped PIT id from a search body (`{"pit":{"id": <wrapped>}}`), if present
-/// — the marker that a search is pinned to a point-in-time and must route to the
+/// The wrapped PIT id from a search body (`{"pit":{"id": <wrapped>}}`), if present,
+/// the marker that a search is pinned to a point-in-time and must route to the
 /// PIT's cluster rather than resolve a fresh target.
 pub(crate) fn pit_id_in_body(body: &[u8]) -> Option<String> {
     let v: serde_json::Value = serde_json::from_slice(body).ok()?;
@@ -177,7 +177,7 @@ mod tests {
     fn only_cursor_params_are_forwarded_not_query_affecting_ones() {
         // The isolation guard (NFR-S4): `scroll`/`keep_alive` pass; `q`, `source`,
         // and anything else that could override the body partition filter is
-        // dropped — a client cannot bypass tenancy via the URL.
+        // dropped, a client cannot bypass tenancy via the URL.
         assert_eq!(
             forwardable_query(Some("scroll=1m")).as_deref(),
             Some("scroll=1m")

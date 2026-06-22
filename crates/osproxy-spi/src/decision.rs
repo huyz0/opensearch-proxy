@@ -79,14 +79,14 @@ impl BodyTransform {
 
 /// The routing decision: the single destination plus the transforms to apply.
 ///
-/// In v1 exactly one [`Target`] is resolved — no synchronous fan-out (ADR-002).
+/// In v1 exactly one [`Target`] is resolved, no synchronous fan-out (ADR-002).
 /// The [`Epoch`] is the placement-table generation the decision was derived
 /// from; it is stamped onto the write so the sink can reject a stale-epoch write
 /// during a migration (`docs/06` §2).
 ///
 /// Read-path concerns are **derived**, not separate fields: the mandatory
 /// partition query filter and the response field-strip are both computed from
-/// [`BodyTransform`] (the injected `PartitionId` field is the isolation key — see
+/// [`BodyTransform`] (the injected `PartitionId` field is the isolation key, see
 /// `osproxy-engine`'s `read` module), and cursor (scroll/PIT) affinity is handled
 /// by the engine's cursor signer on those endpoints. Deriving them from the same
 /// `body_transform` that drives the write-path inject is what keeps the two

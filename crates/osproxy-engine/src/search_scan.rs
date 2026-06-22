@@ -1,9 +1,9 @@
-//! Resumable, byte-driven search-response transform — the streaming counterpart
+//! Resumable, byte-driven search-response transform, the streaming counterpart
 //! of the buffered [`shape_hits`](crate::read::shape_hits).
 //!
 //! A search response is `{... "hits": {... "hits": [ <hit>, <hit>, ... ] ...}
 //! ...}`. The proxy must strip each hit's injected tenancy fields, reset its
-//! `_index`, drop `_routing`, and map its `_id` back to logical — and pass every
+//! `_index`, drop `_routing`, and map its `_id` back to logical, and pass every
 //! sibling (`took`, `_shards`, and especially the potentially huge
 //! `aggregations`) through untouched. This scanner does that **without ever
 //! buffering more than one hit**: it forwards bytes verbatim until it locates the
@@ -12,14 +12,14 @@
 //! the array verbatim again.
 //!
 //! It is a byte-level state machine (resumable across arbitrary chunk
-//! boundaries) that tracks only JSON structure — string/escape state and
-//! `{}[]` nesting — never building a `Value` for anything but a single framed
+//! boundaries) that tracks only JSON structure, string/escape state and
+//! `{}[]` nesting, never building a `Value` for anything but a single framed
 //! hit. The only isolation-relevant new code here is element *framing*; the
 //! actual field strip is reused, not reimplemented. A property test pins the
 //! whole-stream output to the buffered `shape_hits` oracle for every input and
 //! every chunk split (see `search_scan_tests.rs`).
 //
-// JUSTIFY(file-length): one cohesive state machine — the phase/element/skip
+// JUSTIFY(file-length): one cohesive state machine, the phase/element/skip
 // types and the per-byte transition handlers are a single unit whose
 // correctness is argued (and fuzzed) as a whole; splitting the transitions from
 // the state they mutate would scatter the isolation-critical framing invariant
@@ -45,19 +45,19 @@ impl HitShaper {
     /// logical view, reusing the audited [`shape_hit`].
     ///
     /// The framed bytes parse as a single hit, which `serde_json` deserializes
-    /// under its 128-level recursion limit — comfortably above OpenSearch's
+    /// under its 128-level recursion limit, comfortably above OpenSearch's
     /// default `index.mapping.depth.limit` of 20, so a real hit always parses and
     /// is stripped. The fallback to raw bytes covers only the cases that cannot
     /// occur from a well-formed upstream: a scalar element (no `_source` to strip,
     /// so `shape_hit` no-ops anyway) or a hit so deeply nested that it exceeds the
     /// recursion limit. The latter would forward the hit *unshaped*; that is a
-    /// deliberate, bounded trade — it discloses the proxy's internal field/id
+    /// deliberate, bounded trade, it discloses the proxy's internal field/id
     /// scheme to the **same tenant** that owns the document (the isolation filter
     /// guarantees a hit is never another tenant's), never cross-tenant data, and
     /// it keeps the response structurally valid rather than dropping a hit and
     /// corrupting the array framing. The inner `unwrap_or_else` returns the
-    /// *unstripped* `raw` on a reserialization failure — which would re-expose the
-    /// injected fields of an already-stripped hit — but reserializing a parsed
+    /// *unstripped* `raw` on a reserialization failure, which would re-expose the
+    /// injected fields of an already-stripped hit, but reserializing a parsed
     /// `serde_json::Value` cannot fail, so that arm is unreachable; it is a
     /// total-function fallback, not a real strip-bypass path.
     fn transform(&self, raw: &[u8]) -> Vec<u8> {
@@ -215,14 +215,14 @@ impl SearchHitsScanner {
     }
 
     /// Feeds one chunk of response bytes, returning the transformed bytes ready
-    /// to emit (possibly empty — e.g. a chunk consumed entirely into a partial
+    /// to emit (possibly empty, e.g. a chunk consumed entirely into a partial
     /// element).
     pub(crate) fn feed(&mut self, chunk: &[u8]) -> Vec<u8> {
         let mut i = 0;
         while i < chunk.len() {
             // Once the `hits.hits` array has closed (or no array was found), every
-            // remaining byte — including the potentially huge `aggregations`
-            // sibling — is forwarded verbatim. Bulk-copy the rest of the chunk in
+            // remaining byte, including the potentially huge `aggregations`
+            // sibling, is forwarded verbatim. Bulk-copy the rest of the chunk in
             // one shot rather than dispatching each byte through `step`: for a
             // multi-MiB aggregations blob this is the difference between a memcpy
             // and a per-byte state-machine loop (see `benches/search_transform.rs`),
@@ -332,7 +332,7 @@ impl SearchHitsScanner {
         if self.key_is_hits {
             // The target is `hits.hits` (the root `hits` is an object, whose inner
             // `hits` is the array). The buffered oracle only shapes that nested
-            // array — a root-level `hits` whose value is *directly* an array is left
+            // array, a root-level `hits` whose value is *directly* an array is left
             // untouched there (`Value::get_mut("hits")` on an array yields `None`),
             // so it must pass through here too. Hence the array is entered only at
             // `level` 2; anything else → no hits to shape → forward.
@@ -420,7 +420,7 @@ impl SearchHitsScanner {
     }
 
     /// Frames one array element into `elem`. On completion, transforms it, emits
-    /// the result, and advances to [`Phase::ArrExpectComma`] — re-dispatching a
+    /// the result, and advances to [`Phase::ArrExpectComma`], re-dispatching a
     /// scalar's terminating delimiter, which belongs to the array frame.
     fn read_elem(&mut self, b: u8) -> Flow {
         match self.elem.kind {

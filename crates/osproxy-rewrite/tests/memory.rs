@@ -8,7 +8,7 @@
 //!
 //! The budgets are baselines, not targets: a change that moves one is a
 //! deliberate decision to review (update the number with the reason), not a
-//! silent regression. The load-bearing one is `strip_fields == 0` — the
+//! silent regression. The load-bearing one is `strip_fields == 0`, the
 //! read-path field strip on every hit must not allocate.
 
 #![allow(clippy::unwrap_used)]
@@ -52,7 +52,7 @@ fn rewrite_hot_path_allocation_budgets() {
 
 /// INV-MEM (ADR-014): the byte splice/extract primitives allocate a number of
 /// blocks bounded by the document's *structure* (its top-level keys / the path
-/// walked), never by its *size* — there is no `Value` tree, so a 64 KiB document
+/// walked), never by its *size*, there is no `Value` tree, so a 64 KiB document
 /// and a 256 B one cost the same number of allocations. This is the load-bearing
 /// streaming guarantee: the body is held once, never materialized.
 fn streaming_invariant_budgets() {
@@ -84,7 +84,7 @@ fn streaming_invariant_budgets() {
     );
 }
 
-/// A `{"id":7,"data":"x…"}` document padded to ~`size` bytes — fixed top-level
+/// A `{"id":7,"data":"x…"}` document padded to ~`size` bytes, fixed top-level
 /// shape, variable size.
 fn padded_doc(size: usize) -> Vec<u8> {
     let pad = size.saturating_sub(20).max(1);
@@ -119,7 +119,7 @@ fn document_transform_budgets() {
         "inject_fields allocation budget"
     );
 
-    // strip_fields: the read-path inverse — removing a key must NOT allocate.
+    // strip_fields: the read-path inverse, removing a key must NOT allocate.
     let mut hit = json!({ "_tenant": "acme", "msg": "hi" });
     let names = vec![FieldName::from("_tenant")];
     assert_eq!(
@@ -132,13 +132,13 @@ fn document_transform_budgets() {
 
     // wrap_query: parse only the top level (sibling subtrees and the client query
     // stay as raw byte spans via RawValue), nest the query under the partition
-    // filter, and re-serialize — the heaviest per-search transform. Down from 33
+    // filter, and re-serialize, the heaviest per-search transform. Down from 33
     // when the whole body was materialized into a Value tree; the remaining cost
     // is the top-level map, the constructed bool subtree, and the output buffer.
     //
     // This one is an *upper bound*, not an exact count: the constructed-buffer
     // growth (`to_writer` into `q`, `from_utf8`, `RawValue::from_string`) reallocs
-    // a profile-dependent number of times — 12 in the normal build, 15 under
+    // a profile-dependent number of times, 12 in the normal build, 15 under
     // coverage instrumentation. A bound still strongly guards (old path was 33)
     // while tolerating that variance; the rest of the budgets stay exact because
     // their paths are allocation-stable across build configs.
@@ -153,7 +153,7 @@ fn document_transform_budgets() {
 /// Bulk-path budgets (the highest-throughput ingest path; one id mapping per
 /// document, one parse per request).
 fn bulk_path_budgets() {
-    // map_logical_to_physical: frame the natural key into the physical id — runs
+    // map_logical_to_physical: frame the natural key into the physical id, runs
     // per document on bulk ingest. (prefix + suffix from id_frame, plus the
     // formatted physical id.)
     let l2p = allocs(|| {
@@ -162,7 +162,7 @@ fn bulk_path_budgets() {
         );
     });
 
-    // map_physical_to_logical: strip the frame back off — runs per hit on the
+    // map_physical_to_logical: strip the frame back off, runs per hit on the
     // read/response path; only the recovered logical id is owned.
     let p2l = allocs(|| {
         let _ = std::hint::black_box(
@@ -171,7 +171,7 @@ fn bulk_path_budgets() {
     });
 
     // parse_bulk: parse a fixed two-operation NDJSON body (an index with a source
-    // line and a delete) — the per-request bulk parse.
+    // line and a delete), the per-request bulk parse.
     let bulk_body =
         b"{\"index\":{\"_id\":\"1\"}}\n{\"msg\":\"hi\"}\n{\"delete\":{\"_id\":\"2\"}}\n";
     let bulk = allocs(|| {

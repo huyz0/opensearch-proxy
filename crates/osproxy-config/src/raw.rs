@@ -13,7 +13,7 @@ use crate::ConfigError;
 
 /// Every recognized setting, by canonical `snake_case` key. A key not in this list
 /// is rejected (in a file or a flag) so a typo fails fast rather than being
-/// silently ignored — the same fail-closed stance as the directive publish path.
+/// silently ignored, the same fail-closed stance as the directive publish path.
 pub(crate) const KEYS: &[&str] = &[
     "bind",
     "grpc_bind",
@@ -126,8 +126,8 @@ impl Raw {
     /// A `[section]` header is optional grouping sugar: inside one, a bare key is
     /// resolved as `{section}_{key}` first (e.g. `kafka_brokers` under `[capture]`
     /// → `capture_kafka_brokers`), falling back to the key as-is, so a
-    /// fully-qualified key still works anywhere and the canonical key — hence the
-    /// `OSPROXY_<KEY>` env var and `--key` flag — is unchanged. `[]` clears the
+    /// fully-qualified key still works anywhere and the canonical key, hence the
+    /// `OSPROXY_<KEY>` env var and `--key` flag, is unchanged. `[]` clears the
     /// section. A file with no headers behaves exactly as before.
     ///
     /// # Errors

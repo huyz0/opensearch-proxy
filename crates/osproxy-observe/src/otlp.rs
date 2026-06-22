@@ -1,11 +1,11 @@
 //! Encoding a [`RequestTrace`] as an OTLP/HTTP **JSON** `ResourceSpans` payload
 //! (`docs/specs/observability-otel.md`).
 //!
-//! This is the wire encoding only — pure and I/O-free, so it is exhaustively
+//! This is the wire encoding only, pure and I/O-free, so it is exhaustively
 //! testable without a collector. One span per request represents the proxy's hop;
 //! its id is the W3C `span_id` the proxy already presents to downstream calls, so
 //! the upstream's spans nest under it. The span's attributes are the same
-//! **shape-only** stage data as `/debug/explain` (ids, names, sizes, codes —
+//! **shape-only** stage data as `/debug/explain` (ids, names, sizes, codes,
 //! never a tenant value), keyed under the `osproxy.*` / standard `OTel`
 //! namespaces.
 //!
@@ -93,7 +93,7 @@ fn span_name(trace: &RequestTrace) -> String {
 }
 
 /// The shape-only span attributes, assembled from the recorded stage spans. Every
-/// value is an id, name, size, count, or stable code — never request data.
+/// value is an id, name, size, count, or stable code, never request data.
 fn attributes(request_id: &RequestId, trace: &RequestTrace) -> Vec<Value> {
     let mut a = vec![attr_str("osproxy.request.id", request_id.as_str())];
     if let Some(i) = &trace.ingress {
@@ -221,7 +221,7 @@ mod tests {
     #[test]
     fn a_continued_trace_nests_the_span_under_the_callers_parent() {
         // `traced()` propagates from an incoming traceparent whose span is
-        // 00f067aa0ba902b7 — that must surface as the proxy span's parent.
+        // 00f067aa0ba902b7, that must surface as the proxy span's parent.
         let doc = resource_spans("svc", &RequestId::from("req-1"), &traced(), 0, 1).unwrap();
         let span = &doc["resourceSpans"][0]["scopeSpans"][0]["spans"][0];
         assert_eq!(span["parentSpanId"], "00f067aa0ba902b7");

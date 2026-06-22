@@ -8,14 +8,14 @@
 //! This module makes the binding **travel with the cursor** instead of living in
 //! a shared store: on create the proxy wraps the upstream cursor id together with
 //! its cluster into a signed token the client echoes back; on continue *any*
-//! instance recovers the cluster from the token alone — no shared state, no
+//! instance recovers the cluster from the token alone, no shared state, no
 //! replication lag, no read-after-write race. The upstream id is carried
 //! verbatim as the payload (we never need spare room *inside* it), and the proxy
 //! strips the envelope before talking upstream, so OpenSearch never sees it.
 //!
 //! The signature binds the cluster to *this* cursor: a client cannot redirect a
 //! cursor to another cluster (the tag would not verify), and a tampered token
-//! fails closed to "unresolvable cursor" — never a wrong-cluster dispatch.
+//! fails closed to "unresolvable cursor", never a wrong-cluster dispatch.
 
 use crate::ids::ClusterId;
 
@@ -32,8 +32,8 @@ pub trait CursorSigner: Send + Sync {
 }
 
 /// Wraps `cursor` (the upstream scroll/PIT id) with `cluster` into a signed,
-/// self-describing token for the client. Format `{cluster_hex}.{tag_hex}.{cursor}`
-/// — the cursor verbatim (it is base64, so it never contains the `.` delimiter).
+/// self-describing token for the client. Format `{cluster_hex}.{tag_hex}.{cursor}`,
+/// the cursor verbatim (it is base64, so it never contains the `.` delimiter).
 #[must_use]
 pub fn wrap(signer: &dyn CursorSigner, cluster: &ClusterId, cursor: &str) -> String {
     let tag = signer.tag(&binding(cluster, cursor));
@@ -50,7 +50,7 @@ pub fn wrap(signer: &dyn CursorSigner, cluster: &ClusterId, cursor: &str) -> Str
 }
 
 /// Recovers `(cluster, upstream cursor)` from a token produced by [`wrap`], or
-/// `None` if it is malformed or its signature does not verify (**fail-closed** —
+/// `None` if it is malformed or its signature does not verify (**fail-closed**,
 /// a bad token is never routed anywhere).
 #[must_use]
 pub fn unwrap(signer: &dyn CursorSigner, token: &str) -> Option<(ClusterId, String)> {
@@ -62,7 +62,7 @@ pub fn unwrap(signer: &dyn CursorSigner, token: &str) -> Option<(ClusterId, Stri
     // there is no intermediate byte Vec to free (the id is move-constructed).
     let cluster = ClusterId::from(decode_hex_to_string(cluster_hex)?);
     // Verify by re-deriving the expected tag and comparing it against the
-    // provided hex *in place* — no decoded-tag Vec is allocated. The compare is
+    // provided hex *in place*, no decoded-tag Vec is allocated. The compare is
     // constant-time over content for an equal length, like `constant_time_eq`.
     let expected = signer.tag(&binding(&cluster, cursor));
     if hex_eq_ct(tag_hex, &expected) {

@@ -2,7 +2,7 @@
 //! bounded store of recent explanations.
 //!
 //! The document is purpose-built for LLM consumption (`docs/05` §6): the ordered
-//! spans as shape attributes, the final status, and — on failure — the
+//! spans as shape attributes, the final status, and, on failure, the
 //! `ErrorContext` with its decision chain and remediation. Because the trace is
 //! shape-only by construction, so is this document; it cannot reveal a tenant
 //! value because none was ever captured.
@@ -127,7 +127,7 @@ impl ExplainStore {
     }
 
     /// Records the trace for `request_id`, evicting the oldest if full. Retains the
-    /// trace as-is — the explain document is assembled lazily on [`Self::get`].
+    /// trace as-is, the explain document is assembled lazily on [`Self::get`].
     pub fn record(&self, request_id: RequestId, trace: &RequestTrace) {
         let mut entries = self
             .entries

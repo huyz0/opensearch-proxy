@@ -1,7 +1,7 @@
 //! The NFR-P load runner (`docs/01` §NFR-P, `docs/11` M4 calibration track): the
 //! thing that *fills in* an [`NfrProfile`]. It drives the same write workload two
-//! ways against one real OpenSearch — **direct to the cluster** (the baseline)
-//! and **through the proxy** — measures per-request latency on each side, reads
+//! ways against one real OpenSearch, **direct to the cluster** (the baseline)
+//! and **through the proxy**, measures per-request latency on each side, reads
 //! the proxy's upstream connection-reuse counters, and emits the machine-readable
 //! profile + [`judge`](osproxy_bench::judge) verdict an operator (or an LLM) reads.
 //!
@@ -17,7 +17,7 @@
 
 // Test scaffolding (helpers + a spawned proxy/container, not `#[test]` fns).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::cast_precision_loss)]
-// JUSTIFY(file-length): one cohesive load runner — container + proxy scaffold,
+// JUSTIFY(file-length): one cohesive load runner, container + proxy scaffold,
 // the concurrent driver, latency collection, and profile assembly belong
 // together; splitting them would duplicate the ~60-line scaffold and the shared
 // request shapes across files for no gain.
@@ -53,7 +53,7 @@ const CLUSTER: &str = "default";
 /// Requests issued per side. Large enough that the pool warms and percentiles are
 /// stable; small enough to finish in seconds against a local container.
 const TOTAL: u64 = 2_000;
-/// Worker count — the configured (nominal) in-flight request count the profile
+/// Worker count, the configured (nominal) in-flight request count the profile
 /// records; the achieved mean in-flight depends on how fast workers drain.
 const CONCURRENCY: u32 = 16;
 
@@ -124,14 +124,14 @@ async fn spawn_proxy(upstream: String) -> (String, Arc<Handler>) {
 /// OpenSearch, so the only difference is the proxy hop. The reference tenancy
 /// constructs the doc id and routing, so the proxy's *upstream* call for
 /// `POST /orders/_doc {tenant_id,id}` is a `PUT /{INDEX}/_doc/{partition}:{id}
-/// ?routing={partition}` with the injected `_tenant` field — exactly the shape
+/// ?routing={partition}` with the injected `_tenant` field, exactly the shape
 /// [`Side::Direct`] sends straight to the cluster. Each side uses a distinct
 /// partition only to avoid colliding on ids; both re-write their own warmed ids,
 /// so both runs are version-updates (symmetric), not create-vs-update.
 #[derive(Clone)]
 enum Side {
     /// Straight to OpenSearch: the exact `PUT`-by-physical-id-with-routing the
-    /// proxy emits upstream — the no-proxy baseline NFR-P1/P2 measure against.
+    /// proxy emits upstream, the no-proxy baseline NFR-P1/P2 measure against.
     Direct(String),
     /// Through the proxy: the logical `POST /orders/_doc` a client sends; the
     /// proxy classifies, resolves, rewrites, and dispatches the upstream `PUT`.
@@ -243,7 +243,7 @@ async fn nfr_p_profile_against_real_opensearch() {
 
 /// Concurrency levels the scalability sweep drives the proxy at, ascending.
 const SWEEP: &[u32] = &[1, 8, 32, 64];
-/// Requests per sweep point — smaller than the single-point profile so a
+/// Requests per sweep point, smaller than the single-point profile so a
 /// four-point sweep still finishes in seconds.
 const SWEEP_TOTAL: u64 = 800;
 
@@ -272,7 +272,7 @@ async fn nfr_p_scalability_curve_against_real_opensearch() {
     report_curve(&curve, &verdict);
 
     // Host-independent invariant: serving more concurrency must buy more
-    // throughput — the proxy isn't serializing requests behind its pool. The
+    // throughput, the proxy isn't serializing requests behind its pool. The
     // exact tail-amplification factor is host-bound, so it is recorded (and judged
     // against provisional bounds) but not hard-asserted here.
     assert!(
@@ -300,7 +300,7 @@ async fn measure_profile(
     let _ = drive(client, proxy(), CONCURRENCY, TOTAL, clock).await;
 
     // The pool's reuse counters are cumulative and not resettable, so we snapshot
-    // them before and after the timed proxy run and diff — warmup opens then fall
+    // them before and after the timed proxy run and diff, warmup opens then fall
     // outside the window and don't skew the steady-state reuse rate.
     let cluster = ClusterId::from(CLUSTER);
     let before = handler.pipeline().sink().pool_stats(&cluster);
@@ -315,7 +315,7 @@ async fn measure_profile(
     assert_eq!(proxy_ns.len() as u64, TOTAL, "every proxy write succeeds");
     let baseline = LatencySummary::from_nanos(&base_ns).expect("baseline samples");
     let proxy = LatencySummary::from_nanos(&proxy_ns).expect("proxy samples");
-    // Proxy-side sustained rate only (count / wall-clock of the proxy run) — a
+    // Proxy-side sustained rate only (count / wall-clock of the proxy run), a
     // steady-state smoke number, not a proxy-vs-baseline ratio; `judge` leaves it
     // ungated until a target is calibrated.
     let throughput_rps = proxy.count as f64 / proxy_elapsed.as_secs_f64();

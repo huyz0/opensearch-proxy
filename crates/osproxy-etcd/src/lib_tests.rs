@@ -1,4 +1,4 @@
-//! Unit tests for the snapshot-application logic — the fail-safe "keep last good"
+//! Unit tests for the snapshot-application logic, the fail-safe "keep last good"
 //! rule and the cheap `load`. The watch/connect path is exercised by the
 //! Docker-gated `tests/etcd_live.rs` integration test.
 
@@ -23,7 +23,7 @@ fn a_valid_value_is_applied_and_load_reflects_it() {
 
 #[test]
 fn a_malformed_value_keeps_the_last_good_snapshot() {
-    // A bad publish must never blank fleet diagnostics — the previous set stays.
+    // A bad publish must never blank fleet diagnostics, the previous set stays.
     let clock = ManualClock::new();
     let current = Arc::new(ArcSwap::from_pointee(DirectiveSet::new()));
     apply_value(&current, GOOD, &clock);

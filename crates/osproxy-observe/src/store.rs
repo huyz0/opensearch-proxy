@@ -1,6 +1,6 @@
 //! The fleet-wide diagnostics-directive store seam (`docs/05` §3-4).
 //!
-//! The signed `X-Debug-Directive` header is *surgical* — one request, one
+//! The signed `X-Debug-Directive` header is *surgical*, one request, one
 //! instance. The store is its *fleet-wide* counterpart: a controller publishes a
 //! [`DirectiveSet`] and every proxy instance reads it, so an operator can raise
 //! verbosity across the fleet (a tenant, an endpoint, a sampled slice) without a
@@ -9,7 +9,7 @@
 //! etcd/Consul/OpenSearch-index backend implements the same trait unchanged.
 //!
 //! Reads are **fresh per request** and on the hot path, so [`DirectiveStore::load`]
-//! is a cheap `Arc` clone of the current snapshot — a distributed backend keeps a
+//! is a cheap `Arc` clone of the current snapshot, a distributed backend keeps a
 //! watched local copy and returns it here rather than doing I/O per call. TTL
 //! safety is intrinsic: directives carry an absolute expiry, so even a published
 //! set that is never replaced self-expires at evaluation time.
@@ -45,7 +45,7 @@ pub struct InMemoryDirectiveStore {
 }
 
 impl InMemoryDirectiveStore {
-    /// An empty store — every request evaluates to `Off` until a set is published.
+    /// An empty store, every request evaluates to `Off` until a set is published.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -60,7 +60,7 @@ impl InMemoryDirectiveStore {
         self
     }
 
-    /// Replaces the active set — the fleet-wide "flip" an operator performs. The
+    /// Replaces the active set, the fleet-wide "flip" an operator performs. The
     /// next `load` on every thread sees it (no restart). A lock-free atomic store.
     pub fn publish(&self, set: DirectiveSet) {
         self.current.store(Arc::new(set));

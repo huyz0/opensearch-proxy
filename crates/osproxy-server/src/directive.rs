@@ -1,4 +1,4 @@
-//! Concrete HMAC verifier for the signed `X-Debug-Directive` header — the
+//! Concrete HMAC verifier for the signed `X-Debug-Directive` header, the
 //! surgical, single-request diagnostics channel (`docs/05` §3). An operator mints
 //! a token off-band with the shared key; a client cannot forge one, so it cannot
 //! self-enable verbose diagnostics (NFR-S3). The token rides the request and is
@@ -27,13 +27,13 @@ use serde_json::Value;
 // artifact that authenticates with no validated primitive.
 #[cfg(all(feature = "fips", feature = "non-fips"))]
 compile_error!(
-    "features `fips` and `non-fips` are mutually exclusive — build with \
+    "features `fips` and `non-fips` are mutually exclusive; build with \
      `--no-default-features --features fips` for a FIPS artifact"
 );
 #[cfg(not(any(feature = "fips", feature = "non-fips")))]
 compile_error!("enable exactly one crypto provider feature: `fips` or `non-fips`");
 
-// The MAC stays on whichever validated module the build linked — same cfg-select
+// The MAC stays on whichever validated module the build linked, same cfg-select
 // as `cert_fingerprint` in the transport TLS path (ADR-009). ring and aws-lc-rs
 // share this `hmac` API (`Key::new`, constant-time `verify`).
 #[cfg(feature = "fips")]
@@ -97,7 +97,7 @@ impl HmacDirectiveVerifier {
         }
         // Default to always-sample; a present rate must be a valid per-mille
         // (`0..=1000`). An out-of-range value authorizes nothing rather than
-        // failing open to the broadest capture — same strictness as `level`.
+        // failing open to the broadest capture, same strictness as `level`.
         let sample_per_mille = match v.get("sample_per_mille") {
             None => 1000,
             Some(n) => match n.as_u64() {
@@ -107,7 +107,7 @@ impl HmacDirectiveVerifier {
         };
 
         Some(DiagnosticsDirective {
-            // A fixed label — never a tenant value — marks the header origin.
+            // A fixed label, never a tenant value, marks the header origin.
             id: "x-debug-header".to_owned(),
             match_,
             level,

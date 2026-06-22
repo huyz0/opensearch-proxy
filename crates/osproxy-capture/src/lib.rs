@@ -11,7 +11,7 @@
 //!
 //! **This is not the shape-only telemetry.** Everything else osproxy records is
 //! shapes/ids/names and safe to expose by construction. A capture record carries
-//! the raw bodies and header *values* — tenant data, and any credential a
+//! the raw bodies and header *values*, tenant data, and any credential a
 //! redaction layer did not strip. The capture stream is a privileged channel:
 //! secure it (encryption, access control), and enable it deliberately, never by
 //! default. Redaction is composed in via [`RedactingCapture`] rather than baked

@@ -1,6 +1,6 @@
 //! Wall-clock micro-benchmark of endpoint classification (`cargo xtask bench-local`).
 //!
-//! `classify` runs on **every** ingress request — it splits the path and matches
+//! `classify` runs on **every** ingress request, it splits the path and matches
 //! the segment shape into an [`EndpointKind`]. A regression here taxes 100% of
 //! traffic, so it is worth a calibration point even though each call is cheap.
 //! Wall-clock numbers are host-specific; the deterministic gate is the dhat

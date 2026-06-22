@@ -1,8 +1,8 @@
 //! Decoding an operator-published fleet [`DirectiveSet`] from JSON (`docs/05` §3).
 //!
-//! One fail-closed decoder shared by every publish channel — the
+//! One fail-closed decoder shared by every publish channel, the
 //! `POST /admin/directives` admin endpoint and a distributed `DirectiveStore`
-//! (e.g. etcd) — so a directive means the same thing however it arrives, and a
+//! (e.g. etcd), so a directive means the same thing however it arrives, and a
 //! typo can never silently widen its blast radius.
 //!
 //! **Fail-closed**: any malformed or out-of-range field rejects the *whole* set
@@ -26,7 +26,7 @@ use crate::directive::{DiagLevel, DiagnosticsDirective, DirectiveMatch, Directiv
 ///
 /// # Errors
 /// A `&'static str` slug (e.g. `"unknown_field"`, `"zero_ttl"`) naming the first
-/// rejection, suitable for a log or an HTTP reason — never echoes a value.
+/// rejection, suitable for a log or an HTTP reason, never echoes a value.
 pub fn decode_directive_set(body: &[u8], clock: &dyn Clock) -> Result<DirectiveSet, &'static str> {
     let v: Value = serde_json::from_slice(body).map_err(|_| "invalid_json")?;
     reject_unknown_keys(&v, &["directives"])?;
@@ -42,7 +42,7 @@ pub fn decode_directive_set(body: &[u8], clock: &dyn Clock) -> Result<DirectiveS
 }
 
 /// The directive fields a publish body may carry. A typo'd key (e.g. `"tennant"`)
-/// is rejected rather than silently dropped — a mistyped `"tenant"` must not
+/// is rejected rather than silently dropped, a mistyped `"tenant"` must not
 /// quietly widen a directive to the whole fleet.
 const DIRECTIVE_KEYS: &[&str] = &[
     "id",

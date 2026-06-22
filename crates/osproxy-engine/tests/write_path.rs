@@ -2,7 +2,7 @@
 //! tenancy router, the engine's plan builder, and into a [`MemorySink`], and we
 //! assert the recorded write is correctly tenanted (target, injected field,
 //! constructed id, routing) and that stripping the injected field recovers the
-//! client's original document — the round-trip symmetry the read path will rely
+//! client's original document, the round-trip symmetry the read path will rely
 //! on in M2.
 
 use std::sync::Arc;

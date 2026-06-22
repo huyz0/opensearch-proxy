@@ -1,8 +1,8 @@
-//! The per-request causal trace — **shape-only by construction**.
+//! The per-request causal trace, **shape-only by construction**.
 //!
 //! [`RequestTrace`] accumulates what happened to one request as it crosses each
 //! stage. Its setters accept *only* identifier newtypes, compile-time `&'static
-//! str` shape labels, and numeric sizes/counts — never a `String`/`&str` taken
+//! str` shape labels, and numeric sizes/counts, never a `String`/`&str` taken
 //! from request data and never a JSON value. There is therefore **no API path**
 //! by which a document field value, query literal, or secret can enter a trace
 //! (`docs/05` §7); the guarantee is structural, not redaction after the fact.
@@ -49,7 +49,7 @@ pub struct ResolveInfo {
     /// Whether `_routing` was set.
     pub routing: bool,
     /// The partition's migration phase at resolve time, e.g. `"settled"` /
-    /// `"draining"` / `"cutover"` — so an operator sees where a migration is
+    /// `"draining"` / `"cutover"`, so an operator sees where a migration is
     /// without reading values (`docs/06` §5).
     pub migration: &'static str,
 }
@@ -90,7 +90,7 @@ pub struct EgressInfo {
 /// [`crate::explain_json`].
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct RequestTrace {
-    /// The distributed-trace identity (W3C) this request continues or minted —
+    /// The distributed-trace identity (W3C) this request continues or minted,
     /// the trace/span ids that correlate `/debug/explain` and the emitted OTLP
     /// span with the wider trace.
     pub(crate) context: Option<TraceContext>,
@@ -121,7 +121,7 @@ impl RequestTrace {
         self.context.as_ref()
     }
 
-    /// The partition the request resolved to, once routing has run — so a
+    /// The partition the request resolved to, once routing has run, so a
     /// tenant-targeted diagnostics directive can be evaluated against it.
     #[must_use]
     pub fn resolved_partition(&self) -> Option<&PartitionId> {

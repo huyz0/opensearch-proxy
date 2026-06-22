@@ -16,7 +16,7 @@ fn opens_scroll_detects_the_scroll_param_in_any_position() {
 
 #[test]
 fn opens_scroll_ignores_lookalikes_and_absence() {
-    // Only the exact `scroll` key counts — not a value mentioning it, nor a longer
+    // Only the exact `scroll` key counts, not a value mentioning it, nor a longer
     // key that merely starts with it; and no query string means a plain search.
     assert!(!opens_scroll(None));
     assert!(!opens_scroll(Some("")));

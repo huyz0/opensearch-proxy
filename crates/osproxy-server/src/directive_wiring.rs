@@ -2,8 +2,8 @@
 //!
 //! Split out of `main` so the binary's lifecycle code stays within the
 //! file-length budget. Decides, from config, whether the pipeline reads an
-//! in-memory store (fed by `POST /admin/directives`) or — under the `etcd`
-//! feature — a distributed, watch-fed `EtcdDirectiveStore` (the etcd key is then
+//! in-memory store (fed by `POST /admin/directives`) or, under the `etcd`
+//! feature, a distributed, watch-fed `EtcdDirectiveStore` (the etcd key is then
 //! the fleet control plane and the local publish endpoint stays disabled).
 
 use std::sync::Arc;
@@ -37,7 +37,7 @@ pub(crate) fn with_directive_admin<A: osproxy_spi::Authenticator>(
 ///
 /// With `cfg.etcd` set, the pipeline reads an `osproxy_etcd::EtcdDirectiveStore`
 /// kept fresh by an etcd watch (fleet-wide, no restart) and there is no local
-/// admin store — operators publish to the etcd key. Without it, an in-memory store
+/// admin store, operators publish to the etcd key. Without it, an in-memory store
 /// is both read by the pipeline and written by the admin endpoint (single
 /// instance). A configured etcd on a binary built without the `etcd` feature is a
 /// loud startup error, never a silent fallback.

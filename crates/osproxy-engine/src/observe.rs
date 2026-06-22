@@ -2,7 +2,7 @@
 //!
 //! Bridges the engine's concrete types (a [`Resolved`] decision, a
 //! [`WriteBatch`], an ack) into the observe crate's shape-only span structs
-//! (`docs/05` §2). Every value here is an id, a name, a label, or a size — the
+//! (`docs/05` §2). Every value here is an id, a name, a label, or a size, the
 //! same no-value-leak discipline the trace API enforces.
 
 use osproxy_core::{error::DecisionChain, ErrorContext, IndexName};

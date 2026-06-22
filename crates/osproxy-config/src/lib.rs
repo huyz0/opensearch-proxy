@@ -3,7 +3,7 @@
 //! Loads and fully validates configuration (file → environment → flags) before
 //! any socket opens, producing validated value objects the other crates consume
 //! (`docs/01` §6). Invalid config fails fast with a typed, actionable
-//! [`ConfigError`] naming the bad field. It contains no business logic — it only
+//! [`ConfigError`] naming the bad field. It contains no business logic, it only
 //! turns strings into validated values; mapping those to domain types (the
 //! crypto provider, the pipeline) is the binary's job. Hot-reloadable state
 //! (directives, placement) goes through `osproxy-control`, not here.
@@ -164,7 +164,7 @@ pub struct CaptureTlsConfig {
     pub client_key_path: Option<String>,
 }
 
-/// TLS termination settings: PEM file **paths** (the binary reads them — config
+/// TLS termination settings: PEM file **paths** (the binary reads them, config
 /// stays free of certificate material). mTLS is required when `client_ca_path`
 /// is set.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -302,13 +302,13 @@ impl std::error::Error for ConfigError {}
 
 impl Config {
     /// Loads and validates configuration from the process environment plus
-    /// `args` (CLI flags without the program name). A `--config <path>` flag — or
-    /// the `OSPROXY_CONFIG` env var — names a config file read as the lowest layer.
+    /// `args` (CLI flags without the program name). A `--config <path>` flag, or
+    /// the `OSPROXY_CONFIG` env var, names a config file read as the lowest layer.
     ///
     /// # Errors
     ///
     /// Returns a [`ConfigError`] if a file/flag is malformed, a key is unknown, or
-    /// any value fails validation — before any socket is opened.
+    /// any value fails validation, before any socket is opened.
     pub fn load<I: IntoIterator<Item = String>>(args: I) -> Result<Self, ConfigError> {
         let (file_flag, flags) = extract_config_flag(args)?;
         let file_path = file_flag.or_else(|| {

@@ -8,7 +8,7 @@
 //! the physical id, fetch, and shape the stored document back into the client's
 //! logical view. Search and bulk attach here in later milestones.
 //
-// JUSTIFY(file-length): this is the central request orchestrator — the lifecycle
+// JUSTIFY(file-length): this is the central request orchestrator, the lifecycle
 // (classify → route → transform → dispatch → trace → diagnostics decision) is one
 // cohesive flow, and the per-request directive evaluation it owns is the seam
 // every observability/capture feature attaches to. Tests already live in
@@ -98,7 +98,7 @@ pub struct Pipeline<R, S> {
     /// prefix-free policy passes everything through (transparent/capture proxy).
     pub(crate) passthrough: Option<crate::passthrough::PassthroughPolicy>,
     /// The write mode applied when a request does not select one with the
-    /// `X-Write-Mode` header. Default [`crate::WriteMode::Sync`] — async fan-out is
+    /// `X-Write-Mode` header. Default [`crate::WriteMode::Sync`], async fan-out is
     /// opt-in (`docs/04` §9).
     pub(crate) baseline_write_mode: crate::asyncwrite::WriteMode,
     /// The durable queue async writes are enqueued onto. Default
@@ -190,12 +190,12 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
 
     /// The write mode for `ctx`: the validated `X-Write-Mode` header if present,
     /// else the deployment baseline. An unparseable header falls back to the
-    /// baseline rather than erroring — an unknown mode is not a hard failure.
+    /// baseline rather than erroring, an unknown mode is not a hard failure.
     pub(crate) fn write_mode(&self, ctx: &RequestCtx<'_>) -> crate::asyncwrite::WriteMode {
         self.resolve_write_mode(ctx.headers().get("x-write-mode"))
     }
 
-    /// The write mode from a raw `X-Write-Mode` header value (or its absence) —
+    /// The write mode from a raw `X-Write-Mode` header value (or its absence),
     /// the precedence shared by [`write_mode`](Self::write_mode) and
     /// [`is_sync_write`](Self::is_sync_write): a valid header wins, else the baseline.
     fn resolve_write_mode(&self, header: Option<&str>) -> crate::asyncwrite::WriteMode {
@@ -328,7 +328,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         self.explain.get(request_id)
     }
 
-    /// The break-glass tape — the explanations captured while a `ring_buffer`
+    /// The break-glass tape, the explanations captured while a `ring_buffer`
     /// directive was in effect (`docs/05` §5).
     #[must_use]
     pub fn break_glass(&self) -> &Arc<BreakGlassBuffer> {
@@ -356,13 +356,13 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     }
 
     /// Like [`Self::handle`], but also returns whether this request should be teed
-    /// to the fleet traffic-capture sink — the live per-request capture decision,
+    /// to the fleet traffic-capture sink, the live per-request capture decision,
     /// applied by the ingress to both success and error responses.
     pub async fn handle_with_capture(
         &self,
         ctx: &RequestCtx<'_>,
     ) -> (Result<PipelineResponse, RequestError>, bool) {
-        // Only pay for span timing/encoding when an exporter is actually active —
+        // Only pay for span timing/encoding when an exporter is actually active,
         // "Off" stays near-zero cost (`docs/05`).
         let exporting = self.exporter.enabled();
         let start_nanos = if exporting {
@@ -406,7 +406,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         }
 
         // Export the span when an exporter is active AND the diagnostics level for
-        // this request reaches at least `Shape` — so directives can restrict export
+        // this request reaches at least `Shape`, so directives can restrict export
         // to a targeted, sampled subset (`docs/05` §3). Background, best-effort.
         if exporting && diag.level >= DiagLevel::Shape {
             let end_nanos = self.clock.unix_nanos();
@@ -466,7 +466,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         }
     }
 
-    /// Whether the effective write mode for a request with these headers is sync —
+    /// Whether the effective write mode for a request with these headers is sync,
     /// the `X-Write-Mode` header if present and valid, else the deployment
     /// baseline. Lets the transport decide to stream-demux a `_bulk` (sync only;
     /// async fan-out keeps the buffered path) from the head alone (ADR-014 stage 4).
@@ -524,13 +524,13 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     }
 
     /// Handles a `_search` whose response is streamed back through the hit
-    /// transform (ADR-014, final stage): the upstream body is never buffered — each
+    /// transform (ADR-014, final stage): the upstream body is never buffered, each
     /// hit is shaped incrementally and every sibling (notably `aggregations`) is
     /// forwarded verbatim. Same trace lifecycle as
     /// [`forward_streamed`](Self::forward_streamed): the body length is unknown
     /// until it flows, so egress records the status with zero bytes. The request
     /// query body is small and already buffered in `ctx`; only the response
-    /// streams. Returns the result plus `false` — capture is never available on a
+    /// streams. Returns the result plus `false`, capture is never available on a
     /// streamed path (and the caller only streams when capture is off).
     pub async fn search_streamed(
         &self,
@@ -554,7 +554,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     /// never buffered. Same trace lifecycle as [`forward_streamed`](Self::forward_streamed)
     /// (classify → egress, into the explain store); per-op outcomes live
     /// positionally in the response body, as in the buffered bulk path. Sync write
-    /// mode only — the streaming decision is made by the caller; async fan-out
+    /// mode only, the streaming decision is made by the caller; async fan-out
     /// keeps the buffered path.
     pub async fn handle_bulk_streamed(
         &self,
@@ -583,7 +583,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     }
 
     /// Closes a streamed request's trace (egress or error) and records it into the
-    /// explain store. Returns the result plus `false` — traffic capture is never
+    /// explain store. Returns the result plus `false`, traffic capture is never
     /// available on a streamed path (the body is not retained to tee).
     fn finish_streamed_trace(
         &self,

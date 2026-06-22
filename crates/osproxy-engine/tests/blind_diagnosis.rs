@@ -1,6 +1,6 @@
 //! Blind-diagnosis (NFR-T1, `docs/09` §3): for each representative failure mode,
-//! the `/debug/explain` document **alone** — no source, no logs beyond the
-//! structured trace — must identify which stage failed, why (a stable code), the
+//! the `/debug/explain` document **alone**, no source, no logs beyond the
+//! structured trace, must identify which stage failed, why (a stable code), the
 //! decision chain, whether it is retryable, and an actionable remediation.
 //!
 //! This is the operationalization of "no human takeover": the rubric below is the
@@ -24,7 +24,7 @@ use osproxy_spi::{
 use osproxy_tenancy::TenancyRouter;
 use serde_json::Value;
 
-/// How a scenario's placement lookup behaves — the routing-stage failure lever.
+/// How a scenario's placement lookup behaves, the routing-stage failure lever.
 #[derive(Clone, Copy)]
 enum Placed {
     /// A valid shared-index placement (routing succeeds).
@@ -86,7 +86,7 @@ impl TenancySpi for DiagTenancy {
     }
 }
 
-/// What a scenario's sink does — the delivery-stage failure lever.
+/// What a scenario's sink does, the delivery-stage failure lever.
 #[derive(Clone, Copy)]
 enum Deliver {
     /// The write is accepted (201).
@@ -142,7 +142,7 @@ impl osproxy_sink::Reader for DiagSink {
 }
 
 /// Runs one ingest through a pipeline configured for the scenario, and returns
-/// **only** the `/debug/explain` document — the sole evidence the rubric judges.
+/// **only** the `/debug/explain` document, the sole evidence the rubric judges.
 async fn explain_for(placed: Placed, deliver: Deliver, body: &[u8]) -> Value {
     let pipeline = Pipeline::new(
         TenancyRouter::new(DiagTenancy { placed }),
@@ -180,7 +180,7 @@ struct Diagnosis {
 }
 
 /// The automated judge: reconstructs the diagnosis from the explain document with
-/// no other input. `failed_stage` is inferred purely from span presence — the
+/// no other input. `failed_stage` is inferred purely from span presence, the
 /// first pipeline stage that did not complete.
 fn diagnose(explain: &Value) -> Diagnosis {
     assert_eq!(explain["outcome"], "error", "expected a failed request");
@@ -226,7 +226,7 @@ async fn a_missing_placement_is_fully_diagnosable_from_the_trace() {
     assert_eq!(d.failed_stage, "spi.resolve");
     assert_eq!(d.code, "placement_missing");
     assert!(!d.retryable);
-    // The decision chain names the partition that has no placement — the operator
+    // The decision chain names the partition that has no placement, the operator
     // knows exactly which tenant to register.
     assert_eq!(d.partition.as_deref(), Some("acme"));
     assert!(d.remediation.contains("register a placement"));
@@ -238,7 +238,7 @@ async fn a_down_placement_backend_is_diagnosed_as_retryable() {
     let d = diagnose(&explain);
     assert_eq!(d.failed_stage, "spi.resolve");
     assert_eq!(d.code, "placement_backend_unavailable");
-    assert!(d.retryable, "a backend outage is transient — retry");
+    assert!(d.retryable, "a backend outage is transient, retry");
     assert!(d.remediation.contains("retry"));
 }
 
@@ -288,7 +288,7 @@ async fn every_failure_mode_carries_the_full_diagnostic_quintet() {
         assert!(!d.failed_stage.is_empty(), "stage identified: {explain}");
         assert!(!d.code.is_empty(), "code present: {explain}");
         assert!(!d.remediation.is_empty(), "remediation present: {explain}");
-        // retryable is a bool — always present by construction.
+        // retryable is a bool, always present by construction.
         let _ = d.retryable;
         let _ = d.partition;
     }

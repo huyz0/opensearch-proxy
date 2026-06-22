@@ -1,7 +1,7 @@
 //! Proves downstream TLS termination end to end: a rustls client completes a TLS
 //! handshake against the ingress (server cert from a self-signed test CA), sends
 //! an HTTP/1.1 request over the encrypted connection, and gets a response. The
-//! handler is unchanged from the cleartext path — TLS is transparent to it.
+//! handler is unchanged from the cleartext path, TLS is transparent to it.
 
 // Test scaffolding (helpers + spawned server, not `#[test]` fns) needs the
 // unwrap allowance the test-only config does not reach.
@@ -120,7 +120,7 @@ fn server_offers_only_the_fips_approved_suites() {
     let config = provider.server_config();
 
     // Every suite the server will negotiate is on the FIPS-approved list, and the
-    // list is exactly the approved set — no non-approved suite (e.g. CHACHA20) is
+    // list is exactly the approved set, no non-approved suite (e.g. CHACHA20) is
     // offered (ADR-004 caveat #3, NFR-S5).
     let offered: Vec<_> = config
         .crypto_provider()
@@ -200,7 +200,7 @@ fn alpn_advertises_h2_then_http11() {
     use osproxy_transport::CryptoProvider;
     let tc = test_cert();
     let provider = RingProvider::from_pem(tc.cert_pem.as_bytes(), tc.key_pem.as_bytes()).unwrap();
-    // h2 preferred, http/1.1 as the fallback — so a TLS client negotiates HTTP/2
+    // h2 preferred, http/1.1 as the fallback, so a TLS client negotiates HTTP/2
     // when it can, and the auto ingress builder serves whichever is selected.
     assert_eq!(
         provider.server_config().alpn_protocols,

@@ -4,7 +4,7 @@
 //! [`shape_hits_stream`] wraps the upstream [`ByteBody`] in a [`SearchHitsScanner`]
 //! and produces a new [`ByteBody`] that emits transformed bytes as the upstream
 //! flows. It is built with [`futures_util::stream::unfold`] + a
-//! [`StreamBody`] — a spawn-free combinator (no
+//! [`StreamBody`], a spawn-free combinator (no
 //! `tokio::spawn`, satisfying the spawn-discipline gate) that carries the
 //! upstream body and the scanner as its state.
 
@@ -28,7 +28,7 @@ use crate::search_scan::{HitShaper, SearchHitsScanner};
 impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     /// The **streaming** search path (ADR-014, final stage): like
     /// [`search`](Self::search) but the upstream response is piped back through
-    /// the hit transform without buffering — each hit shaped incrementally, every
+    /// the hit transform without buffering, each hit shaped incrementally, every
     /// sibling (`aggregations` especially) forwarded verbatim. A PIT-pinned search
     /// falls back to the buffered path: its `_scroll_id` affinity wrap needs the
     /// whole body. The caller (transport) already excluded scroll-opening
@@ -76,7 +76,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
 }
 
 /// The outcome of a streaming search: the upstream status and the response body
-/// as a live [`ByteBody`] — the hits transformed incrementally, all siblings
+/// as a live [`ByteBody`], the hits transformed incrementally, all siblings
 /// (including `aggregations`) passed through verbatim, none of it buffered.
 pub struct StreamSearch {
     /// The upstream HTTP status.
@@ -129,7 +129,7 @@ enum Stage {
 }
 
 /// Wraps the upstream search-response body so its `hits.hits` are transformed to
-/// the client's logical view incrementally — peak memory is one hit plus one
+/// the client's logical view incrementally, peak memory is one hit plus one
 /// upstream frame, independent of the response size (INV-MEM).
 #[must_use]
 pub(crate) fn shape_hits_stream(upstream: ByteBody, shaper: HitShaper) -> ByteBody {
@@ -163,8 +163,8 @@ async fn next_frame(stage: Stage) -> Option<(Result<Frame<Bytes>, BodyError>, St
             Some(Err(err)) => return Some((Err(err), Stage::Done)),
             None => {
                 // Upstream ended cleanly: emit the scanner's final bytes, then stop.
-                // For well-formed input this tail is always empty — every hit and
-                // sibling is emitted incrementally as it closes — so the non-empty
+                // For well-formed input this tail is always empty, every hit and
+                // sibling is emitted incrementally as it closes, so the non-empty
                 // arm is defensive (it would carry trailing bytes only if a future
                 // change deferred emission). A truncated body leaves its partial hit
                 // unparsed and unemitted, so it is dropped, never leaked unshaped.

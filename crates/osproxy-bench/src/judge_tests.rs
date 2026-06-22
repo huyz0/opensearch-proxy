@@ -1,4 +1,4 @@
-//! Tests for the NFR-P [`judge`] — a profile passes only when every bound holds,
+//! Tests for the NFR-P [`judge`], a profile passes only when every bound holds,
 //! and each finding names the NFR it scores.
 #![allow(clippy::unwrap_used)]
 

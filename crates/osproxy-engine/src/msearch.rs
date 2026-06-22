@@ -53,7 +53,7 @@ pub(crate) async fn multi_search<R: Router, S: Reader>(
 
     // Each entry is one already-shaped sub-response as raw JSON bytes (placeholder
     // overwritten for every ordinal). Keeping them raw means a sub-response's
-    // untouched siblings — `aggregations` especially — are never re-materialized
+    // untouched siblings, `aggregations` especially, are never re-materialized
     // when assembling the envelope (ADR-014, the read-path raw posture).
     let mut responses: Vec<Vec<u8>> = vec![b"null".to_vec(); n];
     let mut prepared: Vec<Option<Prepared>> = (0..n).map(|_| None).collect();
@@ -75,7 +75,7 @@ pub(crate) async fn multi_search<R: Router, S: Reader>(
 }
 
 /// Assembles the `{"responses":[…]}` envelope from the per-search raw byte
-/// entries — concatenated directly, since each entry is already valid JSON, so no
+/// entries, concatenated directly, since each entry is already valid JSON, so no
 /// sub-response is parsed back into a `Value` to nest it.
 fn assemble_responses(responses: &[Vec<u8>]) -> Vec<u8> {
     let mut body = Vec::with_capacity(16 + responses.iter().map(Vec::len).sum::<usize>());
@@ -175,7 +175,7 @@ fn shape_response(p: &Prepared, result: Result<SearchOutcome, SinkError>) -> Vec
 }
 
 /// Adds a top-level `status` to an already-shaped sub-response, keeping its other
-/// keys (including a raw `aggregations`) as raw byte spans — never re-materialized.
+/// keys (including a raw `aggregations`) as raw byte spans, never re-materialized.
 /// `None` if the shaped body is not a JSON object.
 fn with_status(shaped: &[u8], status: u16) -> Option<Vec<u8>> {
     let mut top: BTreeMap<String, Box<RawValue>> = serde_json::from_slice(shaped).ok()?;

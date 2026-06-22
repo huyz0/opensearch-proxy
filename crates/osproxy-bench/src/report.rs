@@ -3,7 +3,7 @@
 //! consume programmatically; these render the *same* numbers as a brief an
 //! operator reads in a CI run summary, or an LLM judges in prose.
 //!
-//! Shape-only, like everything in this crate: timings, counts, and verdicts —
+//! Shape-only, like everything in this crate: timings, counts, and verdicts,
 //! never request data.
 
 use std::fmt::Write as _;
@@ -112,7 +112,7 @@ fn push_verdict(out: &mut String, verdict: &Verdict) {
     for f in &verdict.findings {
         let _ = writeln!(
             out,
-            "- {} **{}** — {}",
+            "- {} **{}**: {}",
             if f.pass { "✅" } else { "❌" },
             f.nfr,
             f.detail
@@ -144,7 +144,7 @@ fn mib(bytes: u64) -> String {
     format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
 }
 
-/// Renders a header for a combined NFR-P brief — the runners append their own
+/// Renders a header for a combined NFR-P brief, the runners append their own
 /// sections under it. Kept tiny so callers can prepend a title once.
 #[must_use]
 pub fn brief_header(title: &str) -> String {

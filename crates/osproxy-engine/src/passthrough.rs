@@ -8,8 +8,8 @@
 //! The match is **per request, by logical index**, so one proxy serves both
 //! modes at once: list the indices that are not (yet) onboarded into tenancy and
 //! those flow through verbatim, while everything else is tenant-isolated. This is
-//! the composable migration shape — legacy indices pass through, tenanted indices
-//! do not — not a global "isolation off" switch. It is **fail-closed**: an index
+//! the composable migration shape, legacy indices pass through, tenanted indices
+//! do not, not a global "isolation off" switch. It is **fail-closed**: an index
 //! that does not match keeps full tenancy. Matching is on the operator-configured
 //! index list only, never a client-supplied header, so a client cannot opt itself
 //! out of isolation. An empty match list means *every* request passes through (the
@@ -130,7 +130,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     }
 
     /// Forwards `ctx` verbatim with its body supplied as a **stream**, piped
-    /// straight to the upstream — and returns the upstream response as a live
+    /// straight to the upstream, and returns the upstream response as a live
     /// stream too, so neither direction lands in memory (ADR-014). The fully
     /// streaming twin of [`forward`](Self::forward).
     pub(crate) async fn forward_stream(
@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn a_prefix_policy_passes_only_matching_indices_and_isolates_the_rest() {
         // The migration shape: legacy indices pass through, everything else stays
-        // tenanted (fail-closed — a non-match keeps tenancy).
+        // tenanted (fail-closed, a non-match keeps tenancy).
         let policy = PassthroughPolicy::new(ClusterId::from("c"), "http://c:9200")
             .with_index_prefixes(vec!["legacy-".to_owned(), "raw_".to_owned()]);
         assert!(matches_index(&policy, "legacy-orders"), "prefix match");

@@ -1,8 +1,8 @@
 //! gRPC ingress: the proxy's `DocumentService` over HTTP/2 (`docs/11` M4).
 //!
 //! gRPC is a *front door*, not a second pipeline. Each RPC is adapted into the
-//! same owned [`IngressRequest`] the REST path produces — same endpoint
-//! classification, same headers-as-credentials contract — and driven through the
+//! same owned [`IngressRequest`] the REST path produces, same endpoint
+//! classification, same headers-as-credentials contract, and driven through the
 //! identical [`IngressHandler`]. Tenancy, isolation, and shape-only observability
 //! are therefore unchanged across protocols; only the wire envelope differs.
 //!
@@ -107,7 +107,7 @@ impl<H: IngressHandler> DocumentService for GrpcIngress<H> {
 
 /// Extracts a bearer token from the request metadata into an `authorization`
 /// header, so the shared credential extraction (`Bearer …`) works unchanged.
-/// The token is carried, never logged — the handler consumes it (NFR-S2).
+/// The token is carried, never logged, the handler consumes it (NFR-S2).
 fn bearer_header<T>(request: &Request<T>) -> Vec<(String, String)> {
     request
         .metadata()
@@ -139,7 +139,7 @@ pub async fn serve_grpc<H: IngressHandler>(
 #[derive(Clone, Default)]
 struct GrpcConnInfo {
     client_cert_subject: Option<String>,
-    /// True on the TLS listener — gRPC ingest mutates the document, so it is
+    /// True on the TLS listener, gRPC ingest mutates the document, so it is
     /// refused over cleartext (NFR-S1), same as the HTTP path.
     secure: bool,
 }
@@ -357,7 +357,7 @@ mod tests {
             .expect("rpc");
 
         // The handler saw the verified mTLS identity (a stable cert fingerprint,
-        // never the certificate material) — the same contract as the HTTP path.
+        // never the certificate material), the same contract as the HTTP path.
         let seen = handler.seen.lock().expect("lock").clone().expect("seen");
         let subject = seen.client_cert_subject.expect("client cert subject");
         assert!(subject.starts_with("cert:"), "got {subject}");

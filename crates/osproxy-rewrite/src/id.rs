@@ -40,7 +40,7 @@ pub fn construct_id(template: &str, partition: &str, doc: &Value) -> Result<Stri
 }
 
 /// Expands `template` against the resolved `partition` and the raw document
-/// `body`, reading `{body.<path>}` scalars straight from the bytes — **without
+/// `body`, reading `{body.<path>}` scalars straight from the bytes, **without
 /// parsing `body` into a `Value`** (ADR-014). The byte-level twin of
 /// [`construct_id`] for the streaming write path.
 ///

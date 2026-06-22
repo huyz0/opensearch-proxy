@@ -1,13 +1,13 @@
 //! The [`Reader`] trait: fetching a single document by physical id.
 //!
-//! Reads are always direct-to-cluster — unlike writes, they cannot be served by
-//! a queue — so the read seam is separate from [`Sink`](crate::Sink). The same
+//! Reads are always direct-to-cluster, unlike writes, they cannot be served by
+//! a queue, so the read seam is separate from [`Sink`](crate::Sink). The same
 //! backend type may implement both (`OpenSearchSink` does, sharing its pooled
 //! connection), while a write-only `QueueSink` implements only [`Sink`].
 //!
 //! [`Sink`]: crate::Sink
 //
-// JUSTIFY(file-length): one cohesive family of read-path value types — the
+// JUSTIFY(file-length): one cohesive family of read-path value types, the
 // `Reader` trait plus the op (`ReadOp`/`SearchOp`/`CursorOp`) and outcome
 // (`ReadOutcome`/`SearchOutcome`/`CountOutcome`/`CursorOutcome`) structs they
 // exchange. They share the same builders and conventions; splitting them would
@@ -126,7 +126,7 @@ pub struct SearchOp {
     /// [`Protocol::Http1`].
     pub protocol: Protocol,
     /// An already-allow-listed query string (without the `?`) to append to the
-    /// upstream URL — e.g. `scroll=1m` to open a scroll. The engine filters this
+    /// upstream URL, e.g. `scroll=1m` to open a scroll. The engine filters this
     /// to cursor-safe params before it reaches here; the sink appends it verbatim.
     pub query: Option<String>,
     /// The W3C trace context to forward downstream (`traceparent`).
@@ -230,7 +230,7 @@ impl CountOutcome {
 }
 
 /// A raw cursor passthrough op (`docs/03` §6): forward `method path` with `body`
-/// to the specific `cluster` the cursor is pinned to — scroll/PIT continue,
+/// to the specific `cluster` the cursor is pinned to, scroll/PIT continue,
 /// clear, or close. Unlike the typed ops, the destination is *already resolved*
 /// (the engine recovered it from the cursor's signed envelope), so this carries
 /// the cluster directly rather than a partition.
@@ -245,7 +245,7 @@ pub struct CursorOp {
     /// The request body to forward (the real, unwrapped cursor id substituted in).
     pub body: Vec<u8>,
     /// An already-allow-listed query string (without the `?`) to append to the
-    /// upstream URL — e.g. `keep_alive=1m` on PIT create. Filtered by the engine.
+    /// upstream URL, e.g. `keep_alive=1m` on PIT create. Filtered by the engine.
     pub query: Option<String>,
     /// The pinned cluster's base URL, when the engine knows it (the placement that
     /// opened the cursor supplied it). `None` for an affinity continue recovered
@@ -379,7 +379,7 @@ impl ForwardOp {
 }
 
 /// The outcome of a **streaming** verbatim forward (ADR-014): the upstream status
-/// and its response body as a live [`ByteBody`](crate::ByteBody) stream — piped
+/// and its response body as a live [`ByteBody`](crate::ByteBody) stream, piped
 /// back to the client without ever being collected. Unlike [`CursorOutcome`], the
 /// body is not materialized here, so this carries no derives (the stream is
 /// one-shot).
@@ -403,7 +403,7 @@ impl std::fmt::Debug for StreamingForward {
 }
 
 /// The outcome of a **streaming** search (ADR-014, final stage): the upstream
-/// status and its response body as a live [`ByteBody`](crate::ByteBody) — piped
+/// status and its response body as a live [`ByteBody`](crate::ByteBody), piped
 /// back through the engine's hit transform without ever being collected. Like
 /// [`StreamingForward`], the body is one-shot, so this carries no derives.
 pub struct StreamingSearch {
@@ -464,7 +464,7 @@ impl CursorOutcome {
 /// # Invariants
 ///
 /// - MUST NOT panic; return [`SinkError`] for every transport/upstream failure
-///   (NFR-R1). A missing document is *not* an error — it is a
+///   (NFR-R1). A missing document is *not* an error, it is a
 ///   [`ReadOutcome`] with `found == false`.
 pub trait Reader: Send + Sync {
     /// Fetches a single document by physical id.
@@ -492,8 +492,8 @@ pub trait Reader: Send + Sync {
 
     /// Counts the documents matching a (partition-filtered) query.
     ///
-    /// Takes the same [`SearchOp`] as [`Reader::search`] — the wrapped query is
-    /// identical — but hits the count endpoint, returning only the total.
+    /// Takes the same [`SearchOp`] as [`Reader::search`], the wrapped query is
+    /// identical, but hits the count endpoint, returning only the total.
     ///
     /// # Errors
     ///
@@ -505,7 +505,7 @@ pub trait Reader: Send + Sync {
     ) -> impl std::future::Future<Output = Result<CountOutcome, SinkError>> + Send;
 
     /// Forwards a raw cursor request to its pinned cluster (scroll/PIT continue,
-    /// clear, close). The default is **unsupported** — a sink that cannot
+    /// clear, close). The default is **unsupported**, a sink that cannot
     /// passthrough (the in-memory test sink, a write-only queue) rejects it;
     /// `OpenSearchSink` overrides it with a real upstream call.
     ///

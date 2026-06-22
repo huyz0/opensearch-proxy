@@ -119,7 +119,7 @@ async fn request_round_trips_over_http2() {
         let _ = serve(listener, Arc::new(EchoHandler)).await;
     });
 
-    // A prior-knowledge h2c client: no h1, no upgrade — the request must travel
+    // A prior-knowledge h2c client: no h1, no upgrade, the request must travel
     // over HTTP/2, which the auto ingress builder serves on the same listener.
     let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new())
         .http2_only(true)

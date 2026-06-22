@@ -1,4 +1,4 @@
-//! The clock seam — the foundation of deterministic time.
+//! The clock seam, the foundation of deterministic time.
 //!
 //! Production code must never read wall-clock time directly: a hidden
 //! `Instant::now()` makes behavior depend on the machine and turns tests flaky.
@@ -24,7 +24,7 @@ pub struct Instant(u64);
 impl Instant {
     /// Returns the duration elapsed from `earlier` to `self`, saturating at zero
     /// if `earlier` is later (clocks are monotonic, so this should not happen,
-    /// but saturation keeps the type panic-free — NFR-R1).
+    /// but saturation keeps the type panic-free, NFR-R1).
     #[must_use]
     pub fn saturating_duration_since(self, earlier: Instant) -> Duration {
         Duration::from_nanos(self.0.saturating_sub(earlier.0))

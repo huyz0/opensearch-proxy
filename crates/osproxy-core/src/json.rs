@@ -1,8 +1,8 @@
 //! Byte-level JSON scanning for the no-materialization body path (ADR-014).
 //!
-//! These routines read exactly what a tenancy transform needs — the set of
+//! These routines read exactly what a tenancy transform needs, the set of
 //! top-level field names (to detect a spoofed reserved field) and a scalar at a
-//! path (to find the partition key or build an id) — by scanning the raw body
+//! path (to find the partition key or build an id), by scanning the raw body
 //! bytes, **without ever building a parsed JSON tree**. Retained memory is
 //! bounded by the few small key strings (or the one extracted scalar), never by
 //! document size (INV-MEM): every value the scan does not need is skipped without
@@ -10,7 +10,7 @@
 //!
 //! It lives in `core` because it is dependency-free pure computation that both
 //! the SPI (partition extraction utilities) and the transform layer (id
-//! construction, field-splice injection) build on — the two sides cannot share a
+//! construction, field-splice injection) build on, the two sides cannot share a
 //! helper that lives in either of them.
 //!
 //! The scanner is strict: it parses the JSON grammar fully so a malformed body
@@ -18,7 +18,7 @@
 //! are compared, so a client cannot smuggle a reserved field name past a
 //! collision check by escaping it (e.g. `"_tenant"` for `_tenant`).
 //
-// JUSTIFY(file-length): one cohesive recursive-descent JSON scanner — the
+// JUSTIFY(file-length): one cohesive recursive-descent JSON scanner, the
 // `Parser` and its grammar productions (value/object/array/string/number/escape)
 // are a single unit that must agree on cursor invariants; splitting the
 // productions across files would scatter that shared state for no readability
@@ -30,7 +30,7 @@ use thiserror::Error;
 ///
 /// Deliberately exhaustive (not `#[non_exhaustive]`): it is a small, closed set
 /// of JSON-shape failures, and downstream `From` conversions must map every
-/// variant — a new one should be a compile error to handle, not silently fall
+/// variant, a new one should be a compile error to handle, not silently fall
 /// through a wildcard.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum JsonError {
@@ -54,9 +54,9 @@ pub enum JsonError {
 /// whether it already has members, and its decoded top-level key names.
 #[derive(Debug)]
 pub struct TopLevel {
-    /// Byte offset just past the opening `{` — the splice insertion point.
+    /// Byte offset just past the opening `{`, the splice insertion point.
     pub insert_at: usize,
-    /// True if the object has no members (`{}`) — no trailing comma on splice.
+    /// True if the object has no members (`{}`), no trailing comma on splice.
     pub empty: bool,
     /// Decoded top-level key names (escapes resolved), for collision checks.
     pub keys: Vec<String>,
@@ -342,7 +342,7 @@ impl<'a> Parser<'a> {
         // Accumulate raw bytes, not `char`s: a literal multi-byte UTF-8 sequence
         // must be copied verbatim. Decoding each byte as a `char` (the Latin-1
         // `char::from(u8)` mapping) would re-encode every continuation byte as its
-        // own code point — e.g. "café" → "cafÃ©" — corrupting any non-ASCII
+        // own code point, e.g. "café" → "cafÃ©", corrupting any non-ASCII
         // partition key or id-template input. The validation at the close rejects a
         // string that is not valid UTF-8 (JSON must be UTF-8), keeping the scanner
         // strict rather than silently producing mojibake.

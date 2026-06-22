@@ -11,7 +11,7 @@ use crate::request::RequestCtx;
 /// [`crate::TenancySpi`], which `osproxy-tenancy` adapts into a `RoutingSpi`.
 ///
 /// Note this yields only a [`RouteDecision`]. The engine pipeline needs more than
-/// a decision (the resolved partition, epoch, and migration phase — to construct
+/// a decision (the resolved partition, epoch, and migration phase, to construct
 /// ids, demux bulk, and gate writes), so it is generic over the richer
 /// `osproxy_tenancy::Router` seam rather than this trait. Implement `Router` to
 /// drive the engine with custom routing; implement `RoutingSpi` where only a
@@ -19,7 +19,7 @@ use crate::request::RequestCtx;
 ///
 /// # Invariants
 ///
-/// - MUST resolve to exactly one [`Target`](osproxy_core::Target) — no
+/// - MUST resolve to exactly one [`Target`](osproxy_core::Target), no
 ///   synchronous fan-out in v1 (ADR-002).
 /// - MUST NOT panic; return [`SpiError`] for every failure (NFR-R1).
 /// - The returned [`RouteDecision::epoch`] MUST come from the placement state

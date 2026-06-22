@@ -6,8 +6,8 @@
 //!
 //! Two layers:
 //!
-//! - [`RoutingSpi`] — low-level, full control over the [`RouteDecision`].
-//! - [`TenancySpi`] — high-level, declarative tenancy rules; `osproxy-tenancy`
+//! - [`RoutingSpi`], low-level, full control over the [`RouteDecision`].
+//! - [`TenancySpi`], high-level, declarative tenancy rules; `osproxy-tenancy`
 //!   adapts it into a [`RoutingSpi`].
 //!
 //! Supporting vocabulary is grouped by concern: [`Principal`] identity,

@@ -1,4 +1,4 @@
-//! `Authorization: Bearer` parsing and constant-time token comparison — the one
+//! `Authorization: Bearer` parsing and constant-time token comparison, the one
 //! place the binary reads bearer credentials, so the request-auth path and the
 //! privileged admin channel can't drift apart (e.g. one case-sensitive on the
 //! scheme and the other not).
@@ -35,7 +35,7 @@ pub(crate) fn without_authorization(headers: &[(String, String)]) -> Vec<(String
 }
 
 /// Constant-time comparison **for equal-length inputs** (no early return on the
-/// first differing byte). The length itself is not concealed — acceptable for a
+/// first differing byte). The length itself is not concealed, acceptable for a
 /// fixed shared token, where the length is not the secret.
 fn token_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {

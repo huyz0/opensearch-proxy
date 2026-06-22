@@ -1,4 +1,4 @@
-//! Administrative pass-through (`docs/03` §6) — `_cat`/`_cluster`/`_nodes`.
+//! Administrative pass-through (`docs/03` §6), `_cat`/`_cluster`/`_nodes`.
 //!
 //! These endpoints carry no tenancy semantics, so the proxy cannot filter or
 //! strip them; per `docs/decisions/006` and `docs/specs/opensearch-endpoints.md`
@@ -67,7 +67,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     /// Forwards an allow-listed admin request verbatim to the policy's cluster,
     /// or rejects it (the default when no policy is configured, and for any path
     /// not on the allow-list). Admin output is not tenancy-filtered, so the full
-    /// path and query are forwarded — there is no body partition filter to bypass.
+    /// path and query are forwarded, there is no body partition filter to bypass.
     pub(crate) async fn admin(
         &self,
         ctx: &RequestCtx<'_>,

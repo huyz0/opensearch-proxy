@@ -1,5 +1,5 @@
 //! The memory-footprint profile: the proxy's resident set when idle and after a
-//! soak (`docs/01` NFR-P6 — "idle footprint bounded by config; no unbounded
+//! soak (`docs/01` NFR-P6, "idle footprint bounded by config; no unbounded
 //! buffers/queues"). Two RSS readings of the proxy process plus the soak size,
 //! and a judge over the absolute idle footprint and how much it grew.
 
@@ -10,11 +10,11 @@ use crate::judge::{Finding, Verdict};
 /// A footprint measurement: the proxy process's resident set size (RSS) when
 /// idle and again after sustaining `soak_requests`. The two readings are taken
 /// from the *same* process, so their difference is the proxy's own growth under
-/// load — the signal that catches an unbounded buffer or queue (NFR-P6), since a
+/// load, the signal that catches an unbounded buffer or queue (NFR-P6), since a
 /// well-behaved proxy returns near its idle footprint after a soak.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FootprintProfile {
-    /// Resident set after startup settles, before load — the idle footprint.
+    /// Resident set after startup settles, before load, the idle footprint.
     pub idle_rss_bytes: u64,
     /// Resident set after the soak completed.
     pub soak_rss_bytes: u64,
@@ -47,7 +47,7 @@ impl FootprintProfile {
         self.soak_rss_bytes as f64 / self.idle_rss_bytes as f64
     }
 
-    /// The profile as pretty JSON — the artifact a soak run writes and a judge
+    /// The profile as pretty JSON, the artifact a soak run writes and a judge
     /// reads. Plain numeric fields can't fail to serialize; a serializer error
     /// collapses to an explicit error string rather than a panic.
     #[must_use]
@@ -64,9 +64,9 @@ impl FootprintProfile {
 pub struct FootprintThresholds {
     /// Max acceptable idle resident set, bytes (NFR-P6 "idle footprint").
     pub max_idle_rss_bytes: u64,
-    /// Max acceptable post-soak/idle RSS ratio — one half of the leak guard.
+    /// Max acceptable post-soak/idle RSS ratio, one half of the leak guard.
     pub max_growth_ratio: f64,
-    /// Max acceptable *absolute* soak growth, bytes — the other half. Growth
+    /// Max acceptable *absolute* soak growth, bytes, the other half. Growth
     /// passes if it is within **either** bound: a proportional ratio is the right
     /// guard for a large footprint, but for a small idle footprint a normal
     /// steady-state working set (per-connection buffers, allocator arenas) is a

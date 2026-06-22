@@ -6,7 +6,7 @@
 //! op in the write is acknowledged.
 //!
 //! The wrapper is typed protobuf; the document body is opaque bytes in
-//! `content_type` — **CBOR by default** (compact, OpenSearch-native), JSON when
+//! `content_type`, **CBOR by default** (compact, OpenSearch-native), JSON when
 //! configured for debuggability. The downstream applier forwards the body verbatim
 //! with that Content-Type and never parses the document.
 
@@ -318,7 +318,7 @@ mod tests {
     }
 }
 
-/// Live round-trip against a real broker (`docs/04` §9) — see the module file.
+/// Live round-trip against a real broker (`docs/04` §9), see the module file.
 #[cfg(all(test, feature = "fanout"))]
 #[path = "fanout_kafka_test.rs"]
 mod kafka_round_trip;

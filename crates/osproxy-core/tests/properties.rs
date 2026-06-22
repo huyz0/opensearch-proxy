@@ -12,7 +12,7 @@ use osproxy_core::Epoch;
 use proptest::prelude::*;
 
 proptest! {
-    /// Epoch::next is strictly increasing until it saturates — the property the
+    /// Epoch::next is strictly increasing until it saturates, the property the
     /// migration cutover relies on (docs/06 INV-M2).
     #[test]
     fn epoch_next_is_strictly_increasing(g in 0u64..u64::MAX) {
@@ -21,7 +21,7 @@ proptest! {
         prop_assert_eq!(e.next().get(), g + 1);
     }
 
-    /// A ManualClock reflects exactly the durations advanced into it — no drift,
+    /// A ManualClock reflects exactly the durations advanced into it, no drift,
     /// for any sequence of advances (deterministic time, docs/12).
     #[test]
     fn manual_clock_accumulates_advances_exactly(steps in prop::collection::vec(0u64..1_000_000, 0..32)) {

@@ -1,5 +1,5 @@
 //! The `/debug/breakglass` admin endpoint returns the captured forensic tape as
-//! a JSON array (oldest first), without touching auth, routing, or the upstream —
+//! a JSON array (oldest first), without touching auth, routing, or the upstream,
 //! it is a read of in-process telemetry, the operator-facing counterpart of the
 //! `ring_buffer` capture.
 
@@ -85,7 +85,7 @@ async fn debug_endpoints_are_refused_when_disabled() {
     assert_eq!(explain.status, 404, "explain refused when disabled");
     assert!(String::from_utf8_lossy(&explain.body).contains("not_enabled"));
 
-    // /metrics is the always-on, prod-safe surface — unaffected by the switch.
+    // /metrics is the always-on, prod-safe surface, unaffected by the switch.
     let metrics = handler.handle(get("/metrics")).await;
     assert_eq!(metrics.status, 200, "metrics stays on when /debug is off");
 }

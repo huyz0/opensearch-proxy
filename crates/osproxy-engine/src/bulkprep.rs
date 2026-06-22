@@ -141,7 +141,7 @@ fn build_op(
                 .as_deref()
                 .ok_or_else(|| bad("missing_source"))?;
             // Splice the tenancy fields straight into the source bytes and read
-            // the id from the original bytes — no `Value` tree (ADR-014).
+            // the id from the original bytes, no `Value` tree (ADR-014).
             let body = inject_fields_bytes(source, &inject)
                 .map_err(|_| bad("reserved_field_collision"))?;
             let (id, logical) =
@@ -278,7 +278,7 @@ fn transform_parts<'a>(
 /// The concrete value of an injected field. The adapter resolves these to
 /// constants; `PartitionId` is resolved here too for robustness so isolation can
 /// never depend on an empty value (a `FromPrincipal` value cannot be
-/// reconstructed here and falls back to the partition — always isolating).
+/// reconstructed here and falls back to the partition, always isolating).
 fn constant(value: &InjectedValue, partition: &str) -> Value {
     match value {
         InjectedValue::Constant(v) => v.clone(),

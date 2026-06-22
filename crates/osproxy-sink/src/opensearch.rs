@@ -7,7 +7,7 @@
 //! endpoint; the TLS [`CryptoProvider`](osproxy_spi) connector attaches here in
 //! the transport slice without changing this mapping.
 //
-// JUSTIFY(file-length): one cohesive unit — the live `OpenSearchSink` and its
+// JUSTIFY(file-length): one cohesive unit, the live `OpenSearchSink` and its
 // per-cluster `ClusterPool`s (construction, sharded pools, dispatch, per-request
 // timeout, circuit breaker, and the pool-reuse stats accessors). These all touch
 // the private `clusters` map, so splitting them would force that internal state
@@ -49,7 +49,7 @@ pub type BodyError = Box<dyn std::error::Error + Send + Sync>;
 
 /// A boxed byte-stream body, used both for the request sent **to** an upstream
 /// cluster and as the carrier for a downstream body streamed **through** the proxy
-/// (a verbatim forward, or a `_bulk` batch the engine frames). Boxed (unsync — the
+/// (a verbatim forward, or a `_bulk` batch the engine frames). Boxed (unsync, the
 /// pooled client needs only `Send`, not `Sync`) so one type covers buffered bytes,
 /// a stream, or a head + stream-tail without changing the pooled client's type,
 /// and so a downstream `hyper::body::Incoming` (which is `Send` but not `Sync`) can
@@ -65,7 +65,7 @@ pub fn buffered(bytes: Bytes) -> ByteBody {
         .boxed_unsync()
 }
 
-/// Adapts any streaming body into a [`ByteBody`] — e.g. the downstream
+/// Adapts any streaming body into a [`ByteBody`], e.g. the downstream
 /// `hyper::body::Incoming` for a verbatim forward or a streamed `_bulk`, so its
 /// bytes flow through the proxy without buffering (ADR-014).
 pub fn stream_body<B>(body: B) -> ByteBody
@@ -81,7 +81,7 @@ type HttpClient = Client<CountingConnector<HttpConnector>, ByteBody>;
 /// One cluster's base URL plus its own pooled HTTP/1.1 and HTTP/2 clients.
 ///
 /// Each cluster owns its pools (not a single shared client), so connection-pool
-/// state is **sharded per cluster** — a busy cluster's pool lock never contends
+/// state is **sharded per cluster**, a busy cluster's pool lock never contends
 /// with another's (NFR-P, `docs/01` §7).
 #[derive(Debug)]
 struct ClusterPool {
@@ -153,7 +153,7 @@ const DEFAULT_COOLDOWN: Duration = Duration::from_secs(5);
 
 /// A [`Sink`] that writes directly to OpenSearch clusters over pooled HTTP.
 ///
-/// Holds a `ClusterPool` per cluster — its own base URL and pooled HTTP/1.1
+/// Holds a `ClusterPool` per cluster, its own base URL and pooled HTTP/1.1
 /// and HTTP/2 (prior-knowledge) clients. Each operation selects the client
 /// matching its resolved upstream [`Protocol`] (`docs/04` §7), so the proxy can
 /// speak h2 to a cluster that supports it while defaulting to h1. Every dispatch
@@ -231,14 +231,14 @@ impl OpenSearchSink {
 
     /// A snapshot of a cluster's connection-reuse counters, or `None` if no pool
     /// has been built for it yet. Lets operators (and tests) verify the pool is
-    /// amortizing handshakes — connections opened far below requests dispatched
+    /// amortizing handshakes, connections opened far below requests dispatched
     /// (NFR-P; the `docs/11` M4 "pool reuse rates verified" exit gate).
     #[must_use]
     pub fn pool_stats(&self, cluster: &ClusterId) -> Option<PoolStats> {
         self.read_clusters().get(cluster).map(|p| p.stats())
     }
 
-    /// Pool-reuse counters for **every** pooled cluster, paired with its id — the
+    /// Pool-reuse counters for **every** pooled cluster, paired with its id, the
     /// fleet-/agent-facing readout behind the `/metrics` snapshot. Order is
     /// unspecified (a `HashMap` walk); callers that need stability sort by id.
     #[must_use]
@@ -338,7 +338,7 @@ impl OpenSearchSink {
     /// POSTs a (partition-filtered) query body to `{index}/{verb}` and returns
     /// the upstream status and raw response body. Shared by search and count.
     /// Sends a query op to `verb` (`_search`/`_count`) and returns the raw
-    /// upstream response without reading the body — shared by the buffered
+    /// upstream response without reading the body, shared by the buffered
     /// [`post_query`](Self::post_query) and the streaming
     /// [`search_stream`](Reader::search_stream), which differ only in whether they
     /// collect the body or pipe it.
@@ -398,11 +398,11 @@ impl OpenSearchSink {
 
     /// The one verbatim-forward path, shared by the buffered cursor op and the
     /// streaming passthrough: concatenate `op.path` (and any allow-listed query)
-    /// onto the cluster base and send `body` — buffered or streamed — upstream.
+    /// onto the cluster base and send `body`, buffered or streamed, upstream.
     ///
     /// Defense in depth: this is the choke point where a passthrough path is
     /// concatenated verbatim into the upstream URI. Refuse a `..` segment so no op
-    /// type can let a path resolve past its allow-listed prefix upstream — the
+    /// type can let a path resolve past its allow-listed prefix upstream, the
     /// engine already guards admin/cursor paths, so this should never fire.
     async fn forward_send(
         &self,
@@ -552,7 +552,7 @@ impl Reader for OpenSearchSink {
 
     async fn search_stream(&self, op: SearchOp) -> Result<StreamingSearch, SinkError> {
         // The search response streams straight back to be transformed on the fly
-        // by the engine's hit scanner — never collected here (ADR-014).
+        // by the engine's hit scanner, never collected here (ADR-014).
         let (status, resp, reused) = self.query_send("_search", &op).await?;
         Ok(StreamingSearch {
             status,
@@ -567,7 +567,7 @@ impl Reader for OpenSearchSink {
         body: ByteBody,
     ) -> Result<StreamingForward, SinkError> {
         // The verbatim-passthrough path: the request body streams straight upstream
-        // and the response streams straight back — neither lands in memory (ADR-014
+        // and the response streams straight back, neither lands in memory (ADR-014
         // stages 2 + the response-streaming follow-up).
         let (status, resp, reused) = self
             .forward_send(&op, body, "upstream forward failed")
@@ -587,7 +587,7 @@ fn hyper_method(method: HttpMethod) -> Method {
         HttpMethod::Put => Method::PUT,
         HttpMethod::Delete => Method::DELETE,
         HttpMethod::Head => Method::HEAD,
-        // `Post` and any future (non-exhaustive) method map to POST — the
+        // `Post` and any future (non-exhaustive) method map to POST, the
         // scroll/PIT continue default.
         _ => Method::POST,
     }

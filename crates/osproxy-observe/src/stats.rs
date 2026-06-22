@@ -1,15 +1,15 @@
-//! The always-on operational metrics snapshot — the one observability surface
+//! The always-on operational metrics snapshot, the one observability surface
 //! that works in **every** environment, including production where the
 //! `/debug/*` introspection tools are off.
 //!
 //! An external agent (or a Prometheus-style scraper) polls each proxy's snapshot
 //! to see what it is doing: how much traffic it served, how it fared, and whether
 //! its upstream pools are amortizing handshakes. The readout is deliberately
-//! **per instance** — building a fleet-wide rollup is the job of the external
+//! **per instance**, building a fleet-wide rollup is the job of the external
 //! metrics/log aggregator the deployment already runs, not of the proxy. The
 //! proxy's only obligation is to expose a clean, shape-only source to scrape.
 //!
-//! **Shape-only by construction** (`docs/05`): counts, rates, and cluster *ids* —
+//! **Shape-only by construction** (`docs/05`): counts, rates, and cluster *ids*,
 //! never tenant values, document bodies, query literals, or principals. A counter
 //! cannot become a value-leak channel, so the snapshot is safe to expose
 //! unauthenticated and to ship anywhere.
@@ -39,8 +39,8 @@ impl Metrics {
     }
 
     /// Records one completed data-plane request and whether it succeeded (a 2xx
-    /// response). Introspection requests (`/debug/*`, `/metrics`) are not counted
-    /// — this measures the proxy's actual proxying.
+    /// response). Introspection requests (`/debug/*`, `/metrics`) are not counted,
+    /// this measures the proxy's actual proxying.
     pub fn record(&self, ok: bool) {
         self.requests_total.fetch_add(1, Ordering::Relaxed);
         let bucket = if ok {
@@ -64,7 +64,7 @@ impl Metrics {
     }
 }
 
-/// One upstream cluster's connection-reuse counters — the signal that the pool is
+/// One upstream cluster's connection-reuse counters, the signal that the pool is
 /// amortizing TLS/TCP handshakes (`opened` far below `dispatched`). `cluster` is
 /// an infrastructure id, not tenant data.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,7 +81,7 @@ pub struct PoolSnapshot {
 
 /// A single proxy instance's operational snapshot. Per-instance by definition;
 /// the fleet rollup is the external aggregator's job. Safe to serve
-/// unauthenticated — it is shape-only.
+/// unauthenticated, it is shape-only.
 // `requests_*` is the intended flat metric naming, not field-name repetition.
 #[allow(clippy::struct_field_names)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,7 +97,7 @@ pub struct StatsSnapshot {
 }
 
 impl StatsSnapshot {
-    /// The snapshot as compact JSON — what a scrape returns and an agent parses.
+    /// The snapshot as compact JSON, what a scrape returns and an agent parses.
     /// Serialization of plain counters cannot fail; an error collapses to an
     /// explicit error object rather than a panic.
     #[must_use]

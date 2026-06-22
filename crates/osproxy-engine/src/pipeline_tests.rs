@@ -108,7 +108,7 @@ async fn ingest_doc_returns_created_response() {
 #[tokio::test]
 async fn unimplemented_endpoint_is_unsupported() {
     // Admin endpoints (`_cat`/`_cluster`) have no tenancy semantics and are not
-    // wired in the pipeline — they fall through to a typed unsupported error.
+    // wired in the pipeline, they fall through to a typed unsupported error.
     let p = pipeline();
     let principal = Principal::new(PrincipalId::from("svc"));
     let rid = RequestId::from("r");
@@ -159,7 +159,7 @@ async fn explain_records_success_spans() {
 #[tokio::test]
 async fn explain_records_failure_with_remediation() {
     // A placement-missing failure: the reference table here always resolves,
-    // so drive an unsupported endpoint instead — still a recorded failure.
+    // so drive an unsupported endpoint instead, still a recorded failure.
     let p = pipeline();
     let principal = Principal::new(PrincipalId::from("svc"));
     let rid = RequestId::from("trace-err");

@@ -34,7 +34,7 @@ pub use msearch::{parse_msearch, MsearchItem};
 pub use query::wrap_query;
 
 /// Validates that `body` is a single well-formed JSON document, allocating
-/// nothing — for the verbatim write path, which forwards the body unchanged but
+/// nothing, for the verbatim write path, which forwards the body unchanged but
 /// must still reject malformed input.
 ///
 /// # Errors

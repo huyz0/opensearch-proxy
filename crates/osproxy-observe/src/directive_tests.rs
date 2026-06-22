@@ -223,7 +223,7 @@ fn introspect_renders_the_well_defined_settings_schema() {
     // Unset targets are omitted (wildcards), not rendered null.
     assert!(d.get("principal").is_none());
     assert!(d.get("endpoint").is_none());
-    // After expiry: same shape, the `expired` flag flips — the live read.
+    // After expiry: same shape, the `expired` flag flips, the live read.
     let later = set.introspect(at(200));
     assert_eq!(later["directives"][0]["expired"], true);
 }

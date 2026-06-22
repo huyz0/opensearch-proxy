@@ -6,13 +6,13 @@
 //! a real OpenSearch or Docker:
 //!
 //! - **Downstream**: the accept loop + per-connection task model sustains hundreds
-//!   of simultaneous client connections and serves every request — none dropped,
+//!   of simultaneous client connections and serves every request, none dropped,
 //!   no error, under independent (un-pooled) connections.
-//! - **Upstream**: the per-cluster pool **reuses** connections under that load —
+//! - **Upstream**: the per-cluster pool **reuses** connections under that load,
 //!   it opens far fewer upstream sockets than it dispatches requests (NFR-P4/P5),
 //!   rather than churning one per downstream connection.
 //!
-//! This is a deterministic regression guard, not a saturation/ceiling benchmark —
+//! This is a deterministic regression guard, not a saturation/ceiling benchmark,
 //! the absolute ceiling sweep lives in the Docker-gated `perf_harness`. Counts are
 //! held to a CI-safe level (well under the typical 1024 file-descriptor limit).
 // Measurement/test-harness code (same posture as `perf_harness`): the latency
@@ -46,7 +46,7 @@ use osproxy_tenancy::TenancyRouter;
 use tokio::net::TcpListener;
 
 /// Simultaneous downstream connections (each its own client, so they are not
-/// multiplexed over one pool — every worker holds a distinct connection).
+/// multiplexed over one pool, every worker holds a distinct connection).
 const CONNECTIONS: u64 = 200;
 /// Requests each connection issues in sequence (keep-alive reuse on that conn).
 const REQUESTS_PER_CONNECTION: u64 = 8;
@@ -115,7 +115,7 @@ async fn the_proxy_serves_many_concurrent_downstream_connections() {
     let ok = Arc::new(AtomicU64::new(0));
     // Cold = the first request on a connection (pays TCP setup + the connect-storm
     // queueing of CONNECTIONS arriving at once). Warm = the rest, on an established
-    // keep-alive connection — the steady-state per-request cost under concurrency.
+    // keep-alive connection, the steady-state per-request cost under concurrency.
     let cold = Arc::new(Mutex::new(Vec::<u64>::new()));
     let warm = Arc::new(Mutex::new(Vec::<u64>::new()));
     let wall_start = SystemClock.now();
@@ -180,7 +180,7 @@ async fn the_proxy_serves_many_concurrent_downstream_connections() {
     // contention (and the cold bucket additionally by the connect storm). For the
     // proxy's true added latency (measured proxy-vs-direct against a real upstream)
     // see the Docker `perf_harness`. Cold vs warm are split so the connect-storm tail
-    // doesn't masquerade as per-request cost. Host-bound, so reported — never asserted.
+    // doesn't masquerade as per-request cost. Host-bound, so reported, never asserted.
     let cold = LatencySummary::from_nanos(&cold.lock().unwrap()).expect("a cold sample");
     let warm = LatencySummary::from_nanos(&warm.lock().unwrap()).expect("a warm sample");
     let rps = (total as f64) / wall.as_secs_f64();
@@ -287,7 +287,7 @@ async fn single_connection_request_latency_microbench() {
 
 /// Scrapes `/metrics` and asserts the upstream pool **reused** connections under
 /// the load: it dispatched every request but opened far fewer sockets than it
-/// dispatched (NFR-P4/P5) — proving the upstream side does not churn a connection
+/// dispatched (NFR-P4/P5), proving the upstream side does not churn a connection
 /// per downstream connection.
 async fn assert_upstream_pooled(proxy: std::net::SocketAddr, total: u64) {
     let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();

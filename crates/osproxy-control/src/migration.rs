@@ -1,7 +1,7 @@
 //! The fleet-safe migration control plane (`docs/06` §5).
 //!
 //! The proxy runs as **many instances**, each resolving placement and the write
-//! gate by polling the shared backend *fresh on every request* — nothing about a
+//! gate by polling the shared backend *fresh on every request*, nothing about a
 //! migration is cached in an instance, so the backend is the single synchronized
 //! source of truth (the in-memory [`PlacementTable`] here; a watched store such
 //! as etcd/Consul in M7, behind [`MigrationStore`]).
@@ -9,8 +9,8 @@
 //! That makes the routing flip safe *except* for one residual window: a write
 //! whose gate passed an instant **before** cutover was published may still be
 //! committing upstream. So the controller does not flip the pointer immediately:
-//! after publishing `Cutover` it holds a **drain barrier** — at least
-//! [`DEFAULT_DRAIN_BARRIER`] (≥ the upstream write timeout) — before
+//! after publishing `Cutover` it holds a **drain barrier**, at least
+//! [`DEFAULT_DRAIN_BARRIER`] (≥ the upstream write timeout), before
 //! `complete_migration` is allowed. By then every pre-cutover write has either
 //! committed or hit its deadline, and no in-flight write can land in the old
 //! placement after the flip (INV-M1, INV-M2 fleet-wide).
@@ -33,7 +33,7 @@ use thiserror::Error;
 /// ≥ the sink's upstream write timeout (30s, NFR-R7); set higher for safety.
 pub const DEFAULT_DRAIN_BARRIER: Duration = Duration::from_secs(30);
 
-/// The backend that holds and transitions the fleet's placement state — the seam
+/// The backend that holds and transitions the fleet's placement state, the seam
 /// the proxy instances poll for reads and the controller drives for migration.
 ///
 /// Implemented in-process by [`PlacementTable`] (and `Arc<PlacementTable>`); a
@@ -57,7 +57,7 @@ pub trait MigrationStore {
     /// [`MigrationError`] if the partition is not draining.
     fn enter_cutover(&self, partition: &PartitionId) -> Result<Epoch, MigrationError>;
 
-    /// Completes the migration — the pointer flip (`Cutover` → `Active(to)`).
+    /// Completes the migration, the pointer flip (`Cutover` → `Active(to)`).
     ///
     /// # Errors
     /// [`MigrationError`] if the partition is not in cutover.
@@ -208,7 +208,7 @@ impl<S: MigrationStore> ControlPlane<S> {
         Ok(epoch)
     }
 
-    /// Completes the migration once the drain barrier has elapsed since cutover —
+    /// Completes the migration once the drain barrier has elapsed since cutover,
     /// the pointer flip. Refused (without mutating the store) while in-flight
     /// pre-cutover writes might still be committing.
     ///
@@ -261,7 +261,7 @@ impl<S: MigrationStore> ControlPlane<S> {
         self.store.state(partition)
     }
 
-    /// Locks the cutover-time map, recovering a poisoned lock — it is plain
+    /// Locks the cutover-time map, recovering a poisoned lock, it is plain
     /// timing data with no invariant a panicking holder could tear (NFR-R1).
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<PartitionId, Instant>> {
         self.cutover_at

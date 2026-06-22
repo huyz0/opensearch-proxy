@@ -2,7 +2,7 @@
 //! deterministic state-machine simulations against the [`PlacementTable`].
 //!
 //! The table's epoch is a logical generation (no wall-clock), so these run
-//! reproducibly with no time control needed — the interleavings are driven
+//! reproducibly with no time control needed, the interleavings are driven
 //! explicitly. A write carries the epoch it resolved at; the gate
 //! ([`PlacementTable::admit_write`]) decides whether it may still commit. Each
 //! test names the invariant it pins.
@@ -33,13 +33,13 @@ fn inv_m1_no_write_commits_during_cutover() {
     let e_drain = table.begin_migration(&p, b).unwrap();
     let e_cutover = table.enter_cutover(&p).unwrap();
 
-    // During cutover, a write resolved at *any* epoch is rejected — even one
+    // During cutover, a write resolved at *any* epoch is rejected, even one
     // resolved at the live cutover epoch. The client retries; the retry will
     // succeed once the pointer flips.
     assert_eq!(table.admit_write(&p, e_cutover), WriteAdmission::Reject);
     assert_eq!(table.admit_write(&p, e_drain), WriteAdmission::Reject);
     assert_eq!(table.admit_write(&p, e_active), WriteAdmission::Reject);
-    // Reads still resolve — to the old placement, a single view.
+    // Reads still resolve, to the old placement, a single view.
     assert_eq!(table.get(&p).unwrap().placement, cluster("a"));
 }
 
@@ -66,7 +66,7 @@ fn inv_m2_after_cutover_a_stale_write_never_admits() {
 fn inv_m3_abort_returns_to_origin_and_admits_the_origin_epoch_again() {
     // Abort from each migrating phase returns to Active(A) at a fresh epoch; the
     // migrating epochs are stale forever, so nothing that resolved mid-migration
-    // can land — and the destination B never had a non-stale write epoch at all.
+    // can land, and the destination B never had a non-stale write epoch at all.
     for enter_cutover in [false, true] {
         let (table, p, e_active, b) = registered();
         let e_drain = table.begin_migration(&p, b).unwrap();
@@ -87,7 +87,7 @@ fn inv_m3_abort_returns_to_origin_and_admits_the_origin_epoch_again() {
 #[test]
 fn inv_m4_reads_are_always_a_single_placement() {
     // Through every phase the read placement is exactly one of {A, B}, never a
-    // split — A until the flip, B after.
+    // split, A until the flip, B after.
     let (table, p, _e, b) = registered();
     let a = cluster("a");
     assert_eq!(table.get(&p).unwrap().placement, a);
@@ -168,7 +168,7 @@ fn transitions_are_rejected_out_of_phase_and_leave_the_table_unchanged() {
 #[test]
 fn at_most_one_epoch_is_admissible_per_phase_no_split_brain() {
     // Drive the lifecycle capturing each phase's epoch; assert that across the
-    // whole history at most one captured epoch is admissible at any instant —
+    // whole history at most one captured epoch is admissible at any instant,
     // there is never a window where two different resolved writes could both
     // commit (no split-brain).
     let (table, p, e_active, b) = registered();

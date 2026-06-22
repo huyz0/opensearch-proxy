@@ -1,4 +1,4 @@
-//! Tests for [`LatencySummary`] — the percentile math must be exact and
+//! Tests for [`LatencySummary`], the percentile math must be exact and
 //! deterministic, and refuse to summarize nothing.
 #![allow(clippy::unwrap_used)]
 
@@ -51,7 +51,7 @@ fn the_p99_tracks_the_tail_not_the_max() {
     let s = LatencySummary::from_nanos(&samples).unwrap();
     assert_eq!(
         s.p99_ns, 10,
-        "p99 of 100 samples is rank 99 — still the fast body"
+        "p99 of 100 samples is rank 99, still the fast body"
     );
     assert_eq!(s.max_ns, 1_000_000, "the outlier shows only in max");
 }

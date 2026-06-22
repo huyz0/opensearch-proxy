@@ -16,7 +16,7 @@
 //! stores (etcd/Consul/Redis/OS index) implement the same [`MigrationStore`]
 //! contract in M7 without changing the control protocol.
 //!
-//! It also owns [`CursorAffinity`] — the bounded, TTL'd `cursor_id -> cluster`
+//! It also owns [`CursorAffinity`], the bounded, TTL'd `cursor_id -> cluster`
 //! map that pins scroll/PIT follow-ups to their creating cluster (`docs/03` §6).
 #![deny(missing_docs)]
 

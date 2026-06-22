@@ -48,7 +48,7 @@ impl WriteAck {
         }
     }
 
-    /// Records whether the dispatch(es) rode reused pooled connections — true
+    /// Records whether the dispatch(es) rode reused pooled connections, true
     /// only when every operation in the batch reused one (NFR-P telemetry).
     #[must_use]
     pub fn with_pool_reuse(mut self, reused: bool) -> Self {

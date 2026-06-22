@@ -122,7 +122,7 @@ async fn mget_reinterleaves_in_input_order_and_shapes_each_doc() {
     write(&p, br#"{"tenant_id":"acme","id":7,"msg":"seven"}"#).await;
     write(&p, br#"{"tenant_id":"acme","id":9,"msg":"nine"}"#).await;
 
-    // Request 9, then a miss, then 7 — the response must echo that order.
+    // Request 9, then a miss, then 7, the response must echo that order.
     let resp = mget(&p, br#"{"ids":["9","404","7"]}"#).await;
     assert_eq!(resp.status, 200);
     let doc: Value = serde_json::from_slice(&resp.body).unwrap();

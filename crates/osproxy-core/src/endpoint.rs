@@ -21,7 +21,7 @@ pub enum EndpointKind {
     /// single target.
     Search,
     /// Multi-search (`_msearch`): per-search partition filter + hit strip,
-    /// demux by target, re-interleave `responses[]` — the search counterpart of
+    /// demux by target, re-interleave `responses[]`, the search counterpart of
     /// `_bulk`.
     MultiSearch,
     /// Count (`_count`): same partition filter as search, but returns a count
@@ -30,13 +30,13 @@ pub enum EndpointKind {
     /// Read by id (`GET _doc/{id}`): logical→physical id transform.
     GetById,
     /// Multi-get (`_mget`): per-doc partition resolve, demux by target,
-    /// re-interleave `docs[]` — the read counterpart of `_bulk`.
+    /// re-interleave `docs[]`, the read counterpart of `_bulk`.
     MultiGet,
     /// Delete by id: logical→physical id transform.
     DeleteById,
     /// Delete by query (`_delete_by_query`): in async fan-out mode the proxy
     /// runs the partition-scoped query, then enqueues a concrete delete per
-    /// match (`docs/04` §9). No synchronous implementation — rejected otherwise.
+    /// match (`docs/04` §9). No synchronous implementation, rejected otherwise.
     DeleteByQuery,
     /// Cursor lifecycle (scroll, PIT): affinity pinning.
     Cursor,
@@ -48,7 +48,7 @@ pub enum EndpointKind {
 }
 
 impl EndpointKind {
-    /// A stable, value-free name for this class — used in introspection readouts
+    /// A stable, value-free name for this class, used in introspection readouts
     /// (e.g. a control-plane directive's `endpoint` target). Matches the variant
     /// name so it round-trips with a parser built from the same list.
     #[must_use]

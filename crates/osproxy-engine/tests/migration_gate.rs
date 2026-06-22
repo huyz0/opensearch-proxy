@@ -2,7 +2,7 @@
 //! §2, INV-M1/M2). A `PlacementTable`-backed tenancy drives a partition through
 //! its migration phases while the same ingest request is replayed; the pipeline
 //! must reject the write with a retryable stale-epoch error during cutover and
-//! after the pointer flips, and admit it otherwise — never committing to the
+//! after the pointer flips, and admit it otherwise, never committing to the
 //! wrong cluster.
 
 #![allow(clippy::unwrap_used)]
@@ -134,7 +134,7 @@ async fn ingest_is_gated_through_the_migration_lifecycle() {
         "no write during cutover"
     );
 
-    // After the flip the write commits again — now to the new cluster (us-1),
+    // After the flip the write commits again, now to the new cluster (us-1),
     // proving the gate re-resolved rather than landing on the old placement
     // (INV-M2).
     table.complete_migration(&p).unwrap();

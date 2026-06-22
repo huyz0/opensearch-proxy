@@ -1,7 +1,7 @@
 //! The per-endpoint handlers the [`Pipeline`] dispatches to.
 //!
-//! Each method runs one classified request to completion — resolve, transform,
-//! dispatch, reverse-transform — recording the per-stage shape-only spans into
+//! Each method runs one classified request to completion, resolve, transform,
+//! dispatch, reverse-transform, recording the per-stage shape-only spans into
 //! the request trace. The orchestration (classification, trace assembly, the
 //! `/debug/explain` store) lives in [`crate::pipeline`]; this module is the body
 //! of each endpoint, kept separate so neither file becomes a god module.
@@ -247,7 +247,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
 
     /// Wraps a `_scroll_id` in a search response with `cluster` when cursor
     /// affinity is enabled, so a continued scroll returns to the same cluster. A
-    /// response without a `_scroll_id`, or affinity off, is returned unchanged —
+    /// response without a `_scroll_id`, or affinity off, is returned unchanged,
     /// and the cheap byte pre-check skips the JSON parse for plain searches.
     fn wrap_scroll_id(&self, body: Vec<u8>, cluster: &ClusterId) -> Vec<u8> {
         let Some(signer) = &self.cursor_signer else {
@@ -274,7 +274,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     }
 
     /// The count path (`docs/04` §4): same mandatory partition filter as search,
-    /// but the upstream returns only a total, so there is nothing to strip — the
+    /// but the upstream returns only a total, so there is nothing to strip, the
     /// count is already scoped to the caller's partition.
     pub(crate) async fn count(
         &self,
@@ -305,7 +305,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     /// The cursor (scroll/PIT) continue/clear path (`docs/03` §6): recover the
     /// pinned cluster from the request's signed affinity envelope and forward the
     /// raw op there, **bypassing partition resolution**. Fails closed with
-    /// `CursorUnresolvable` when affinity is off or the envelope does not verify —
+    /// `CursorUnresolvable` when affinity is off or the envelope does not verify,
     /// never a blind cross-cluster dispatch.
     pub(crate) async fn cursor(
         &self,
@@ -363,7 +363,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
 /// The W3C trace context to forward to the upstream for this request: continues
 /// the client's incoming `traceparent` (keeping the trace connected end-to-end)
 /// or mints a new root when absent, always with a fresh span id for the proxy's
-/// hop (`docs/05` §2). Pure identity — never carries request values.
+/// hop (`docs/05` §2). Pure identity, never carries request values.
 pub(crate) fn wire_trace(ctx: &RequestCtx<'_>) -> TraceContext {
     TraceContext::propagate(
         ctx.headers().get("traceparent"),

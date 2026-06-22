@@ -2,7 +2,7 @@
 //!
 //! Maps each partition to its current [`Placement`] and stamps every change
 //! with a fresh, monotonically increasing [`Epoch`]. The epoch is a logical
-//! generation counter (no wall-clock — keeps the table deterministic, `docs/12`)
+//! generation counter (no wall-clock, keeps the table deterministic, `docs/12`)
 //! that flows onto writes so the sink can reject a stale-epoch write during a
 //! migration (`docs/06` §2).
 //!
@@ -126,7 +126,7 @@ impl PlacementTable {
         })
     }
 
-    /// Completes the migration — the pointer flip: `Cutover` → `Active(to)`.
+    /// Completes the migration, the pointer flip: `Cutover` → `Active(to)`.
     ///
     /// # Errors
     /// [`MigrationError::NotMigrating`] if settled, [`MigrationError::NotCutover`]
@@ -166,7 +166,7 @@ impl PlacementTable {
     }
 
     /// Resolves the placement reads go to (and its epoch), or `None`. The single
-    /// read placement — `from` until a migration completes — so a read never
+    /// read placement, `from` until a migration completes, so a read never
     /// sees a split view (INV-M4). The routing entry point.
     #[must_use]
     pub fn get(&self, partition: &PartitionId) -> Option<PlacementAt> {
@@ -179,7 +179,7 @@ impl PlacementTable {
     /// The migration write gate (`docs/06` §2): may a write resolved at `epoch`
     /// for `partition` commit now? [`WriteAdmission::Admit`] only if writes are
     /// currently allowed (not in the `Cutover` window) *and* the partition's
-    /// epoch is unchanged since the decision was resolved — otherwise
+    /// epoch is unchanged since the decision was resolved, otherwise
     /// [`WriteAdmission::Reject`], which the caller surfaces as a retryable
     /// stale-epoch error so the client re-resolves and retries.
     ///
@@ -236,7 +236,7 @@ impl PlacementTable {
     ///
     /// A poisoned lock means a writer panicked mid-update. The stored data is a
     /// plain map (no broken invariant a panic could leave torn), so recovering
-    /// the guard is safe and keeps routing available — far better than
+    /// the guard is safe and keeps routing available, far better than
     /// propagating a panic onto every request path (NFR-R1).
     fn read_lock(&self) -> std::sync::RwLockReadGuard<'_, HashMap<PartitionId, Entry>> {
         self.entries

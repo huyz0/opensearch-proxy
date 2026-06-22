@@ -2,7 +2,7 @@
 //!
 //! The transport parses bytes off the wire into an [`IngressRequest`] (owned, so
 //! it outlives the borrowed hyper request) and writes an [`IngressResponse`]
-//! back. It carries no routing or tenancy meaning — just the parsed HTTP facts
+//! back. It carries no routing or tenancy meaning, just the parsed HTTP facts
 //! plus the endpoint classification.
 
 use bytes::Bytes;
@@ -13,7 +13,7 @@ use osproxy_spi::{HttpMethod, Protocol};
 
 /// The transport's HTTP response body: boxed so a response may be buffered bytes
 /// or a **live stream** piped from the upstream without buffering (ADR-014).
-/// Unsync — the server only needs `Send`. Structurally identical to
+/// Unsync, the server only needs `Send`. Structurally identical to
 /// `osproxy-sink`'s `ByteBody`, so a streamed upstream response flows through
 /// as-is, no copy.
 pub type ResponseBody = UnsyncBoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>;
@@ -33,7 +33,7 @@ pub struct StreamingResponse {
     pub status: u16,
     /// Extra response headers (beyond the content type the transport sets).
     pub headers: Vec<(String, String)>,
-    /// The response body — a live stream, or buffered bytes for an error.
+    /// The response body, a live stream, or buffered bytes for an error.
     pub body: ResponseBody,
 }
 
@@ -100,7 +100,7 @@ pub struct IngressRequest {
     /// The request body.
     pub body: Vec<u8>,
     /// The raw URL query string (without the `?`), if any. The engine forwards
-    /// only an allow-list of cursor params (`scroll`/`keep_alive`) upstream —
+    /// only an allow-list of cursor params (`scroll`/`keep_alive`) upstream,
     /// query-affecting params are never forwarded, so the body partition filter
     /// cannot be bypassed (NFR-S4).
     pub query: Option<String>,

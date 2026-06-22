@@ -73,7 +73,7 @@ impl Placement {
     }
 }
 
-/// The partition's migration phase at read time — a shape-only label (never
+/// The partition's migration phase at read time, a shape-only label (never
 /// tenant data) so observability can show where a migration is (`docs/06` §5).
 ///
 /// # Examples
@@ -88,9 +88,9 @@ pub enum MigrationPhase {
     /// Not migrating; the placement is settled.
     #[default]
     Settled,
-    /// Migrating, copy phase — writes still go to the origin.
+    /// Migrating, copy phase, writes still go to the origin.
     Draining,
-    /// Migrating, cutover window — writes are held (stale-epoch retry).
+    /// Migrating, cutover window, writes are held (stale-epoch retry).
     Cutover,
 }
 

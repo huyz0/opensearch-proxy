@@ -1,10 +1,10 @@
 //! Memory invariant for the streaming paths (ADR-014): a **very large** message
-//! flows through the proxy with **bounded** memory — the proxy never buffers the
+//! flows through the proxy with **bounded** memory, the proxy never buffers the
 //! whole body. It spawns the real `osproxy` binary pointed at an in-process mock
-//! upstream (no Docker) — in tenant-agnostic passthrough mode for the verbatim
+//! upstream (no Docker), in tenant-agnostic passthrough mode for the verbatim
 //! request/response cases, and in tenancy mode for the streamed **search
 //! response** case (a huge `aggregations` sibling must pipe through the hit
-//! transform without being buffered) — and reads the proxy's own resident set
+//! transform without being buffered), and reads the proxy's own resident set
 //! from `/proc/<pid>/statm` (so the figure is the proxy alone, not this harness).
 //!
 //! `#[ignore]`: needs Linux `/proc` and moves a lot of bytes.
@@ -29,7 +29,7 @@ use tokio::net::TcpListener;
 
 /// Linux page size assumed when converting `statm` resident pages to bytes.
 const PAGE_BYTES: u64 = 4096;
-/// The streamed request body size: 64 MiB — 8× the proxy's 8 MiB *buffered* cap,
+/// The streamed request body size: 64 MiB, 8× the proxy's 8 MiB *buffered* cap,
 /// so if the passthrough path buffered it the request would be refused (413) and,
 /// were the cap lifted, the resident set would jump by ~64 MiB. Streaming both.
 const BIG_BODY: usize = 64 * 1024 * 1024;
@@ -51,7 +51,7 @@ impl Drop for ProxyChild {
 }
 
 /// A mock upstream that **drains** each request body frame by frame (never
-/// buffering it) and returns a response of `response_size` bytes — so the proxy,
+/// buffering it) and returns a response of `response_size` bytes, so the proxy,
 /// not the mock, is what the test measures, and backpressure is realistic.
 async fn start_drain_upstream(response_size: usize) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -62,7 +62,7 @@ async fn start_drain_upstream(response_size: usize) -> String {
                 let io = TokioIo::new(stream);
                 let svc = move |req: Request<Incoming>| async move {
                     let mut body = req.into_body();
-                    // Discard each request frame as it arrives — bounded memory.
+                    // Discard each request frame as it arrives, bounded memory.
                     while let Some(frame) = body.frame().await {
                         drop(frame);
                     }
@@ -81,7 +81,7 @@ async fn start_drain_upstream(response_size: usize) -> String {
 }
 
 /// A mock upstream that drains each request and answers every call with a search
-/// envelope whose `aggregations` blob is `agg_size` bytes — empty hits, so the
+/// envelope whose `aggregations` blob is `agg_size` bytes, empty hits, so the
 /// proxy's hit transform forwards the giant sibling verbatim without buffering.
 async fn start_search_upstream(agg_size: usize) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -114,7 +114,7 @@ async fn start_search_upstream(agg_size: usize) -> String {
 }
 
 /// A valid `_search` response envelope with empty hits and an `aggregations` blob
-/// of `agg_size` bytes — the genuinely-unbounded part of a real search response.
+/// of `agg_size` bytes, the genuinely-unbounded part of a real search response.
 fn search_envelope(agg_size: usize) -> Bytes {
     let mut v =
         br#"{"took":1,"hits":{"total":{"value":0},"hits":[]},"aggregations":{"blob":""#.to_vec();
@@ -215,7 +215,7 @@ async fn a_large_passthrough_request_streams_with_bounded_memory() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     let idle = rss_bytes(pid).expect("read idle RSS");
 
-    // Drive several large requests, sampling the proxy's RSS throughout — a
+    // Drive several large requests, sampling the proxy's RSS throughout, a
     // transient full-body buffer (held for the whole transfer) would be caught.
     let peak = peak_rss_during(pid, async {
         for _ in 0..4 {
@@ -242,7 +242,7 @@ async fn a_large_passthrough_request_streams_with_bounded_memory() {
 async fn a_large_passthrough_response_streams_with_bounded_memory() {
     let client: HttpClient = Client::builder(TokioExecutor::new()).build_http();
     // The upstream returns a 64 MiB response; the proxy must pipe it back without
-    // buffering — so its resident set stays small even as the big body flows.
+    // buffering, so its resident set stays small even as the big body flows.
     let upstream = start_drain_upstream(BIG_BODY).await;
     let (proxy, base, pid) = spawn_passthrough_proxy(&upstream).await;
     assert!(
@@ -273,7 +273,7 @@ async fn a_large_passthrough_response_streams_with_bounded_memory() {
 #[ignore = "requires Linux /proc; run with --ignored --nocapture"]
 async fn a_large_search_response_streams_with_bounded_memory() {
     let client: HttpClient = Client::builder(TokioExecutor::new()).build_http();
-    // The upstream returns a search envelope with a 64 MiB `aggregations` blob —
+    // The upstream returns a search envelope with a 64 MiB `aggregations` blob,
     // the part of a real search response that is genuinely unbounded. The proxy
     // routes the search, then streams the response back through the hit transform;
     // the giant sibling must flow through verbatim without ever being buffered.
@@ -314,7 +314,7 @@ async fn drain(mut body: Incoming) {
 }
 
 /// Runs `work` while continuously sampling `pid`'s resident set, returning the
-/// peak observed — so a buffer held for the duration of a transfer is caught even
+/// peak observed, so a buffer held for the duration of a transfer is caught even
 /// without hitting the exact instant of peak.
 async fn peak_rss_during<F: std::future::Future<Output = ()>>(pid: u32, work: F) -> u64 {
     let done = Arc::new(AtomicBool::new(false));

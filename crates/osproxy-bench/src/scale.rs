@@ -1,7 +1,7 @@
 //! The scalability curve: how the proxy's tail latency and throughput move as
-//! offered concurrency climbs. NFR-P2 bounds *tail amplification* — a healthy
+//! offered concurrency climbs. NFR-P2 bounds *tail amplification*, a healthy
 //! proxy serves more in-flight requests by reusing its pool, not by letting p99
-//! blow up — so a curve is a sweep of [`LatencySummary`] at rising concurrency
+//! blow up, so a curve is a sweep of [`LatencySummary`] at rising concurrency
 //! and a judge over its shape.
 
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,7 @@ pub struct ScalabilityCurve {
 }
 
 impl ScalabilityCurve {
-    /// A curve from its sweep points. Returns `None` for an empty sweep — a curve
+    /// A curve from its sweep points. Returns `None` for an empty sweep, a curve
     /// with no points has no shape to judge.
     #[must_use]
     pub fn new(points: Vec<ScalabilityPoint>) -> Option<Self> {
@@ -89,7 +89,7 @@ pub struct ScalabilityThresholds {
     /// Max acceptable tail-amplification ratio across the sweep (NFR-P2): how much
     /// p99 may grow from the lightest to the heaviest load.
     pub max_tail_amplification: f64,
-    /// Min throughput scaling the sweep must show — proof that added concurrency
+    /// Min throughput scaling the sweep must show, proof that added concurrency
     /// actually buys work and the proxy is not serializing requests.
     pub min_throughput_scaling: f64,
 }

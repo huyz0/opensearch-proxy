@@ -4,7 +4,7 @@
 //! real result. In **async mode** it instead durably enqueues the fully-resolved,
 //! epoch-stamped op onto a [`WriteQueue`] and returns `202 Accepted` with an
 //! `op_id` handle. A separate downstream component consumes the queue and applies
-//! each op to one or more destinations — so the proxy's only promise is *durable
+//! each op to one or more destinations, so the proxy's only promise is *durable
 //! acceptance into the pipeline*, never application or its result.
 //!
 //! This is deliberately narrow:
@@ -12,8 +12,8 @@
 //! * The `202` is returned **only after** the queue acknowledges the enqueue, so a
 //!   client that got `202` knows the op will not be silently dropped. A queue that
 //!   cannot accept the op fails the request rather than lying.
-//! * The op carries an **`op_id`** — client-supplied via the `X-Op-Id` header
-//!   (validated) or proxy-minted from the request id otherwise — that is both the
+//! * The op carries an **`op_id`**, client-supplied via the `X-Op-Id` header
+//!   (validated) or proxy-minted from the request id otherwise, that is both the
 //!   correlation handle and the idempotency key the downstream applier dedups on.
 //! * The proxy hosts **no status surface**: whether and how a failed apply is
 //!   reported back is the downstream's responsibility, out of scope here.
@@ -84,7 +84,7 @@ pub fn op_id_for(ctx: &RequestCtx<'_>, request_id: &RequestId) -> String {
         .map_or_else(|| request_id.as_str().to_owned(), ToOwned::to_owned)
 }
 
-/// Why a mutation cannot be honored in async mode, if it cannot — a short,
+/// Why a mutation cannot be honored in async mode, if it cannot, a short,
 /// value-free reason for the `400`. These all need read-modify-write against the
 /// document's current state, which does not exist at enqueue time, so async
 /// rejects them rather than silently mis-applying or dropping the precondition.
@@ -120,7 +120,7 @@ pub struct QueuedWrite {
     /// The partition id, used as the queue partition key so all ops for one
     /// logical partition stay ordered through the fan-out.
     pub partition_key: String,
-    /// The resolved op(s) — identical to what the sync path would deliver.
+    /// The resolved op(s), identical to what the sync path would deliver.
     pub batch: WriteBatch,
 }
 
@@ -202,7 +202,7 @@ pub(crate) fn unsupported_response(reason: &str, index: &str) -> PipelineRespons
     }
 }
 
-/// The `422` returned when async mode was requested but no queue is configured —
+/// The `422` returned when async mode was requested but no queue is configured,
 /// the op is refused, never accepted-and-dropped.
 #[must_use]
 pub(crate) fn unavailable_response(index: &str) -> PipelineResponse {
@@ -237,7 +237,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     /// Durably enqueues a resolved write for downstream fan-out and returns the
     /// `202` handle (`docs/04` §9). The `202` is produced **only after** the queue
     /// acknowledges the enqueue; a missing queue is refused (`422`) and an enqueue
-    /// failure is reported (`503`) — the op is never accepted-and-dropped. No live
+    /// failure is reported (`503`), the op is never accepted-and-dropped. No live
     /// epoch gate runs here: the op carries its epoch and the downstream applier
     /// owns staleness, since there is no synchronous upstream to hold.
     pub(crate) async fn enqueue_async(

@@ -1,4 +1,4 @@
-//! Tests for the metrics snapshot — counters tally by outcome, the snapshot
+//! Tests for the metrics snapshot, counters tally by outcome, the snapshot
 //! reflects them, and it round-trips as JSON.
 #![allow(clippy::unwrap_used)]
 

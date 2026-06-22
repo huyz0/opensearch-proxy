@@ -115,7 +115,7 @@ fn a_missing_or_malformed_parent_mints_a_sampled_root() {
 #[test]
 fn a_different_process_seed_yields_disjoint_ids_for_the_same_request() {
     // The fleet-uniqueness invariant: two instances (distinct process seeds)
-    // must not derive the same id for the same (process-local) request id —
+    // must not derive the same id for the same (process-local) request id,
     // otherwise unrelated requests on different instances would collide.
     let s = b"req-5";
     assert_ne!(

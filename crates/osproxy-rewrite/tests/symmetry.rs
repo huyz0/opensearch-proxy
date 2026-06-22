@@ -3,8 +3,8 @@
 //!
 //! The headline correctness property of the shared-index model: whatever the
 //! ingest path injects, the read path strips, recovering the client's original
-//! document exactly. Here we prove the write-side inverse — inject-then-strip is
-//! the identity — over arbitrary documents and injected field sets. The full
+//! document exactly. Here we prove the write-side inverse, inject-then-strip is
+//! the identity, over arbitrary documents and injected field sets. The full
 //! write+read round-trip through the proxy is proven in M2.
 
 use osproxy_core::FieldName;

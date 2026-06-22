@@ -3,14 +3,14 @@
 //!
 //! Distinct from [`ExplainStore`](crate::ExplainStore), which is the always-on,
 //! lookup-by-request-id store behind `/debug/explain/{id}`. The break-glass
-//! buffer is a *sequence* an operator turns on deliberately — when a class of
+//! buffer is a *sequence* an operator turns on deliberately, when a class of
 //! request is failing and the ids aren't known up front, flip a `ring_buffer`
 //! directive and read back the last N matching requests as a forensic tape.
 //!
 //! Single-instance by design (the captured tape lives on the instance that
 //! handled the requests); bounded so it costs nothing until used and cannot grow
 //! without limit once on. Shape-only, inherited from the explain document it
-//! stores — it cannot reveal a tenant value because none was ever captured.
+//! stores, it cannot reveal a tenant value because none was ever captured.
 
 use std::collections::VecDeque;
 use std::sync::{Mutex, PoisonError};
@@ -43,7 +43,7 @@ impl BreakGlassBuffer {
         entries.push_back(doc);
     }
 
-    /// A snapshot of the captured tape, oldest first — the break-glass read.
+    /// A snapshot of the captured tape, oldest first, the break-glass read.
     #[must_use]
     pub fn snapshot(&self) -> Vec<Value> {
         self.lock().iter().cloned().collect()
@@ -61,7 +61,7 @@ impl BreakGlassBuffer {
         self.lock().is_empty()
     }
 
-    /// Locks the tape, recovering a poisoned lock — it is append-only forensic
+    /// Locks the tape, recovering a poisoned lock, it is append-only forensic
     /// data with no invariant a panicking holder could tear (NFR-R1).
     fn lock(&self) -> std::sync::MutexGuard<'_, VecDeque<Value>> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)

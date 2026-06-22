@@ -5,7 +5,7 @@
 //! §3, NFR-T3, ADR-013). This adapter realizes that over etcd's watch API using
 //! the **watch-and-cache** model: a background task subscribes to one etcd key and
 //! keeps a locally-cached [`DirectiveSet`] snapshot fresh, so [`DirectiveStore::load`]
-//! on the request hot path is a cheap `Arc` clone — never per-request network I/O.
+//! on the request hot path is a cheap `Arc` clone, never per-request network I/O.
 //!
 //! It deliberately backs **only** the directive (observability) control plane.
 //! The migration/placement store (`osproxy-control::MigrationStore`) needs a
@@ -21,7 +21,7 @@
 //!   task reconnects with a bounded delay.
 //! - **One fail-closed decoder**: directives are decoded with
 //!   [`osproxy_observe::decode_directive_set`], the same decoder the admin
-//!   `POST /admin/directives` endpoint uses — so a directive means the same thing
+//!   `POST /admin/directives` endpoint uses, so a directive means the same thing
 //!   however it is published, and a typo'd key can never widen its blast radius.
 #![deny(missing_docs)]
 
@@ -37,7 +37,7 @@ mod watch;
 /// running, the watch task absorbs transient failures (keeping the last snapshot).
 #[derive(Debug, thiserror::Error)]
 pub enum EtcdError {
-    /// The initial connection or read against etcd failed — fail fast rather than
+    /// The initial connection or read against etcd failed, fail fast rather than
     /// serve an empty directive set the operator did not intend.
     #[error("etcd connect/read failed at startup")]
     Connect(#[from] etcd_client::Error),
@@ -54,7 +54,7 @@ pub struct EtcdDirectiveStore {
 }
 
 impl EtcdDirectiveStore {
-    /// Wraps an already-built shared snapshot — the seam the [`watch`] connect path
+    /// Wraps an already-built shared snapshot, the seam the [`watch`] connect path
     /// uses after its initial read.
     fn from_snapshot(current: Arc<ArcSwap<DirectiveSet>>) -> Self {
         Self { current }
@@ -69,7 +69,7 @@ impl DirectiveStore for EtcdDirectiveStore {
 }
 
 /// Swaps in a freshly decoded set, or **keeps the last good snapshot** if the
-/// value does not parse — a malformed publish must never blank fleet diagnostics.
+/// value does not parse, a malformed publish must never blank fleet diagnostics.
 fn apply_value(current: &ArcSwap<DirectiveSet>, value: &[u8], clock: &dyn Clock) {
     if let Ok(set) = decode_directive_set(value, clock) {
         current.store(Arc::new(set));

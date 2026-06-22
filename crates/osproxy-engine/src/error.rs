@@ -3,7 +3,7 @@
 //! Built from each stage's sub-error so the decision chain
 //! (principal → partition → placement → epoch → upstream) is preserved for
 //! diagnosis without source reading (NFR-T5, `docs/02` §4). Carries codes and
-//! shapes only — never tenant values.
+//! shapes only, never tenant values.
 
 use osproxy_core::ErrorCode;
 use osproxy_rewrite::RewriteError;
@@ -29,14 +29,14 @@ pub enum RequestError {
 
     /// The write resolved against a placement epoch no longer current for a
     /// migrating partition: the migration write gate held it (`docs/06` §2).
-    /// Retryable — the client re-resolves against the new placement.
+    /// Retryable, the client re-resolves against the new placement.
     #[error("stale placement epoch {stamped} for a migrating partition")]
     StaleEpoch {
         /// The epoch the rejected decision was stamped with (an id, not data).
         stamped: osproxy_core::Epoch,
     },
 
-    /// An internal invariant was violated — a bug, not a client or upstream
+    /// An internal invariant was violated, a bug, not a client or upstream
     /// fault. Carries a static reason (never tenant data) for the operator/LLM.
     #[error("internal invariant violated: {reason}")]
     Internal {
@@ -44,7 +44,7 @@ pub enum RequestError {
         reason: &'static str,
     },
 
-    /// A scroll/PIT cursor could not be resolved to its pinned cluster — its
+    /// A scroll/PIT cursor could not be resolved to its pinned cluster, its
     /// affinity envelope is absent, malformed, or fails its signature. The client
     /// must re-issue the originating search (`docs/03` §6).
     #[error("cursor unresolvable: {reason}")]

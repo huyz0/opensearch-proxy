@@ -1,6 +1,6 @@
 //! Classifying an OpenSearch REST path into an [`EndpointKind`].
 //!
-//! A small, explicit matcher over the path segments — the supported matrix is
+//! A small, explicit matcher over the path segments, the supported matrix is
 //! version-tracked in `docs/specs/opensearch-endpoints.md`. M1 fully handles
 //! single-document ingest (`_doc`/`_create`); other shapes are classified so the
 //! pipeline can reject them with a precise reason, not mis-handle them.
@@ -26,7 +26,7 @@ pub struct Classified {
 pub fn classify(method: HttpMethod, path: &str) -> Classified {
     // No classified endpoint has more than three meaningful path segments
     // (`/{index}/{verb}/{id}`), and the `Admin` arm only inspects the first. So
-    // collect at most four segments onto the stack — the fourth's mere presence
+    // collect at most four segments onto the stack, the fourth's mere presence
     // forces anything longer than a three-segment shape to the `Unknown`/`Admin`
     // arms, exactly as a full `Vec` would, but without a per-request heap
     // allocation (classify runs on every request).
@@ -52,13 +52,13 @@ pub fn classify(method: HttpMethod, path: &str) -> Classified {
             logical_index: (*index).to_owned(),
             doc_id: None,
         },
-        // Cursor lifecycle — scroll & PIT, bound to the cluster that created them
+        // Cursor lifecycle, scroll & PIT, bound to the cluster that created them
         // (`docs/03` §6). These carry a wrapped cursor the engine unwraps to route
         // to the pinned cluster; the path-form scroll id rides in `doc_id`.
         //   /_search/scroll (body-form scroll continue/clear) and
-        //   /_search/point_in_time (PIT delete) — both carry the wrapped cursor in
+        //   /_search/point_in_time (PIT delete), both carry the wrapped cursor in
         //   the body, no logical index. (OpenSearch's PIT endpoint is
-        //   `_search/point_in_time`, not Elasticsearch's `_pit` — see
+        //   `_search/point_in_time`, not Elasticsearch's `_pit`, see
         //   `docs/specs/opensearch-endpoints.md`.)
         ["_search", "scroll" | "point_in_time"] => classified(EndpointKind::Cursor, ""),
         //   /_search/scroll/{scroll_id} (path-form continue/clear)
@@ -67,10 +67,10 @@ pub fn classify(method: HttpMethod, path: &str) -> Classified {
             logical_index: String::new(),
             doc_id: Some((*scroll_id).to_owned()),
         },
-        //   /{index}/_search/point_in_time (PIT create — resolves the index's
+        //   /{index}/_search/point_in_time (PIT create, resolves the index's
         //   cluster, wraps the returned `pit_id`).
         [index, "_search", "point_in_time"] => classified(EndpointKind::Cursor, index),
-        // /_search with no index — a PIT search (the PIT defines the index set);
+        // /_search with no index, a PIT search (the PIT defines the index set);
         // the engine reads the `pit` in the body and routes to its pinned cluster.
         ["_search"] => classified(EndpointKind::Search, ""),
         // /{index}/_search and /{index}/_count
@@ -89,9 +89,9 @@ pub fn classify(method: HttpMethod, path: &str) -> Classified {
             doc_id: None,
         },
         [index, "_bulk"] => classified(EndpointKind::IngestBulk, index),
-        // /{index}/_delete_by_query — only honorable in async fan-out mode, where
+        // /{index}/_delete_by_query, only honorable in async fan-out mode, where
         // the engine expands it to a delete per match; rejected otherwise
-        // (`docs/04` §9). `_update_by_query` is intentionally NOT classified — it
+        // (`docs/04` §9). `_update_by_query` is intentionally NOT classified, it
         // needs a scripted read-modify-write the proxy cannot do, so it falls
         // through to `Unknown` and is rejected.
         [index, "_delete_by_query"] => classified(EndpointKind::DeleteByQuery, index),
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn scroll_and_pit_paths_are_cursor() {
-        // Scroll continue/clear — body form and path form.
+        // Scroll continue/clear, body form and path form.
         assert_eq!(
             classify(HttpMethod::Post, "/_search/scroll").endpoint,
             EndpointKind::Cursor

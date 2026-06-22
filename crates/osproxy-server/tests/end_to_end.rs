@@ -7,7 +7,7 @@
 // Test scaffolding (mock server + helpers, not `#[test]` fns) needs the unwrap
 // allowance the test-only config does not reach.
 #![allow(clippy::unwrap_used)]
-// JUSTIFY(file-length): one cohesive full-stack suite — every scenario (tenanted
+// JUSTIFY(file-length): one cohesive full-stack suite, every scenario (tenanted
 // forward, metrics, unresolved partition, token auth, authorizer decline, TLS
 // gate, structured log) shares the mock-upstream + handler scaffolding; splitting
 // would duplicate it across files for no real separation.
@@ -113,7 +113,7 @@ async fn put_doc_is_tenanted_and_forwarded_upstream() {
     assert_eq!(resp.status(), 201);
 
     // The upstream received the transformed doc at the constructed id with
-    // routing, and the injected tenancy field — proving the full tenanting path.
+    // routing, and the injected tenancy field, proving the full tenanting path.
     let got = captured.lock().unwrap().clone();
     assert_eq!(got.method, "PUT");
     assert_eq!(got.uri, "/osproxy-shared/_doc/acme:7?routing=acme");
@@ -150,7 +150,7 @@ async fn put_doc_is_tenanted_and_forwarded_upstream() {
 }
 
 /// Scrapes `/metrics` and asserts the shape-only snapshot reflects one served,
-/// successful data-plane request and the upstream pool — the prod-safe source an
+/// successful data-plane request and the upstream pool, the prod-safe source an
 /// external aggregator reads, with no auth and no tenant values.
 async fn assert_metrics_snapshot(
     client: &Client<hyper_util::client::legacy::connect::HttpConnector, Full<Bytes>>,
@@ -487,7 +487,7 @@ async fn passthrough_forwards_verbatim_and_capture_records_the_exchange() {
 #[tokio::test]
 async fn a_wired_capture_sink_stays_off_until_enabled() {
     // The default-off guarantee: wiring a capture sink does NOT start capturing.
-    // Capture is on demand — nothing is teed until the always-capture baseline or
+    // Capture is on demand, nothing is teed until the always-capture baseline or
     // a published `capture` directive selects requests.
     let (upstream, _captured) = start_upstream().await;
     let cluster = ClusterId::from("source");

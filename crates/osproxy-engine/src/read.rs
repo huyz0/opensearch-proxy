@@ -73,7 +73,7 @@ pub(crate) fn build_delete_op(
 
 /// Builds a delete [`WriteOp`] for a document already known by its **physical**
 /// id (the `_delete_by_query` expansion, `docs/04` §9): the search ran against the
-/// physical index, so its hit ids are physical — only `_routing` is derived from
+/// physical index, so its hit ids are physical, only `_routing` is derived from
 /// the placement's id rule. Epoch-stamped like any write.
 pub(crate) fn build_delete_op_physical(resolved: &Resolved, physical_id: String) -> WriteOp {
     let shape = read_shape(&resolved.decision.body_transform);
@@ -208,14 +208,14 @@ pub(crate) fn shape_hits(
     let internal = || RequestError::Internal {
         reason: "serializing search response",
     };
-    // Parse only the top level; the siblings the proxy never touches — `took`,
-    // `_shards`, and especially `aggregations` (which can dwarf the hits) — stay as
+    // Parse only the top level; the siblings the proxy never touches, `took`,
+    // `_shards`, and especially `aggregations` (which can dwarf the hits), stay as
     // raw byte spans rather than being materialized into a `Value` tree and
     // re-serialized (the same posture as `wrap_query`). Only the `hits` subtree is
     // shaped.
     let mut top: BTreeMap<String, Box<RawValue>> = match serde_json::from_slice(upstream_body) {
         Ok(top) => top,
-        // A valid but non-object body has no hits to shape — pass it through
+        // A valid but non-object body has no hits to shape, pass it through
         // unchanged; only genuinely invalid JSON is an error (as before).
         Err(_) => {
             return if serde_json::from_slice::<&RawValue>(upstream_body).is_ok() {
@@ -244,7 +244,7 @@ pub(crate) fn shape_hits(
 /// Strips one search hit in place into the client's logical view. Shared with the
 /// streaming search transform ([`crate::search_scan`]), which frames one hit at a
 /// time and reuses this exact (audited) per-hit strip rather than re-implementing
-/// it — so the isolation boundary lives in one place.
+/// it, so the isolation boundary lives in one place.
 pub(crate) fn shape_hit(hit: &mut Value, logical_index: &str, partition: &str, shape: &ReadShape) {
     let Some(obj) = hit.as_object_mut() else {
         return;

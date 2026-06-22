@@ -7,7 +7,7 @@
 //! connection and never for a reused one, so a thin [`CountingConnector`] that
 //! increments a counter on each [`Service::call`] turns "connections opened" into
 //! a number we can compare against "requests dispatched". A cluster whose opens
-//! stay far below its dispatches is amortizing handshakes — pool reuse, verified.
+//! stay far below its dispatches is amortizing handshakes, pool reuse, verified.
 
 use std::future::Future;
 use std::pin::Pin;

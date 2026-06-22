@@ -4,7 +4,7 @@
 //! the *entire* client query inside a `bool` whose `filter` pins the partition
 //! field(s). Because the client query becomes the `must` clause of a bool the
 //! proxy constructs, there is no syntactic way for it to escape the sibling
-//! `filter` — the filter is not a suggestion the client can override, it is a
+//! `filter`, the filter is not a suggestion the client can override, it is a
 //! structural enclosure. This is the read-path counterpart of the write-path
 //! field injection.
 
@@ -48,7 +48,7 @@ use crate::error::RewriteError;
 pub fn wrap_query(body: &[u8], filter: &[(FieldName, Value)]) -> Result<Vec<u8>, RewriteError> {
     // Parse only the top level. Untouched sibling keys (`size`, `sort`, `aggs`, …)
     // and the client's own query stay as raw byte spans rather than being
-    // materialized into `Value` trees — serde still fully validates the JSON and
+    // materialized into `Value` trees, serde still fully validates the JSON and
     // proves the body is an object, so the isolation guarantee is unchanged; we
     // only avoid re-allocating subtrees the proxy does not inspect.
     let mut top = parse_top(body)?;
@@ -88,7 +88,7 @@ fn build_filtered_query(
         }
         q.extend_from_slice(br#"{"term":"#);
         // Serialize `{<name>: <value>}` with serde so the field name and value are
-        // correctly quoted/escaped — never hand-rolled.
+        // correctly quoted/escaped, never hand-rolled.
         let mut term = Map::with_capacity(1);
         term.insert(name.as_str().to_owned(), value.clone());
         serde_json::to_writer(&mut q, &term).map_err(|_| RewriteError::InvalidJson)?;

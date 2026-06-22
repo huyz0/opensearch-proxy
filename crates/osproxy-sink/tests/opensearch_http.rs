@@ -1,7 +1,7 @@
 //! Exercises [`OpenSearchSink`] against an in-process mock OpenSearch: a real
 //! TCP/HTTP server that records the request it receives and returns a canned
 //! index response. This proves request construction (method, path, routing
-//! query, body) and response parsing without needing Docker — the live
+//! query, body) and response parsing without needing Docker, the live
 //! testcontainer round-trip is a separate, ignored test.
 //!
 // This whole file is test scaffolding (a mock server in helper fns and spawned
@@ -163,7 +163,7 @@ async fn the_trace_context_is_propagated_to_the_upstream() {
         !traceparent.contains("00f067aa0ba902b7"),
         "proxy must present its own span id downstream: {traceparent}"
     );
-    // tracestate is forwarded verbatim — the proxy adds no entry of its own.
+    // tracestate is forwarded verbatim, the proxy adds no entry of its own.
     assert_eq!(
         got.tracestate.as_deref(),
         Some("vendor1=abc,congo=t61rcWkgMzE"),
@@ -305,7 +305,7 @@ async fn an_http2_op_is_dispatched_over_http2() {
     let (base, captured) = start_mock(r#"{"_id":"acme:1","result":"created"}"#).await;
     let sink = OpenSearchSink::new();
 
-    // The op's resolved upstream protocol is HTTP/2 — the sink must dispatch it
+    // The op's resolved upstream protocol is HTTP/2, the sink must dispatch it
     // over its h2 client, not the default h1 one (per-request selection).
     let op = WriteOp::new(
         target("eu-1", "orders", &base),
@@ -378,7 +378,7 @@ async fn each_cluster_routes_to_its_own_sharded_pool() {
         .await
         .unwrap();
 
-    // Each mock saw exactly its cluster's request — no cross-routing.
+    // Each mock saw exactly its cluster's request, no cross-routing.
     assert_eq!(cap_a.lock().unwrap().method, "PUT");
     assert_eq!(cap_b.lock().unwrap().method, "PUT");
     assert!(cap_a.lock().unwrap().uri.contains("/orders/_doc/1"));
@@ -447,14 +447,14 @@ async fn a_failing_cluster_is_evicted_then_retried_after_cooldown() {
         "2nd is a real attempt"
     );
 
-    // The cluster is now shed — the next request fails fast without attempting.
+    // The cluster is now shed, the next request fails fast without attempting.
     assert!(
         kind(write().await).contains("circuit"),
         "evicted cluster must be shed"
     );
 
     // After the cooldown a half-open trial is attempted again (it still fails,
-    // since the endpoint is dead — but it is no longer shed outright).
+    // since the endpoint is dead, but it is no longer shed outright).
     clock.advance(std::time::Duration::from_secs(6));
     assert!(
         !kind(write().await).contains("circuit"),
@@ -464,7 +464,7 @@ async fn a_failing_cluster_is_evicted_then_retried_after_cooldown() {
 
 #[tokio::test]
 async fn a_stuck_upstream_times_out_and_is_retryable() {
-    // A server that accepts the connection but never sends a response — the
+    // A server that accepts the connection but never sends a response, the
     // request must not hang forever; the per-request timeout fails it fast
     // (NFR-R7) as a retryable transport error.
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -538,7 +538,7 @@ async fn unconfigured_cluster_is_a_transport_error() {
 async fn repeated_writes_reuse_one_pooled_connection() {
     // The M4 "pool reuse rates verified" exit gate (docs/11): many sequential
     // writes to one cluster must ride a single pooled connection, not reconnect
-    // each time — proven from both ends (server accepts) and the sink's own
+    // each time, proven from both ends (server accepts) and the sink's own
     // connection-open counter.
     const WRITES: u64 = 5;
     let (base, accepts) = start_pooled_mock(r#"{"_id":"a:1","result":"created"}"#).await;

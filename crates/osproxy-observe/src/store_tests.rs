@@ -29,7 +29,7 @@ fn attrs(principal: &PrincipalId) -> RequestAttrs<'_> {
     }
 }
 
-/// Evaluates `store` at `now` for a fixed request — the level a request would get.
+/// Evaluates `store` at `now` for a fixed request, the level a request would get.
 fn level_at(store: &impl DirectiveStore, now: Instant) -> DiagLevel {
     let principal = PrincipalId::from("svc");
     store

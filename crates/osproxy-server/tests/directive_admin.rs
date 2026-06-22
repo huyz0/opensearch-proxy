@@ -1,6 +1,6 @@
 //! The `/admin/directives` control-plane channel: `POST` publishes a directive
 //! set (token-gated, fail-closed, live on the same pipeline the requests flow
-//! through — the fleet flip with no restart), and `GET` introspects the settings
+//! through, the fleet flip with no restart), and `GET` introspects the settings
 //! the instance is currently applying (the agent's read-back of fleet state).
 
 #![allow(clippy::unwrap_used)]
@@ -175,7 +175,7 @@ async fn a_published_directive_takes_effect_on_the_live_pipeline() {
     assert_eq!(body["published"], 1);
 
     // A subsequent request is now captured (it fails at resolution, but the
-    // ring_buffer directive still tapes it — capture is independent of outcome).
+    // ring_buffer directive still tapes it, capture is independent of outcome).
     let ingest = IngressRequest {
         method: HttpMethod::Put,
         protocol: osproxy_spi::Protocol::Http1,
@@ -203,7 +203,7 @@ async fn introspecting_returns_the_settings_the_instance_is_applying() {
     let pipeline = Pipeline::new(TenancyRouter::new(tenancy()), sink());
     let handler = admin_handler(store.clone(), pipeline);
 
-    // Publish a targeted directive, then read it back — the agent's observe loop.
+    // Publish a targeted directive, then read it back, the agent's observe loop.
     let body = r#"{"directives":[{"id":"raise","level":"ShapeTiming","ttl_secs":60,"tenant":"acme","sample_per_mille":500,"ring_buffer":true}]}"#;
     assert_eq!(handler.handle(post(body, Some(TOKEN))).await.status, 200);
 
@@ -240,7 +240,7 @@ async fn an_introspected_directive_re_publishes_verbatim() {
     assert_eq!(view["directives"][0]["endpoint"], "Search");
 
     // Re-publish the *introspected* directive (restoring the relative ttl the read
-    // omits): the decoder accepts it — schema parity, no unknown_field rejection.
+    // omits): the decoder accepts it, schema parity, no unknown_field rejection.
     let mut directive = view["directives"][0].clone();
     directive["ttl_secs"] = serde_json::json!(60);
     directive.as_object_mut().unwrap().remove("expired");

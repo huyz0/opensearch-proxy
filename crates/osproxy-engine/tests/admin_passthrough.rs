@@ -1,6 +1,6 @@
 //! Admin (`_cat`/`_cluster`/`_nodes`) pass-through (`docs/03` §6): with an
 //! operator policy, an allow-listed admin request is forwarded verbatim to the
-//! configured cluster; without one — or for a path off the allow-list — it is
+//! configured cluster; without one, or for a path off the allow-list, it is
 //! rejected (fail-closed, `docs/decisions/006`). Admin output is not
 //! tenancy-filtered, so the full path and query reach the upstream unchanged.
 
@@ -152,7 +152,7 @@ async fn an_allow_listed_admin_request_forwards_verbatim_to_the_admin_cluster() 
     );
     assert_eq!(op.path, "/_cat/indices", "full path forwarded verbatim");
     // Admin is not tenancy-filtered, so the whole query is forwarded (unlike the
-    // cursor allow-list) — there is no body partition filter to bypass.
+    // cursor allow-list), there is no body partition filter to bypass.
     assert_eq!(op.query.as_deref(), Some("v&format=json"));
 }
 
@@ -172,7 +172,7 @@ async fn an_admin_request_off_the_allow_list_is_rejected() {
 #[tokio::test]
 async fn a_traversal_path_cannot_escape_the_allow_listed_prefix() {
     // `/_cat/../_cluster/settings` matches the `/_cat/` prefix textually but would
-    // resolve upstream to a non-allow-listed endpoint — the allow-list is an
+    // resolve upstream to a non-allow-listed endpoint, the allow-list is an
     // authorization boundary, so it must be rejected with no dispatch.
     let policy = AdminPolicy::new(ClusterId::from("admin-1"), vec!["/_cat/".to_owned()]);
     let (p, seen) = pipeline(Some(policy));

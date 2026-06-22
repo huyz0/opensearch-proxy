@@ -1,10 +1,10 @@
 //! Wall-clock comparison of the buffered vs streaming `_search` response
-//! transform (divan; a local calibration tool, **not** a CI gate — the
+//! transform (divan; a local calibration tool, **not** a CI gate, the
 //! deterministic gates stay dhat + iai-callgrind, docs/12).
 //!
 //! It makes the streaming trade measurable: the streamed path bounds peak memory
 //! to one hit (proven by `osproxy-server/tests/streaming_memory.rs`), and this
-//! bench shows the CPU cost of that — comparable-or-faster on hit-heavy
+//! bench shows the CPU cost of that, comparable-or-faster on hit-heavy
 //! responses, and, after the `Passthrough` bulk-copy in `search_scan`, parity on
 //! aggregation-heavy ones (where the buffered path memcpys an unparsed
 //! `aggregations` `RawValue` and the streamed path forwards the same bytes).

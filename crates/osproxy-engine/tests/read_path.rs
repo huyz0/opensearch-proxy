@@ -266,7 +266,7 @@ async fn search_dispatches_a_query_wrapped_in_the_mandatory_filter() {
     search(&p, br#"{"query":{"term":{"_tenant":"globex"}}}"#).await;
 
     // The query actually dispatched upstream nests the client's query under
-    // `must` with the proxy's partition `filter` as an inseparable sibling — the
+    // `must` with the proxy's partition `filter` as an inseparable sibling, the
     // client cannot escape it (docs/03 §5).
     let dispatched = p.sink().recorded_searches();
     assert_eq!(dispatched.len(), 1);

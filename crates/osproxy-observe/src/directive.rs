@@ -1,16 +1,16 @@
-//! Runtime diagnostics directives — verbosity as **data**, not a code path
+//! Runtime diagnostics directives, verbosity as **data**, not a code path
 //! (`docs/05` §3-4).
 //!
 //! A [`DiagnosticsDirective`] says "record this much detail for requests matching
 //! this target, at this sample rate, until this time." The [`DirectiveSet`]
 //! evaluator turns the active directives plus a request's attributes into the
-//! effective [`DiagLevel`] — the single decision the pipeline reads to decide how
+//! effective [`DiagLevel`], the single decision the pipeline reads to decide how
 //! much to record/export. It is the hot path, so evaluation is allocation-free
 //! and the default (no directive matches) is [`DiagLevel::Off`] at near-zero cost.
 //!
 //! This module is the **spine** both delivery channels feed: the signed
 //! `X-Debug-Directive` request header (surgical) and the control-plane store
-//! (fleet-wide). Targeting is the cost lever and the TTL the safety net — a
+//! (fleet-wide). Targeting is the cost lever and the TTL the safety net, a
 //! forgotten "on" expires instead of silently burning cost.
 
 use osproxy_core::{EndpointKind, IndexName, Instant, PartitionId, PrincipalId, RequestId};
@@ -21,7 +21,7 @@ pub enum DiagLevel {
     /// No recording/export beyond the always-on minimum. Near-zero cost.
     #[default]
     Off,
-    /// Shape-only spans (ids, names, sizes) — the standard causal trace.
+    /// Shape-only spans (ids, names, sizes), the standard causal trace.
     Shape,
     /// Shapes plus per-stage timing.
     ShapeTiming,
@@ -30,7 +30,7 @@ pub enum DiagLevel {
 }
 
 impl DiagLevel {
-    /// The level's stable wire name — the inverse of the publish/​header parser,
+    /// The level's stable wire name, the inverse of the publish/​header parser,
     /// so an introspected directive's `level` re-publishes verbatim.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -42,7 +42,7 @@ impl DiagLevel {
         }
     }
 
-    /// Parses a level's wire name back to the level — the inverse of
+    /// Parses a level's wire name back to the level, the inverse of
     /// [`DiagLevel::as_str`], so the publish/header/etcd vocabularies share one
     /// source of truth. `None` if the name is not a known level (fail-closed).
     #[must_use]
@@ -152,7 +152,7 @@ pub struct DiagnosticsDirective {
     /// Single-instance break-glass: capture into the local ring buffer.
     pub ring_buffer: bool,
     /// Fleet traffic capture: tee the matching exchanges to the configured
-    /// capture sink (e.g. Kafka). The runtime on/off switch for capture — off in
+    /// capture sink (e.g. Kafka). The runtime on/off switch for capture, off in
     /// the baseline, flipped on by publishing a directive, so capture is on demand
     /// and fleet-wide with no restart. Distinct from [`Self::ring_buffer`], which
     /// is the single-instance forensic tape.
@@ -205,7 +205,7 @@ pub struct DirectiveSet {
 }
 
 impl DirectiveSet {
-    /// An empty set — every request evaluates to [`DiagLevel::Off`].
+    /// An empty set, every request evaluates to [`DiagLevel::Off`].
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -279,7 +279,7 @@ impl DirectiveSet {
     /// directive, what it targets, at what verbosity and sample, whether it
     /// captures to the ring buffer, and whether it has expired at `now`.
     ///
-    /// This is the **read** side of the control-plane store — an agent fetches it
+    /// This is the **read** side of the control-plane store, an agent fetches it
     /// to see exactly what an instance is applying. The schema mirrors the publish
     /// body ([`crate::DirectiveSet`] decoding), except the relative `ttl_secs` is
     /// reported as a computed `expired` flag, since expiry is held as an absolute
@@ -318,7 +318,7 @@ impl DirectiveSet {
 }
 
 /// Verifies a signed `X-Debug-Directive` request header into the directive it
-/// authorizes — the **surgical, single-request** delivery channel (`docs/05`
+/// authorizes, the **surgical, single-request** delivery channel (`docs/05`
 /// §3). The signature means a client cannot self-enable verbose diagnostics
 /// without the operator's key (NFR-S3); the directive follows the request to
 /// whatever instance handles it. The concrete implementation (HMAC + the token

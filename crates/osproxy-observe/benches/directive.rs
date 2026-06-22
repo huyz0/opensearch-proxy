@@ -37,7 +37,7 @@ fn directive(
 }
 
 /// Evaluate a realistic small set (a sampled tenant directive plus a catch-all)
-/// against a request — the per-request cost of the directive spine.
+/// against a request, the per-request cost of the directive spine.
 #[divan::bench]
 fn evaluate_active_set() -> DiagLevel {
     let set = DirectiveSet::from_directives(vec![

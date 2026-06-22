@@ -1,9 +1,9 @@
-//! Point-in-time (PIT) cursor handlers (`docs/03` §6) — the search and create
+//! Point-in-time (PIT) cursor handlers (`docs/03` §6), the search and create
 //! paths, split from [`crate::endpoints`] to keep that module within budget.
 //!
 //! Unlike a scroll continue (a pure passthrough), a PIT search must **resolve the
 //! partition to apply the mandatory filter and strip the injected fields** even
-//! while pinning the PIT's cluster — pinning must never bypass tenant isolation
+//! while pinning the PIT's cluster, pinning must never bypass tenant isolation
 //! (NFR-S4).
 
 use osproxy_observe::{DispatchInfo, RequestTrace};
@@ -44,7 +44,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         let resolved = self.resolve_with_retry(ctx).await?;
         trace.record_resolve(resolve_info(&resolved));
         let (search_op, shape) = build_search_op(&resolved, ctx.body())?;
-        // The filtered body still carries the wrapped pit id — substitute the real
+        // The filtered body still carries the wrapped pit id, substitute the real
         // one, then route to the PIT's cluster (not the resolved target).
         let body = rewrite_pit_id(search_op.body, &real_pit);
         let op = CursorOp::new(cluster.clone(), ctx.method(), "/_search", body)
@@ -56,7 +56,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             upstream_status: outcome.status,
             pool_reuse: outcome.pool_reuse,
         });
-        // Strip the injected tenancy fields from every hit — same as any search.
+        // Strip the injected tenancy fields from every hit, same as any search.
         let stripped = shape_hits(
             &outcome.body,
             ctx.logical_index(),
@@ -115,7 +115,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
     /// A point-in-time close (`DELETE /_search/point_in_time`, body
     /// `{"pit_id":[<wrapped>, ...]}`): recover each id's pinned cluster from its
     /// signed envelope, group by cluster, and forward one close per cluster with
-    /// the real ids — never a blind cross-cluster delete. Fails closed if any
+    /// the real ids, never a blind cross-cluster delete. Fails closed if any
     /// envelope does not verify. The per-cluster `pits[]` results are merged so
     /// the client sees one OpenSearch-shaped close response.
     pub(crate) async fn pit_delete(

@@ -1,4 +1,4 @@
-//! Tests for the scalability curve — tail amplification and throughput scaling
+//! Tests for the scalability curve, tail amplification and throughput scaling
 //! are read from the sweep's ends, an empty sweep has no curve, and the judge
 //! fails closed.
 #![allow(clippy::unwrap_used)]
@@ -47,7 +47,7 @@ fn a_flat_tail_that_scales_passes() {
 fn a_blowing_up_tail_fails_nfr_p2() {
     let curve = ScalabilityCurve::new(vec![
         point(1, 1_000, 100.0),
-        point(64, 10_000, 800.0), // 10x tail growth — amplification
+        point(64, 10_000, 800.0), // 10x tail growth, amplification
     ])
     .unwrap();
     let v = judge_scalability(&curve, &ScalabilityThresholds::provisional());

@@ -4,7 +4,7 @@
 //! (`{"index":{"_id":"1"}}`) optionally followed by a *source* line (the
 //! document, for index/create/update; absent for delete). This module turns the
 //! raw bytes into a `Vec<BulkItem>` the engine demuxes by partition (`docs/04`
-//! §3). It is a pure parse — no tenancy meaning — held to the same coverage bar
+//! §3). It is a pure parse, no tenancy meaning, held to the same coverage bar
 //! as the other transforms.
 
 use osproxy_core::json;
@@ -63,7 +63,7 @@ pub struct BulkItem {
     /// live version, which does not exist at enqueue time (`docs/04` §9).
     pub concurrency_control: bool,
     /// The source document as **raw bytes** (for index/create/update; `None` for
-    /// delete). Kept verbatim — not parsed into a `Value` — so the per-item
+    /// delete). Kept verbatim, not parsed into a `Value`, so the per-item
     /// transform can scan and splice it without materializing a tree (ADR-014).
     pub source: Option<Vec<u8>>,
 }
@@ -99,7 +99,7 @@ pub fn parse_bulk(body: &[u8]) -> Result<Vec<BulkItem>, RewriteError> {
         let source = if action.has_source() {
             let source_line = lines.next().ok_or(RewriteError::MalformedBulkAction)?;
             // Validate the line is well-formed JSON (no alloc), but keep the raw
-            // bytes — the transform splices them later without a `Value` tree.
+            // bytes, the transform splices them later without a `Value` tree.
             json::validate(source_line).map_err(|_| RewriteError::InvalidJson)?;
             Some(source_line.to_vec())
         } else {
@@ -117,7 +117,7 @@ pub fn parse_bulk(body: &[u8]) -> Result<Vec<BulkItem>, RewriteError> {
     Ok(items)
 }
 
-/// Parses just the **action** of a bulk action line — the verb — so a streaming
+/// Parses just the **action** of a bulk action line, the verb, so a streaming
 /// reader can decide whether a source line follows ([`BulkAction::has_source`])
 /// before it frames the next line (ADR-014 stage 4). Validates the single-key
 /// `{verb: {…}}` shape like [`parse_bulk`].
@@ -131,7 +131,7 @@ pub fn parse_bulk_action(line: &[u8]) -> Result<BulkAction, RewriteError> {
 }
 
 /// Parses one bulk operation from its already-framed action line and (for
-/// source-bearing verbs) source line — the per-op entry point for the streaming
+/// source-bearing verbs) source line, the per-op entry point for the streaming
 /// demux (ADR-014 stage 4). The source line is kept as raw bytes, validated but
 /// not materialized, exactly as [`parse_bulk`] does.
 ///

@@ -1,6 +1,6 @@
 //! The migration write gate on the `_bulk` path (`docs/06` §2, INV-M1): in a
 //! mixed-partition bulk, items for a partition in cutover are held with a
-//! positioned, retryable `409` while items for a settled partition commit — the
+//! positioned, retryable `409` while items for a settled partition commit, the
 //! gate is per item, not per request, so one migrating partition does not stall
 //! the rest of the batch.
 
@@ -134,7 +134,7 @@ async fn bulk_gates_per_item_holding_only_the_migrating_partition() {
     assert_eq!(items[3]["index"]["status"], 201);
     assert_eq!(items[3]["index"]["_id"], "4");
 
-    // Only the admitted (acme) writes reached the sink — nothing for globex
+    // Only the admitted (acme) writes reached the sink, nothing for globex
     // during its cutover (INV-M1).
     let recorded: usize = pipeline
         .sink()

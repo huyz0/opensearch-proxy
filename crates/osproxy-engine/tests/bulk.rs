@@ -139,7 +139,7 @@ fn target(index: &str) -> Target {
 #[tokio::test]
 async fn streamed_bulk_matches_the_buffered_path() {
     // The streaming demux must produce the identical re-interleaved response as the
-    // buffered path for the same mixed-partition batch — same items, same order.
+    // buffered path for the same mixed-partition batch, same items, same order.
     let body = concat!(
         "{\"index\":{\"_id\":\"1\"}}\n{\"tenant_id\":\"acme\",\"id\":1}\n",
         "{\"index\":{\"_id\":\"2\"}}\n{\"tenant_id\":\"globex\",\"id\":2}\n",
@@ -159,7 +159,7 @@ async fn streamed_bulk_matches_the_buffered_path() {
 #[tokio::test]
 async fn a_target_flushes_mid_batch_at_the_byte_threshold() {
     // Five ~1 MiB docs to one target total > the 4 MiB byte-flush threshold but far
-    // under the 256 op-count threshold — so the target is flushed mid-batch by
+    // under the 256 op-count threshold, so the target is flushed mid-batch by
     // bytes, bounding the transformed working set for large documents. Each flush
     // is one recorded write, so a mid-batch flush shows as more than one.
     use std::fmt::Write as _;
@@ -185,7 +185,7 @@ async fn a_target_flushes_mid_batch_at_the_byte_threshold() {
 #[tokio::test]
 async fn streamed_bulk_positions_a_per_item_failure_in_place() {
     // An unresolvable op (no tenant_id, no header) fails positionally; the others
-    // still succeed — identical semantics to the buffered path, over a stream.
+    // still succeed, identical semantics to the buffered path, over a stream.
     let body = concat!(
         "{\"index\":{\"_id\":\"1\"}}\n{\"tenant_id\":\"acme\",\"id\":1}\n",
         "{\"index\":{\"_id\":\"2\"}}\n{\"no_tenant\":true}\n",
@@ -291,7 +291,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
 
     /// Order preservation: for any interleaving of acme/globex index ops, the
-    /// response `items[]` are in the input order, each echoing its own id — the
+    /// response `items[]` are in the input order, each echoing its own id, the
     /// re-interleave must not reorder across the per-target demux (docs/09).
     #[test]
     fn bulk_preserves_item_order(ops in prop::collection::vec(
@@ -405,7 +405,7 @@ async fn large_bulk_flushes_mid_stream_without_dropping_or_reordering() {
     }
 
     // A doc from the first (mid-stream) flush and one from the final flush are
-    // both stored — nothing was dropped at the boundary.
+    // both stored, nothing was dropped at the boundary.
     for id in ["0", "599"] {
         let hit = p
             .sink()

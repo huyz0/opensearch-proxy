@@ -219,7 +219,7 @@ impl KrafkaProducer {
 }
 
 impl AckProducer for KrafkaProducer {
-    /// Sends and awaits the broker acknowledgement — the path a durable spill
+    /// Sends and awaits the broker acknowledgement, the path a durable spill
     /// buffer drains onto, since it must know delivery succeeded before dropping
     /// the record from disk.
     async fn send_acked(

@@ -2,7 +2,7 @@
 //! `DirectiveStore::load()` (run once per request to evaluate directives) and
 //! `ExplainStore::record()` (run once per request to retain the explain doc).
 //!
-//! It measures aggregate throughput (ops/sec) at rising thread counts — so a
+//! It measures aggregate throughput (ops/sec) at rising thread counts, so a
 //! lock that serializes cores shows up as throughput that *stops scaling*, while a
 //! lock-free / cheaper path keeps climbing. Reported, never asserted (host-bound):
 //! run with `--ignored --nocapture`. The same harness runs against the mutex
@@ -20,7 +20,7 @@ use osproxy_observe::{
     RequestTrace, ResolveInfo,
 };
 
-/// Operations each thread performs per measurement — large enough that thread
+/// Operations each thread performs per measurement, large enough that thread
 /// spawn/join cost is negligible against the timed work.
 const OPS_PER_THREAD: u64 = 200_000;
 

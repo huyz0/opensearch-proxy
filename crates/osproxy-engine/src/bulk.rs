@@ -4,7 +4,7 @@
 //! different targets**. We resolve each operation's partition (caching the
 //! placement per partition for the request), demux the operations by target,
 //! dispatch each target's sub-batch, then **re-interleave** the per-item results
-//! in the body's original order — so the client sees a normal OpenSearch bulk
+//! in the body's original order, so the client sees a normal OpenSearch bulk
 //! response with positional per-item status. A per-item failure (e.g. an
 //! unresolved partition) is positioned in place; the bulk as a whole still
 //! returns 200 with `errors: true`. The per-item preparation lives in
@@ -14,7 +14,7 @@
 //! reaches [`FLUSH_THRESHOLD`], so the transformed working set stays a bounded
 //! multiple of the threshold rather than growing to the whole body.
 //
-// JUSTIFY(file-length): one cohesive bulk module — the sync (buffered), async
+// JUSTIFY(file-length): one cohesive bulk module, the sync (buffered), async
 // fan-out, and streamed (ADR-014 stage 4) demuxes all share the same
 // demux/flush/gate/re-interleave machinery and per-item response shaping.
 // Splitting a variant into its own file would scatter that shared machinery or
@@ -46,7 +46,7 @@ use crate::pipeline::PipelineResponse;
 /// flushed mid-stream, bounding the transformed working set held in memory (NFR-P7).
 const FLUSH_THRESHOLD: usize = 256;
 
-/// The largest a single target's buffered op **bytes** grow before a flush —
+/// The largest a single target's buffered op **bytes** grow before a flush,
 /// bounds the working set by size as well as count, so a handful of very large
 /// documents flush early instead of holding up to [`FLUSH_THRESHOLD`] of them.
 const BYTE_FLUSH_THRESHOLD: usize = 4 * 1024 * 1024;
@@ -113,13 +113,13 @@ pub(crate) async fn ingest_bulk<R: Router, S: Sink>(
 }
 
 /// The largest a single bulk line (one action or one source) may grow before the
-/// streaming reader rejects the request — bounds the per-op buffer so one giant
+/// streaming reader rejects the request, bounds the per-op buffer so one giant
 /// line cannot exhaust memory even though the batch as a whole is streamed.
 const MAX_LINE_BYTES: usize = 64 * 1024 * 1024;
 
 /// Streams a `_bulk` request from the inbound body (ADR-014 stage 4): the NDJSON
 /// is framed incrementally and each op is demuxed/dispatched as it is read, so the
-/// **whole batch is never held** — only the bounded per-target flush buffers and
+/// **whole batch is never held**, only the bounded per-target flush buffers and
 /// the response lines. Same re-interleaved response and per-item semantics as
 /// [`ingest_bulk`]; only the source differs (a stream, not a buffered body).
 ///
@@ -127,7 +127,7 @@ const MAX_LINE_BYTES: usize = 64 * 1024 * 1024;
 ///
 /// Returns [`RequestError`] if a line is unparseable or the body stream fails.
 /// Unlike the buffered path (which parses the whole body before dispatching), a
-/// mid-stream parse error surfaces after earlier ops were already applied — the
+/// mid-stream parse error surfaces after earlier ops were already applied, the
 /// honest consequence of not buffering (mirrors a streaming bulk upstream).
 pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
     router: &R,
@@ -149,7 +149,7 @@ pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
         lines.push(Value::Null);
         match prepare(router, ctx, &mut cache, item, retry).await {
             // Flush a target mid-stream once it reaches the count or byte threshold,
-            // so the transformed working set stays bounded (NFR-P7) — the same
+            // so the transformed working set stays bounded (NFR-P7), the same
             // backpressure as the buffered path, here over a live stream.
             Ok(p) => {
                 buffer_and_flush(router, sink, &mut buffers, &mut sizes, &mut lines, ord, p).await;
@@ -175,7 +175,7 @@ pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
 ///
 /// The buffer is a [`BytesMut`]: consumed bytes are released with an O(1) cursor
 /// advance (`split_to`), and the newline search resumes from `scan` rather than
-/// rescanning, so framing a batch is linear in its size — never quadratic, even
+/// rescanning, so framing a batch is linear in its size, never quadratic, even
 /// when one frame carries many lines.
 struct NdjsonReader {
     body: ByteBody,
@@ -283,7 +283,7 @@ pub(crate) async fn ingest_bulk_async<R: Router>(
 ) -> Result<PipelineResponse, RequestError> {
     let index = ctx.logical_index();
     // A query-level unsupported op (optimistic concurrency) refuses the whole
-    // bulk; a missing queue refuses it too — never accepted-and-dropped.
+    // bulk; a missing queue refuses it too, never accepted-and-dropped.
     if let Some(reason) = unsupported_async(ctx) {
         return Ok(unsupported_response(reason, index));
     }
@@ -300,7 +300,7 @@ pub(crate) async fn ingest_bulk_async<R: Router>(
         // A scripted/partial `_update` has no single current document to merge
         // against under fan-out, and an optimistic-concurrency precondition
         // (`if_seq_no`/`version`/…) is evaluated against the live version that
-        // does not exist at enqueue time — reject either in place rather than
+        // does not exist at enqueue time, reject either in place rather than
         // silently dropping the precondition.
         if matches!(item.action, BulkAction::Update) || item.concurrency_control {
             lines[ordinal] = json!({ item.action.keyword(): {
@@ -362,7 +362,7 @@ fn enqueue_failed_line(p: &Prepared) -> Value {
 }
 
 /// Buffers a prepared op into its target's demux buffer and flushes that target
-/// when it reaches the op-count *or* byte threshold — so the transformed working
+/// when it reaches the op-count *or* byte threshold, so the transformed working
 /// set stays bounded by size as well as count (NFR-P7). Shared by the buffered and
 /// streamed bulk paths.
 async fn buffer_and_flush<R: Router, S: Sink>(
@@ -388,7 +388,7 @@ async fn buffer_and_flush<R: Router, S: Sink>(
     }
 }
 
-/// The byte length of an op's document body (0 for a delete) — what the flush
+/// The byte length of an op's document body (0 for a delete), what the flush
 /// byte-budget accounts for.
 fn op_body_len(op: &WriteOp) -> usize {
     match &op.doc {
@@ -443,7 +443,7 @@ async fn flush_remaining<R: Router, S: Sink>(
 
 /// Splits a target's entries by the migration write gate (`docs/06` §2),
 /// re-checked here at dispatch: `(admitted, rejected)`. A rejected item resolved
-/// against a placement that has since advanced or entered cutover — it is held,
+/// against a placement that has since advanced or entered cutover, it is held,
 /// never dispatched.
 async fn gate<R: Router>(router: &R, entries: Entries) -> (Entries, Entries) {
     let mut admitted = Entries::new();

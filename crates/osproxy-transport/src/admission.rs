@@ -3,9 +3,9 @@
 //! Two cooperating bounds keep the proxy from being driven to OOM by large or
 //! numerous request bodies:
 //!
-//! - a **per-request cap** ([`IngressLimits::max_body_bytes`]) — a single body
+//! - a **per-request cap** ([`IngressLimits::max_body_bytes`]), a single body
 //!   larger than this is rejected with `413 Payload Too Large`; and
-//! - a **global in-flight ceiling** ([`IngressLimits::inflight_ceiling`]) — the
+//! - a **global in-flight ceiling** ([`IngressLimits::inflight_ceiling`]), the
 //!   sum of the bodies currently buffered across all connections. A request that
 //!   would push the total over the ceiling is shed with `429 Too Many Requests`
 //!   and retry guidance, rather than admitted into memory.
@@ -13,7 +13,7 @@
 //! The ceiling is enforced by a single atomic counter: a request reserves its
 //! (content-length-bounded) size up front via [`Admission::try_reserve`] and the
 //! returned [`Reservation`] releases it on drop, so the budget is returned the
-//! instant the response is sent — no queue, no lock.
+//! instant the response is sent, no queue, no lock.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -31,7 +31,7 @@ pub struct IngressLimits {
 
 impl Default for IngressLimits {
     fn default() -> Self {
-        // 8 MiB per body, 256 MiB in flight — bulk-sized, bounded, never OOM.
+        // 8 MiB per body, 256 MiB in flight, bulk-sized, bounded, never OOM.
         Self {
             max_body_bytes: 8 * 1024 * 1024,
             inflight_ceiling: 256 * 1024 * 1024,

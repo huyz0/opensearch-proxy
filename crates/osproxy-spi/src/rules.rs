@@ -3,7 +3,7 @@
 //! These types are pure data: how to find the partition id, how to build the
 //! document `_id`, which fields to inject, and which to treat as sensitive. The
 //! [`crate::TenancySpi`] returns them; `osproxy-tenancy` interprets them. The
-//! interpretation is symmetric — a field injected on ingest is stripped on read
+//! interpretation is symmetric, a field injected on ingest is stripped on read
 //! (`docs/02` §2, `docs/03`).
 //!
 //! [`TenancySpi`]: crate::TenancySpi
@@ -14,7 +14,7 @@ use serde_json::Value as JsonValue;
 /// A dotted path into a JSON document, e.g. `tenant_id` or `meta.tenant`.
 ///
 /// A deliberately small subset of JSONPath: a sequence of object keys. It does
-/// not support array indexing or wildcards in M1 — the partition key is a
+/// not support array indexing or wildcards in M1, the partition key is a
 /// scalar field on the document root or a nested object. The supported grammar
 /// is version-tracked in `docs/specs/opensearch-endpoints.md`.
 ///
@@ -200,7 +200,7 @@ pub enum InjectedValue {
 /// Drives value-suppression so observability never leaks tenant values (NFR-S2).
 /// The model is **deny-by-default (opt-out)**: every field is treated as
 /// sensitive unless explicitly allow-listed as safe. A field added to your
-/// documents tomorrow is protected automatically — you opt specific, known-safe
+/// documents tomorrow is protected automatically, you opt specific, known-safe
 /// fields *out* of redaction rather than remembering to opt every risky one in.
 ///
 /// Use [`SensitivitySpec::allowing`] to name the shape-only, non-tenant fields

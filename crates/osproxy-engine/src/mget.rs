@@ -4,7 +4,7 @@
 //! indices → different targets**. The partition is the caller's (one principal →
 //! one partition), so we resolve it once, then per requested document resolve its
 //! placement (cached per logical index), map the logical id to the physical id,
-//! and issue the `get` — **bounded-concurrently**, like the bulk dispatch. The
+//! and issue the `get`, **bounded-concurrently**, like the bulk dispatch. The
 //! per-document results are re-interleaved into `docs[]` in the body's original
 //! order and each shaped back into the client's logical view (injected tenancy
 //! fields stripped, physical id mapped back). A per-document failure is

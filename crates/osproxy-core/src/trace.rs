@@ -1,9 +1,9 @@
-//! W3C Trace Context propagation — the identifiers the proxy continues from an
+//! W3C Trace Context propagation, the identifiers the proxy continues from an
 //! incoming request and forwards to every downstream call so the upstream's
 //! spans join the same distributed trace (`docs/05` §2, `OTel`).
 //!
 //! **Shape-only by construction.** A [`TraceContext`] holds only opaque trace and
-//! span ids — correlation identity, never tenant values, bodies, or secrets. The
+//! span ids, correlation identity, never tenant values, bodies, or secrets. The
 //! ids are derived from the request id (not from request *data*), so propagation
 //! cannot become a value-leak channel.
 
@@ -31,7 +31,7 @@ const TRACEPARENT_LEN: usize = 2 + 1 + 32 + 1 + 16 + 1 + 2;
 pub struct TraceContext {
     trace_id: [u8; 16],
     span_id: [u8; 8],
-    /// The caller's span id, if this context continues an incoming trace — the
+    /// The caller's span id, if this context continues an incoming trace, the
     /// parent the proxy's own span nests under. `None` for a minted root.
     parent_span_id: Option<[u8; 8]>,
     /// The incoming W3C `tracestate` (vendor key-value list), forwarded verbatim
@@ -51,7 +51,7 @@ impl TraceContext {
     /// from `request`, so the downstream call chains under the proxy's span.
     ///
     /// `incoming_tracestate` (the W3C vendor list) is forwarded verbatim, but only
-    /// when continuing a trace and only when within spec bounds — a `tracestate`
+    /// when continuing a trace and only when within spec bounds, a `tracestate`
     /// without a valid `traceparent` is meaningless and is dropped.
     #[must_use]
     pub fn propagate(
@@ -84,7 +84,7 @@ impl TraceContext {
 
     /// Parses a W3C `traceparent` value (`00-<32hex>-<16hex>-<2hex>`). Returns
     /// `None` if it is malformed, an unsupported version, or has an all-zero
-    /// trace/span id (which the spec forbids) — the caller then mints a root.
+    /// trace/span id (which the spec forbids), the caller then mints a root.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         if value.len() != TRACEPARENT_LEN {
@@ -145,7 +145,7 @@ impl TraceContext {
         out
     }
 
-    /// The 16-hex span id of the proxy's hop — the id presented as the parent to
+    /// The 16-hex span id of the proxy's hop, the id presented as the parent to
     /// downstream calls, and therefore the id of the span the proxy must emit so
     /// the upstream's spans nest under it.
     #[must_use]
@@ -155,8 +155,8 @@ impl TraceContext {
         out
     }
 
-    /// The 16-hex span id of the **caller's** span — the parent the proxy's own
-    /// span nests under — or `None` when this context is a freshly minted root
+    /// The 16-hex span id of the **caller's** span, the parent the proxy's own
+    /// span nests under, or `None` when this context is a freshly minted root
     /// (no incoming `traceparent`).
     #[must_use]
     pub fn parent_span_id_hex(&self) -> Option<String> {
@@ -168,7 +168,7 @@ impl TraceContext {
     }
 
     /// The W3C `tracestate` value to forward to the upstream, if the request
-    /// carried a valid one — passed through verbatim (the proxy adds no entry).
+    /// carried a valid one, passed through verbatim (the proxy adds no entry).
     #[must_use]
     pub fn to_tracestate(&self) -> Option<&str> {
         self.tracestate.as_deref()
@@ -183,7 +183,7 @@ impl TraceContext {
 
 /// Accepts an incoming `tracestate` for verbatim forwarding only if it is
 /// non-empty and within the W3C size cap; otherwise drops it (returns `None`).
-/// The proxy is not a tracing vendor, so it never edits the value — it either
+/// The proxy is not a tracing vendor, so it never edits the value, it either
 /// forwards exactly what it received or nothing.
 fn sanitize_tracestate(incoming: Option<&str>) -> Option<String> {
     incoming
@@ -213,7 +213,7 @@ fn fnv1a(seed: u64, bytes: &[u8]) -> u64 {
 /// A random per-process seed mixed into every derived id, so ids stay **unique
 /// across instances and restarts** even though the request id they derive from is
 /// only process-local (and W3C wants span ids effectively random). `RandomState`
-/// is seeded from the OS at process start — randomness without pulling an RNG
+/// is seeded from the OS at process start, randomness without pulling an RNG
 /// crate into `core`. It is constant for the life of the process, so derivation
 /// stays deterministic *within* a process (the same request id yields the same
 /// span on every call, e.g. every op of one bulk request shares the proxy span).

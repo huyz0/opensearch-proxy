@@ -37,7 +37,7 @@ fn run_split(body: &[u8], cut: usize) -> Vec<u8> {
 /// Asserts that, for **every** single split point, the streamed output is
 /// semantically equal to the buffered `shape_hits` oracle. Semantic (not byte)
 /// equality is the right oracle: the buffered path re-serializes the `hits`
-/// object and sorts top-level keys, while streaming forwards siblings verbatim —
+/// object and sorts top-level keys, while streaming forwards siblings verbatim,
 /// equal JSON, different bytes. Equality to the audited oracle guarantees the
 /// strip happened identically, so no injected field can leak.
 fn assert_matches_oracle_for_all_splits(body: &[u8]) {
@@ -103,7 +103,7 @@ fn root_hits_directly_an_array_passes_through() {
     // A degenerate root `hits` whose value is *directly* an array (not the real
     // `hits.hits` nesting OpenSearch emits) must NOT be shaped: the buffered oracle
     // only shapes the nested `hits.hits`, so a root-level array is forwarded
-    // verbatim — `_tenant` and all. The scanner must agree (the array is entered
+    // verbatim, `_tenant` and all. The scanner must agree (the array is entered
     // only at the inner level), or the two paths would diverge on this input.
     assert_matches_oracle_for_all_splits(
         br#"{"hits":[{"_index":"shared","_id":"acme:7","_source":{"_tenant":"acme"}}]}"#,
@@ -124,7 +124,7 @@ fn source_string_containing_structural_bytes() {
 #[test]
 fn sibling_object_with_its_own_hits_array_is_not_matched() {
     // A non-`hits` sibling that itself contains a `hits` array must be skipped
-    // verbatim — only the top-level `hits.hits` is the target.
+    // verbatim, only the top-level `hits.hits` is the target.
     let body = br#"{
         "decoy": { "hits": [ { "_source": { "_tenant": "acme" } } ] },
         "hits": { "hits": [ { "_index": "shared", "_id": "acme:7",
@@ -188,7 +188,7 @@ mod fuzz {
     use proptest::prelude::*;
     use serde_json::{json, Map};
 
-    /// A bounded arbitrary JSON value — strings include `"`, `\`, `]`, `}` and
+    /// A bounded arbitrary JSON value, strings include `"`, `\`, `]`, `}` and
     /// other structural bytes, so the scanner's string/escape handling is fuzzed.
     fn json_value() -> impl Strategy<Value = Value> {
         let leaf = prop_oneof![
@@ -231,9 +231,9 @@ mod fuzz {
 
     /// The value placed at the top-level `hits` key. Weighted toward the real
     /// OpenSearch shape (`{total, hits: [..]}`), but deliberately also generates
-    /// the degenerate shapes the buffered oracle handles by *not* shaping — a root
+    /// the degenerate shapes the buffered oracle handles by *not* shaping, a root
     /// `hits` that is directly an array, an inner `hits` that is not an array, and
-    /// an arbitrary scalar/value — so the streamed↔buffered equality is fuzzed over
+    /// an arbitrary scalar/value, so the streamed↔buffered equality is fuzzed over
     /// them too (the regression that motivated `(2, b'[')` lived in exactly this
     /// class and was previously only a hand-written case).
     fn hits_field() -> impl Strategy<Value = Value> {
@@ -241,7 +241,7 @@ mod fuzz {
             // The real shape: `hits.hits` is the array the proxy shapes.
             8 => prop::collection::vec(hit(), 0..5)
                 .prop_map(|hits: Vec<Value>| json!({ "total": { "value": hits.len() }, "hits": hits })),
-            // A root `hits` that is *directly* an array — no `hits.hits` to shape,
+            // A root `hits` that is *directly* an array, no `hits.hits` to shape,
             // so it must pass through verbatim (`_tenant` and all).
             1 => prop::collection::vec(hit(), 0..5).prop_map(Value::Array),
             // An object whose inner `hits` is not an array (object/scalar): nothing
@@ -291,7 +291,7 @@ mod fuzz {
 
         /// The keystone isolation guarantee: for any envelope and any chunk split,
         /// the streamed transform is semantically identical to the audited buffered
-        /// `shape_hits` oracle — so no framing bug can leak an injected field or
+        /// `shape_hits` oracle, so no framing bug can leak an injected field or
         /// otherwise diverge from the proven path.
         #[test]
         fn streamed_matches_buffered_oracle(

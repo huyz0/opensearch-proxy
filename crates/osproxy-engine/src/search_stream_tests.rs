@@ -1,6 +1,6 @@
 // Tests for the streaming-search body glue ([`super::shape_hits_stream`] and the
 // `unfold`/`StreamBody` frame pump). The pure transform is covered exhaustively
-// by `search_scan_tests`; these pin the *streaming* layer — multi-frame
+// by `search_scan_tests`; these pin the *streaming* layer, multi-frame
 // reassembly across arbitrary frame boundaries, the empty-output-then-continue
 // case, the end-of-stream tail, and upstream error propagation.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -33,7 +33,7 @@ const BODY: &[u8] = br#"{"took":5,"hits":{"total":{"value":2},"hits":[
     {"_index":"shared","_id":"acme:8","_routing":"acme","_source":{"_tenant":"acme","msg":"yo"}}
 ]},"aggregations":{"by_day":{"buckets":[{"key":1,"doc_count":9}]}}}"#;
 
-/// Builds a [`ByteBody`] that yields `chunks` as separate data frames — the
+/// Builds a [`ByteBody`] that yields `chunks` as separate data frames, the
 /// realistic multi-frame upstream the engine glue must reassemble.
 fn body_from_chunks(chunks: Vec<Vec<u8>>) -> ByteBody {
     let frames = chunks
@@ -61,7 +61,7 @@ async fn drive(body: ByteBody) -> Result<Vec<u8>, BodyError> {
 #[tokio::test]
 async fn reassembles_across_arbitrary_frame_boundaries() {
     // The buffered oracle is the source of truth; the streamed output must match it
-    // semantically no matter how the upstream chunks the body — including
+    // semantically no matter how the upstream chunks the body, including
     // single-byte frames, which exercise every mid-token boundary and force many
     // empty-output-then-continue iterations of the frame pump.
     let oracle = shape_hits(BODY, "orders", "acme", &make_shape()).expect("oracle ok");
@@ -98,7 +98,7 @@ async fn single_byte_frames_emit_each_hit_only_once() {
 #[tokio::test]
 async fn empty_upstream_frames_are_skipped() {
     // A zero-length data frame (legal from hyper) must not terminate the stream or
-    // corrupt output — the pump loops to the next frame.
+    // corrupt output, the pump loops to the next frame.
     let chunks = vec![
         BODY[..20].to_vec(),
         Vec::new(),
@@ -116,7 +116,7 @@ async fn empty_upstream_frames_are_skipped() {
 #[tokio::test]
 async fn upstream_error_propagates_as_a_stream_error() {
     // An upstream error frame mid-body must surface as a body error (hyper then
-    // resets the response) rather than be silently swallowed or panicked on — and
+    // resets the response) rather than be silently swallowed or panicked on, and
     // it must not yield truncated-but-OK bytes.
     let frames: Vec<Result<Frame<Bytes>, BodyError>> = vec![
         Ok(Frame::data(Bytes::from(BODY[..30].to_vec()))),

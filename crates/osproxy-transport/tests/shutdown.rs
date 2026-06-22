@@ -1,6 +1,6 @@
 //! Graceful shutdown (NFR-R5): when the shutdown signal fires, a request already
 //! in flight runs to completion (the connection is drained), and the serve future
-//! then returns — it does not abandon the in-flight request.
+//! then returns, it does not abandon the in-flight request.
 
 #![allow(clippy::unwrap_used)]
 
@@ -17,7 +17,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{oneshot, Notify};
 
 /// A handler that parks each request until released, signalling when it has
-/// arrived — so the test can hold a request *in flight* across the shutdown.
+/// arrived, so the test can hold a request *in flight* across the shutdown.
 struct GatedHandler {
     arrived: Arc<Notify>,
     release: Arc<Notify>,

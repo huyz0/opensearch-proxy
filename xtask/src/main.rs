@@ -77,7 +77,7 @@ fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'static str]> {
         "osproxy-observe" => &["osproxy-core"],
         "osproxy-otlp" => &["osproxy-observe"],
         // Reference distributed DirectiveStore: implements the observe seam over
-        // etcd. A leaf adapter, like otlp — nothing depends upward on it.
+        // etcd. A leaf adapter, like otlp, nothing depends upward on it.
         "osproxy-etcd" => &["osproxy-core", "osproxy-observe"],
         "osproxy-config" => &["osproxy-core"],
         // The traffic-capture seam (a low leaf) and the queue writer that
@@ -152,7 +152,7 @@ fn arch() -> Result<(), String> {
             .ok_or_else(|| format!("no [package] name in {}", manifest.display()))?;
         let Some(allowed) = allowed_internal_deps(&name) else {
             violations.push(format!(
-                "  unknown crate `{name}` — add it to allowed_internal_deps"
+                "  unknown crate `{name}`; add it to allowed_internal_deps"
             ));
             continue;
         };
@@ -216,7 +216,7 @@ fn bench() -> Result<(), String> {
     cargo(&["bench", "--workspace"], &[])
 }
 
-/// Runs the wall-clock micro-benchmarks (divan) — a local calibration tool that
+/// Runs the wall-clock micro-benchmarks (divan), a local calibration tool that
 /// needs no special tooling and runs on any dev box, unlike `bench`. *Not* a CI
 /// gate: wall-clock is host-specific and noisy, so it must never fail a build;
 /// the deterministic gates stay dhat (alloc) and iai-callgrind (instructions).
@@ -244,9 +244,7 @@ fn check_fips() -> Result<(), String> {
     // avoid building the (heavy) native AWS-LC-FIPS twice. Local `xtask ci` leaves
     // it unset and runs the fips gate when the toolchain is present.
     if std::env::var_os("OSPROXY_SKIP_FIPS").is_some() {
-        println!(
-            "xtask: check-fips SKIPPED — OSPROXY_SKIP_FIPS set (run in the dedicated CI job)."
-        );
+        println!("xtask: check-fips SKIPPED, OSPROXY_SKIP_FIPS set (run in the dedicated CI job).");
         return Ok(());
     }
     let missing: Vec<&str> = ["cmake", "cc", "go"]
@@ -255,7 +253,7 @@ fn check_fips() -> Result<(), String> {
         .collect();
     if !missing.is_empty() {
         println!(
-            "xtask: check-fips SKIPPED — missing FIPS build toolchain: {}. \
+            "xtask: check-fips SKIPPED, missing FIPS build toolchain: {}. \
              Install it (see README) or run this on a CI runner that has it.",
             missing.join(", ")
         );
@@ -426,7 +424,7 @@ fn skills() -> Result<(), String> {
 }
 
 /// Background-task discipline (`docs/08`): a library crate must not call bare
-/// `tokio::spawn` — it would panic (or silently no-op) when invoked outside a
+/// `tokio::spawn`, it would panic (or silently no-op) when invoked outside a
 /// running runtime, which a library cannot assume. Background work in a library
 /// captures a `tokio::runtime::Handle` and spawns on it (as `osproxy-otlp` does),
 /// so the absence of a runtime is handled, not assumed.

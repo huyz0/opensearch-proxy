@@ -1,7 +1,7 @@
 //! Property tests for the no-materialization body path (ADR-014): the byte-level
 //! splice/extract primitives must agree with the `Value`-tree primitives they
 //! replace, with `serde_json` as the oracle. These are the isolation-critical
-//! guarantees — a spliced body must parse back to exactly what the tree path
+//! guarantees, a spliced body must parse back to exactly what the tree path
 //! would have produced, and a spoofed reserved field must be rejected identically
 //! whether the client sends it plainly or escaped.
 
@@ -52,7 +52,7 @@ fn injected_fields() -> impl Strategy<Value = Vec<(FieldName, Value)>> {
 
 proptest! {
     /// The byte splice produces the same document the `Value` inject would, for
-    /// any client object and field set — order-independent (compared as parsed
+    /// any client object and field set, order-independent (compared as parsed
     /// `Value`s).
     #[test]
     fn inject_bytes_matches_value_inject(
@@ -85,7 +85,7 @@ proptest! {
     }
 
     /// A client field that collides with an injected name is rejected by the byte
-    /// path exactly when the tree path rejects it — including when the client
+    /// path exactly when the tree path rejects it, including when the client
     /// escapes the key to try to smuggle it past the scan.
     #[test]
     fn spoofed_reserved_field_is_rejected_like_the_tree(

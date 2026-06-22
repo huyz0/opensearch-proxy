@@ -3,7 +3,7 @@
 //! module's `KafkaWriteQueue`/`envelope`/`OpEnvelope` via `use super::*`.
 //!
 //! `KafkaWriteQueue` produces an op envelope to a containerized Apache Kafka, and
-//! a krafka consumer reads it back and decodes it — proving the
+//! a krafka consumer reads it back and decodes it, proving the
 //! produce→broker→consume→decode contract the in-process tests cannot. Needs
 //! Docker + the `fanout` feature, so it is `#[ignore]`'d. Run with:
 //!   cargo test -p osproxy-server --features fanout --bin osproxy -- --ignored
@@ -83,8 +83,8 @@ async fn op_envelope_round_trips_through_a_real_broker() {
 /// A bulk request and an expanded `_delete_by_query` both enqueue *multiple*
 /// envelopes for one logical partition: bulk with a per-item `{batch}:{n}` op id,
 /// delete-by-query with a `Delete` op (no body) per match. This proves that shape
-/// survives a real broker — same-key ordering preserved, the bodyless delete
-/// envelope decodes — which the single-op test above does not exercise.
+/// survives a real broker, same-key ordering preserved, the bodyless delete
+/// envelope decodes, which the single-op test above does not exercise.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs a Docker daemon"]
 async fn multi_op_partition_round_trips_in_order() {
@@ -103,7 +103,7 @@ async fn multi_op_partition_round_trips_in_order() {
     let queue = KafkaWriteQueue::new(Arc::new(producer), topic.to_owned(), BodyEncoding::Cbor);
 
     // An index item (op_id `batch:0`) then a delete item (op_id `batch:1`), as
-    // the bulk demux / DBQ expansion enqueue them — each its own single-op write,
+    // the bulk demux / DBQ expansion enqueue them, each its own single-op write,
     // all keyed by the same partition so they stay ordered within a Kafka partition.
     let index = single(
         "batch:0",
@@ -195,7 +195,7 @@ async fn read_first(brokers: &[String], topic: &str) -> krafka::consumer::Consum
 }
 
 /// Reads the first `n` records on partition 0 of `topic`, in offset order
-/// (manual assign + seek, no consumer group — see [`read_first`]).
+/// (manual assign + seek, no consumer group, see [`read_first`]).
 async fn read_n(
     brokers: &[String],
     topic: &str,

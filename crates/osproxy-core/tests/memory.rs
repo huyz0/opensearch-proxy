@@ -65,7 +65,7 @@ fn core_allocation_budgets() {
     assert_eq!(id.as_str(), "tenant-42");
 
     // cursor::wrap frames the token into one growing String plus the two hex
-    // scratch buffers and the signer's tag Vec — a fixed, low budget that runs on
+    // scratch buffers and the signer's tag Vec, a fixed, low budget that runs on
     // every scroll/PIT response. Pin it so a future framing change can't quietly
     // add per-request allocations to the cursor path.
     let cluster = ClusterId::from("eu-west-1");
@@ -82,7 +82,7 @@ fn core_allocation_budgets() {
     });
     assert_eq!(n, CURSOR_UNWRAP_ALLOCS, "cursor::unwrap allocation budget");
 
-    // TraceContext::parse decodes a traceparent into fixed-size arrays — no heap.
+    // TraceContext::parse decodes a traceparent into fixed-size arrays, no heap.
     let n = allocs(|| {
         let _ = std::hint::black_box(TraceContext::parse(
             "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",

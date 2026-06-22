@@ -4,7 +4,7 @@
 //! tenancy router and the original request body, applies the body transform
 //! (inject tenancy fields, construct the `_id`, set `_routing`), and produces
 //! the epoch-stamped batch the [`Sink`](osproxy_sink::Sink) will deliver
-//! (`docs/04`). Pure and synchronous — no network, fully testable.
+//! (`docs/04`). Pure and synchronous, no network, fully testable.
 
 use osproxy_core::FieldName;
 use osproxy_rewrite::{construct_id_bytes, inject_fields_bytes, validate_json};
@@ -17,7 +17,7 @@ use crate::error::RequestError;
 
 /// Builds the single-document write batch for a resolved ingest request.
 ///
-/// Applies the body transform by **scanning and splicing the raw bytes** — never
+/// Applies the body transform by **scanning and splicing the raw bytes**, never
 /// parsing the body into a `Value` tree or re-serializing it (ADR-014): an
 /// injected field is written right after the opening `{`, an id is read straight
 /// from the bytes, and an untransformed body is forwarded verbatim.

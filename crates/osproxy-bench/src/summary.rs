@@ -1,4 +1,4 @@
-//! Latency percentiles over a set of samples — the nearest-rank summary that
+//! Latency percentiles over a set of samples, the nearest-rank summary that
 //! reduces a load run's raw timings to the few numbers the NFRs are stated in.
 
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Built from raw nanosecond samples with [`LatencySummary::from_nanos`]. The
 /// percentiles use the **nearest-rank** method (no interpolation), so a summary
-/// is an exact function of its samples — two runs with identical samples produce
+/// is an exact function of its samples, two runs with identical samples produce
 /// byte-identical summaries, which is what lets [`crate::judge()`] gate on them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LatencySummary {
@@ -30,7 +30,7 @@ pub struct LatencySummary {
 
 impl LatencySummary {
     /// Summarizes `samples` (nanosecond latencies). Returns `None` for an empty
-    /// set — a percentile of no observations is undefined, and a caller must not
+    /// set, a percentile of no observations is undefined, and a caller must not
     /// silently treat "no data" as "fast".
     #[must_use]
     pub fn from_nanos(samples: &[u64]) -> Option<Self> {

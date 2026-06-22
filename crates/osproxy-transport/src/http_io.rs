@@ -1,5 +1,5 @@
 //! Turning a hyper request into an owned [`IngressRequest`] and an
-//! [`IngressResponse`] back into a hyper response — the wire (de)serialization,
+//! [`IngressResponse`] back into a hyper response, the wire (de)serialization,
 //! independent of the accept/shutdown loop in [`crate::server`].
 //!
 //! Admission (per-request `413`, in-flight `429`) is enforced here as the request
@@ -59,7 +59,7 @@ pub(crate) async fn serve_request<H: IngressHandler>(
     let declared = content_length(&headers);
 
     let c = classify(method, &path);
-    // The head, sans body — built before any body work so the streaming decision
+    // The head, sans body, built before any body work so the streaming decision
     // (which reads only the head) can avoid buffering entirely.
     let head = IngressRequest {
         method,
@@ -77,7 +77,7 @@ pub(crate) async fn serve_request<H: IngressHandler>(
 
     // Streaming verbatim forward: pipe the downstream body straight upstream with
     // no buffering and no in-flight reservation (it never lands in memory). It is
-    // *not* subject to the per-request size cap — the cap bounds buffered memory,
+    // *not* subject to the per-request size cap, the cap bounds buffered memory,
     // and this path buffers nothing, so a passthrough may stream a body of any
     // size with bounded memory (ADR-014 stage 2).
     if handler.forward_plan(&head.path, &head.logical_index) {
@@ -169,7 +169,7 @@ fn map_method(method: &Method) -> Option<HttpMethod> {
 
 /// Maps a hyper HTTP version to the SPI's protocol. HTTP/2 is distinguished; all
 /// 1.x (and the unreachable 0.9) collapse to [`Protocol::Http1`]. gRPC is not seen
-/// here — it arrives on the dedicated tonic listener, which sets it directly.
+/// here, it arrives on the dedicated tonic listener, which sets it directly.
 fn map_protocol(version: hyper::Version) -> Protocol {
     if version == hyper::Version::HTTP_2 {
         Protocol::Http2

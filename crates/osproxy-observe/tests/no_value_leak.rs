@@ -1,7 +1,7 @@
 //! The "no value leaks" guarantee (`docs/05` §7), exercised at runtime.
 //!
 //! We fuzz documents that embed canary secrets in field *values*, derive a trace
-//! the way the pipeline would (only ids/shapes/sizes — never values), assemble
+//! the way the pipeline would (only ids/shapes/sizes, never values), assemble
 //! the explain document, and assert the canary never appears anywhere in the
 //! emitted telemetry. The guarantee is structural (the trace API cannot accept a
 //! value), and this test demonstrates it holds for adversarial inputs.
@@ -75,7 +75,7 @@ fn canary_secrets_never_appear_in_the_explain_document() {
 #[test]
 fn a_partition_id_that_is_itself_secret_like_is_still_an_id_not_a_value() {
     // Even if a partition id happened to look secret, it is an *id* (docs/05
-    // explicitly permits partition.id) — the test fixes the contract: values
+    // explicitly permits partition.id), the test fixes the contract: values
     // (document fields) never appear; ids do.
     let trace = trace_for("acme", 128);
     let doc = explain_json(&RequestId::from("r"), &trace).to_string();

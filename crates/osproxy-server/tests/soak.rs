@@ -2,8 +2,8 @@
 //! much memory the proxy holds when idle, and whether that footprint stays
 //! bounded under a soak (the unbounded-buffer/queue guard). It spawns the **real
 //! `osproxy` binary as its own process** pointed at a testcontainer OpenSearch,
-//! reads the process's resident set from `/proc/<pid>/statm` — so the figure is
-//! the proxy's footprint alone, not the test harness's — drives a sustained
+//! reads the process's resident set from `/proc/<pid>/statm`, so the figure is
+//! the proxy's footprint alone, not the test harness's, drives a sustained
 //! write load, and re-reads. It then fills an [`osproxy_bench::FootprintProfile`]
 //! and judges it.
 //!
@@ -13,7 +13,7 @@
 
 // Test scaffolding (helpers + a spawned child proxy/container, not `#[test]`).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::cast_precision_loss)]
-// JUSTIFY(file-length): one cohesive soak runner — container scaffold, the child
+// JUSTIFY(file-length): one cohesive soak runner, container scaffold, the child
 // process lifecycle, RSS reading, and the soak driver belong together; the
 // ~40-line container scaffold is shared with the perf harness only by copy, which
 // is cheaper than a cross-test-binary shared module for two `#[ignore]` gates.
@@ -38,7 +38,7 @@ const INDEX: &str = "osproxy-shared";
 /// Linux page size assumed when converting `statm` resident pages to bytes (4 KiB
 /// on every platform this runs on).
 const PAGE_BYTES: u64 = 4096;
-/// Requests driven through the proxy during the soak — enough that an unbounded
+/// Requests driven through the proxy during the soak, enough that an unbounded
 /// per-request buffer would show as a climbing resident set.
 const SOAK_REQUESTS: u64 = 50_000;
 /// Concurrency the soak is driven at.
@@ -108,7 +108,7 @@ fn ingest(base: &str, i: u64) -> Request<Full<Bytes>> {
         .unwrap()
 }
 
-/// Polls the proxy until it answers an HTTP request (any status — it's up), or
+/// Polls the proxy until it answers an HTTP request (any status, it's up), or
 /// gives up. Returns whether it became ready.
 async fn wait_proxy_ready(client: &HttpClient, base: &str) -> bool {
     for _ in 0..60 {
@@ -212,7 +212,7 @@ async fn nfr_p6_footprint_under_soak() {
         verdict.to_json(),
     );
 
-    // Host-independent invariant: the footprint must not run away under load —
+    // Host-independent invariant: the footprint must not run away under load,
     // the proxy holds no unbounded per-request buffer or queue (NFR-P6). The
     // *absolute* idle figure is build/host-bound (this is a debug binary), so it
     // is recorded and judged but not hard-asserted; the growth finding (ratio OR

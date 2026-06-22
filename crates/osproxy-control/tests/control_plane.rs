@@ -1,6 +1,6 @@
 //! The fleet-safe migration control plane (`docs/06` §5): the drain barrier
-//! between cutover and the pointer flip, and the property that every instance —
-//! polling the shared backend fresh, never a cache — sees one consistent
+//! between cutover and the pointer flip, and the property that every instance,
+//! polling the shared backend fresh, never a cache, sees one consistent
 //! migration state, so there is no window where two instances disagree on where
 //! writes go.
 
@@ -41,8 +41,8 @@ fn complete_is_held_until_the_drain_barrier_elapses() {
     cp.begin_migration(&p, cluster("b")).unwrap();
     cp.enter_cutover(&p).unwrap();
 
-    // Completing immediately is refused — in-flight pre-cutover writes may still
-    // be committing — and the store is NOT flipped.
+    // Completing immediately is refused, in-flight pre-cutover writes may still
+    // be committing, and the store is NOT flipped.
     assert!(matches!(
         cp.complete_migration(&p),
         Err(ControlError::BarrierPending { .. })
@@ -67,7 +67,7 @@ fn complete_is_held_until_the_drain_barrier_elapses() {
 
 #[test]
 fn every_instance_polling_fresh_sees_one_consistent_state() {
-    // Two proxy "instances" are two handles to the same backend — they poll it
+    // Two proxy "instances" are two handles to the same backend, they poll it
     // fresh per request (no cached migration decision), so they never disagree.
     let (backend, p) = backend();
     let instance_a = Arc::clone(&backend);
@@ -91,7 +91,7 @@ fn every_instance_polling_fresh_sees_one_consistent_state() {
     cp.begin_migration(&p, cluster("b")).unwrap();
     let epoch_cutover = cp.enter_cutover(&p).unwrap();
 
-    // Cutover: both instances reject — they read the same fresh state, so there
+    // Cutover: both instances reject, they read the same fresh state, so there
     // is no instance still writing to A (INV-M1 fleet-wide).
     assert_eq!(
         instance_a.admit_write(&p, epoch_cutover),

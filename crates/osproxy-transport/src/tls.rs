@@ -3,22 +3,22 @@
 //! [`CryptoProvider`] is the abstraction the rest of the proxy programs against
 //! for TLS (`docs/02` §3, `docs/07`). The concrete backend is chosen **at build
 //! time** by a mutually-exclusive crate feature, so a FIPS artifact never links a
-//! non-validated crypto crate (and vice versa) — this is a separate compiled
+//! non-validated crypto crate (and vice versa), this is a separate compiled
 //! binary, not a runtime switch (ADR-009, ADR-004):
 //!
 //! - **`non-fips`** (default): `RingProvider`, rustls's pure-Rust `ring`
-//!   provider — no native toolchain, fast local/dev builds. `fips_mode()` is
+//!   provider, no native toolchain, fast local/dev builds. `fips_mode()` is
 //!   `false`; nothing may claim FIPS.
 //! - **`fips`**: `AwsLcFipsProvider`, the CMVP-validated aws-lc-rs module
 //!   (builds AWS-LC-FIPS via cmake + C toolchain + Go). `fips_mode()` is `true`.
 //!
 //! Both implement the same trait and produce an interchangeable [`ServerConfig`],
-//! so request-path and server code never name a concrete provider — they use the
+//! so request-path and server code never name a concrete provider, they use the
 //! [`DefaultCryptoProvider`](crate::DefaultCryptoProvider) alias the active
 //! feature resolves. No request-path code branches on FIPS.
 //!
 //! Independently of which module backs it, every provider pins the wire policy
-//! to the FIPS-approved set ([`FIPS_APPROVED_SUITES`], TLS 1.2/1.3 — ADR-004
+//! to the FIPS-approved set ([`FIPS_APPROVED_SUITES`], TLS 1.2/1.3, ADR-004
 //! caveat #3, NFR-S5): the module's validation is what differs between `ring` and
 //! aws-lc-rs FIPS, not the suites offered, so the suite/version restriction lives
 //! here in the config layer and is testable without the FIPS toolchain.
@@ -34,7 +34,7 @@ use tokio_rustls::rustls::{CipherSuite, ServerConfig, SupportedProtocolVersion};
 
 /// The FIPS-approved TLS cipher suites the proxy offers (`docs/07` §2 caveat 3,
 /// NFR-S5):
-/// TLS 1.3 and TLS 1.2 AES-GCM only. CHACHA20-POLY1305 is deliberately excluded —
+/// TLS 1.3 and TLS 1.2 AES-GCM only. CHACHA20-POLY1305 is deliberately excluded,
 /// it is not a FIPS-approved suite. This wire policy is applied to *every*
 /// provider, FIPS-validated or not, so the suites negotiated are identical
 /// regardless of the underlying module; the FIPS module changes validation, not
@@ -82,7 +82,7 @@ pub enum TlsError {
 }
 
 /// A [`CryptoProvider`] backed by rustls's pure-Rust `ring` module
-/// (`non-fips` feature). Not FIPS-validated — `fips_mode()` is always `false`.
+/// (`non-fips` feature). Not FIPS-validated, `fips_mode()` is always `false`.
 /// Server-auth and mutual-TLS, built from PEM.
 #[cfg(feature = "non-fips")]
 #[derive(Debug, Clone)]
@@ -140,7 +140,7 @@ impl CryptoProvider for RingProvider {
 
 /// A [`CryptoProvider`] backed by the CMVP-validated **aws-lc-rs** module in FIPS
 /// mode (`fips` feature). The wire policy and PEM handling are identical to
-/// [`RingProvider`] — only the underlying validated module differs (ADR-004).
+/// [`RingProvider`], only the underlying validated module differs (ADR-004).
 #[cfg(feature = "fips")]
 #[derive(Debug, Clone)]
 pub struct AwsLcFipsProvider {
@@ -186,7 +186,7 @@ impl AwsLcFipsProvider {
 
 /// The aws-lc-rs base provider, but only if the linked module is **actually** in
 /// FIPS mode. A FIPS artifact built without AWS-LC-FIPS truly engaging would
-/// otherwise link, report `fips_mode() == false`, and ship silently — so we fail
+/// otherwise link, report `fips_mode() == false`, and ship silently, so we fail
 /// loudly at construction instead (the provider's FIPS status is a build fact, so
 /// this fails fast on the very first TLS provider built).
 #[cfg(feature = "fips")]
@@ -262,7 +262,7 @@ fn build_server_config(
 
 /// A crypto provider with its cipher-suite list filtered to the FIPS-approved set
 /// ([`FIPS_APPROVED_SUITES`]). Keyed on the provider-independent [`CipherSuite`]
-/// id, so both the `ring` and aws-lc-rs bases pin the identical list — only the
+/// id, so both the `ring` and aws-lc-rs bases pin the identical list, only the
 /// validated module differs, not the wire policy.
 fn fips_pinned_provider(base: RustlsCryptoProvider) -> Arc<RustlsCryptoProvider> {
     let cipher_suites = base

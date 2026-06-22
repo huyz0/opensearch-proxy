@@ -4,7 +4,7 @@
 //! [`IngressRequest`](crate::IngressRequest), invokes the [`IngressHandler`], and
 //! writes the response. Each connection is served by
 //! hyper-util's protocol-auto builder, which negotiates HTTP/1.1 or HTTP/2 per
-//! connection — h2c by the HTTP/2 preface on cleartext, h2 by ALPN on TLS
+//! connection, h2c by the HTTP/2 preface on cleartext, h2 by ALPN on TLS
 //! (`docs/07`). The handler contract is identical across protocols.
 //!
 //! **Graceful shutdown (NFR-R5).** The `*_with_shutdown` variants take a future;
@@ -91,7 +91,7 @@ pub async fn serve_with_shutdown<H: IngressHandler>(
 ///
 /// A TLS handshake failure is isolated to its connection (the connection is
 /// dropped); the accept loop keeps serving. The handler contract is identical to
-/// [`serve`] — TLS is transparent to it.
+/// [`serve`], TLS is transparent to it.
 ///
 /// # Errors
 ///
@@ -162,7 +162,7 @@ enum Mode {
     Tls(tokio_rustls::TlsAcceptor),
 }
 
-/// A never-resolving shutdown signal — the plain `serve*` paths run until the
+/// A never-resolving shutdown signal, the plain `serve*` paths run until the
 /// listener errors, exactly as before graceful shutdown existed.
 fn never() -> impl Future<Output = ()> {
     std::future::pending()
@@ -219,7 +219,7 @@ fn spawn_conn<H: IngressHandler>(
     // Acquire load in `await_drain`.
     // Disable Nagle's algorithm: a proxy does small, complete request/response
     // writes, and Nagle's interaction with delayed-ACK can add tens of ms of
-    // round-trip latency on a real (non-loopback) network. Best-effort — a failure
+    // round-trip latency on a real (non-loopback) network. Best-effort, a failure
     // here only forgoes the optimization, it must not drop the connection.
     let _ = stream.set_nodelay(true);
     active.fetch_add(1, Ordering::Relaxed);
@@ -275,7 +275,7 @@ impl Drop for ActiveGuard {
 }
 
 /// Waits until no connections remain, or `deadline` elapses (then the remaining
-/// connections are dropped). Polls rather than condvars — it runs once, at
+/// connections are dropped). Polls rather than condvars, it runs once, at
 /// shutdown, off the request path.
 async fn await_drain(active: &AtomicUsize, deadline: Duration) {
     let drained = async {
@@ -298,7 +298,7 @@ fn conn_info_from_tls(tls: &tokio_rustls::server::TlsStream<tokio::net::TcpStrea
 /// Serves HTTP/1.1 or HTTP/2 over one already-accepted byte stream (cleartext or
 /// TLS). Races the connection against the `drain` signal: when it flips, the
 /// connection is told to finish its current request and close (no new requests),
-/// then awaited to completion — the per-connection half of graceful shutdown.
+/// then awaited to completion, the per-connection half of graceful shutdown.
 async fn serve_connection<H, IO>(
     io: IO,
     handler: Arc<H>,

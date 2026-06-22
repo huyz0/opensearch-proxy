@@ -24,7 +24,7 @@ impl EtcdDirectiveStore {
     ///
     /// The value at `key` is the same JSON body the admin publish endpoint accepts
     /// (`{"directives":[...]}`). A missing key is a valid empty set (everything
-    /// off). A *malformed* value at startup is treated as empty — fail-safe — the
+    /// off). A *malformed* value at startup is treated as empty, fail-safe, the
     /// same as an unparseable later publish.
     ///
     /// # Errors

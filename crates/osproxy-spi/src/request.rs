@@ -53,7 +53,7 @@ pub enum HttpMethod {
 /// A minimal, borrowed view of request headers.
 ///
 /// Backed by the transport's parsed headers; the SPI may read a header (e.g. to
-/// find a partition key) but cannot mutate it here — mutations are expressed as
+/// find a partition key) but cannot mutate it here, mutations are expressed as
 /// [`crate::HeaderOp`]s in the returned decision.
 ///
 /// # Examples
@@ -93,7 +93,7 @@ impl<'a> HeaderView<'a> {
 /// the partition key out of the document **without parsing JSON or touching raw
 /// bytes** (ADR-014): the proxy scans the body on demand, reading just the field
 /// asked for and never materializing a tree. This is the extraction utility the
-/// SPI composes over — it deliberately exposes no byte accessor, so the
+/// SPI composes over, it deliberately exposes no byte accessor, so the
 /// memory-bounded scan is the only way in.
 ///
 /// Backed by the raw body (the whole request for single-doc ingest, or one
@@ -238,7 +238,7 @@ impl<'a> RequestCtx<'a> {
 
     /// Sets the raw URL query string (without the `?`). Builder style. Only an
     /// allow-list of cursor params (`scroll`/`keep_alive`) is ever forwarded
-    /// upstream — query-affecting params are dropped so the body partition filter
+    /// upstream, query-affecting params are dropped so the body partition filter
     /// cannot be bypassed (NFR-S4).
     #[must_use]
     pub fn with_query(mut self, query: Option<&'a str>) -> Self {

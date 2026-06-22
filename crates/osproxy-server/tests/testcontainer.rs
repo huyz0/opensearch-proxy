@@ -3,13 +3,13 @@
 //! the right index with the injected tenancy field and the constructed `_id`;
 //! and the blind-diagnosis story works for a success and a failure.
 //!
-//! These tests need a running Docker daemon, so they are `#[ignore]`'d — CI
+//! These tests need a running Docker daemon, so they are `#[ignore]`'d, CI
 //! without Docker stays green. Run them with:
 //!   cargo test -p osproxy-server --test testcontainer -- --ignored
 
 // Test scaffolding (helpers + spawned server/container, not `#[test]` fns).
 #![allow(clippy::unwrap_used)]
-// JUSTIFY(file-length): the live-OpenSearch exit gate — several end-to-end
+// JUSTIFY(file-length): the live-OpenSearch exit gate, several end-to-end
 // scenarios (ingest, by-id read/delete, search/count isolation, bulk demux with
 // create/update verbs, blind diagnosis) share one set of container/proxy
 // scaffolding helpers.
@@ -203,7 +203,7 @@ async fn ingest_round_trips_to_real_opensearch() {
     assert!(body.contains(r#""_id":"acme:7""#), "{body}");
 
     // The document is in OpenSearch, in the shared index, at the constructed id,
-    // with the injected tenancy field and routing — query OpenSearch directly.
+    // with the injected tenancy field and routing, query OpenSearch directly.
     let (status, doc) = get(
         &client,
         &format!("{os_base}/{INDEX}/_doc/acme:7?routing=acme"),
@@ -246,7 +246,7 @@ async fn assert_logical_read(client: &HttpClient, proxy: &str) {
     assert_eq!(miss["found"], false);
 }
 
-/// Deletes the doc through the proxy by logical id and confirms it is gone — the
+/// Deletes the doc through the proxy by logical id and confirms it is gone, the
 /// write→delete→read round-trip (`docs/04` §5).
 async fn assert_delete_removes(client: &HttpClient, proxy: &str) {
     let (status, deleted) = request_with_tenant(
@@ -303,8 +303,8 @@ async fn search_is_isolated_to_the_callers_partition() {
     .await
     .unwrap();
 
-    // acme searches match_all *through the proxy*: it sees only its own document
-    // — the mandatory partition filter isolates it from globex (docs/03 §5).
+    // acme searches match_all *through the proxy*: it sees only its own document,
+    // the mandatory partition filter isolates it from globex (docs/03 §5).
     let (status, hits) = request_with_tenant(
         &client,
         Method::POST,
@@ -460,7 +460,7 @@ async fn assert_bulk_create_and_update(client: &HttpClient, os_base: &str, proxy
     }
 
     // A `create` of an existing id is a positioned conflict (errors:true), not a
-    // silent overwrite — proving op_type=create reached OpenSearch.
+    // silent overwrite, proving op_type=create reached OpenSearch.
     let (status, body) = request_with_tenant(
         client,
         Method::POST,
@@ -621,7 +621,7 @@ async fn scroll_create_and_continue_round_trip_through_the_proxy() {
 /// `_search/point_in_time` endpoint was hit), a PIT search routes back there and
 /// stays partition-isolated, and a close with the wrapped id succeeds. This is the
 /// regression guard for the ES→OpenSearch PIT shape (`_search/point_in_time`,
-/// `pit_id` array) — see `docs/specs/opensearch-endpoints.md`.
+/// `pit_id` array), see `docs/specs/opensearch-endpoints.md`.
 #[tokio::test]
 #[ignore = "requires Docker; run with --ignored"]
 async fn pit_create_search_and_close_round_trip_through_the_proxy() {
@@ -649,7 +649,7 @@ async fn pit_create_search_and_close_round_trip_through_the_proxy() {
         "the pit id must be a wrapped envelope, not the raw upstream id: {pit_id}"
     );
 
-    // Search the PIT (no index in the path — the PIT defines the index set). It
+    // Search the PIT (no index in the path, the PIT defines the index set). It
     // must route to the pinned cluster yet stay scoped to acme's partition.
     let (status, body) = request_with_tenant(
         &client,

@@ -1,7 +1,7 @@
 //! Async fan-out write-mode tests (`docs/04` §9). Split from `pipeline_tests.rs`;
 //! shares that module's `pipeline()`/`ctx()` harness via `use super::*`.
 //
-// JUSTIFY(file-length): one cohesive suite for the async write mode — single-doc,
+// JUSTIFY(file-length): one cohesive suite for the async write mode, single-doc,
 // bulk, and delete-by-query all exercise the same `RecordingQueue` + `header`
 // scaffolding defined here; splitting by sub-path would duplicate that harness
 // across files (and the shared `pipeline()`/`ctx()` is reachable only as a
@@ -72,7 +72,7 @@ async fn async_ingest_enqueues_and_returns_202_without_touching_the_sink() {
     // op id defaults to the request id when no X-Op-Id is supplied.
     assert!(body.contains(r#""op_id":"r""#), "{body}");
 
-    // The op was durably enqueued — and never forwarded to the upstream sink.
+    // The op was durably enqueued, and never forwarded to the upstream sink.
     let writes = queue.writes.lock().unwrap();
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].partition_key, "acme");
@@ -352,14 +352,14 @@ async fn async_bulk_rejects_a_per_item_optimistic_concurrency_precondition() {
     );
     assert_eq!(items[1]["index"]["status"], 202, "plain item queued");
     assert_eq!(doc["errors"], true);
-    // Only the honorable item was enqueued — the precondition was never dropped.
+    // Only the honorable item was enqueued, the precondition was never dropped.
     assert_eq!(queue.writes.lock().unwrap().len(), 1);
 }
 
 // --- async _delete_by_query expansion (docs/04 §9) ------------------------
 
 /// Stores two docs (sync), then runs an async DBQ that expands to one enqueued
-/// delete per match — the sink is never asked to delete; the queue is.
+/// delete per match, the sink is never asked to delete; the queue is.
 #[tokio::test]
 async fn async_delete_by_query_expands_to_one_enqueued_delete_per_match() {
     let queue = Arc::new(RecordingQueue::default());

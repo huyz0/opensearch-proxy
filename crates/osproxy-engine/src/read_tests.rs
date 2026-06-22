@@ -161,7 +161,7 @@ fn hits_are_stripped_to_the_logical_view() {
 #[test]
 fn top_level_siblings_including_aggregations_pass_through_untouched() {
     // The strip shapes only `hits`; `took`, `_shards`, and `aggregations` (which
-    // can dwarf the hits) are forwarded verbatim — never materialized/re-serialized
+    // can dwarf the hits) are forwarded verbatim, never materialized/re-serialized
     // (ADR-014: the read-path counterpart of wrap_query's raw-sibling posture).
     let upstream = br#"{
         "took": 5,

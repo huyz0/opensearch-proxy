@@ -6,7 +6,7 @@
 //!
 //! Export is **read-only and never on the request's critical path** (`docs/05`,
 //! ADR-005): [`SpanExporter::export`] returns immediately and the actual POST
-//! runs in a spawned task whose result is ignored — a slow or down collector can
+//! runs in a spawned task whose result is ignored, a slow or down collector can
 //! never add latency to, or fail, a client request. Telemetry is best-effort by
 //! construction.
 #![deny(missing_docs)]
@@ -29,7 +29,7 @@ use tokio::sync::Semaphore;
 const EXPORT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Cap on concurrent in-flight exports. When the collector is slow/down, exports
-/// beyond this are **dropped** (best-effort telemetry) rather than queued — so a
+/// beyond this are **dropped** (best-effort telemetry) rather than queued, so a
 /// failing collector cannot grow memory/FDs without bound under load.
 const MAX_INFLIGHT: usize = 256;
 
@@ -41,7 +41,7 @@ const MAX_INFLIGHT: usize = 256;
 ///
 /// **Must be constructed within a Tokio runtime** (it captures the runtime
 /// handle to spawn background sends). Outside a runtime, export is a no-op rather
-/// than a panic — telemetry is best-effort and never affects the caller.
+/// than a panic, telemetry is best-effort and never affects the caller.
 #[derive(Clone, Debug)]
 pub struct OtlpHttpExporter {
     endpoint: String,

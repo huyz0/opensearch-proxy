@@ -1,7 +1,7 @@
 //! Pipeline orchestration.
 //!
-//! Drives a request through the stages — authenticate, authorize, classify,
-//! resolve, transform, dispatch, reverse-transform, egress (`docs/04` §1) —
+//! Drives a request through the stages, authenticate, authorize, classify,
+//! resolve, transform, dispatch, reverse-transform, egress (`docs/04` §1),
 //! wiring the other crates together through `osproxy-core` types and
 //! `osproxy-spi` traits. It owns no low-level wire or parsing detail.
 //!
@@ -11,7 +11,7 @@
 //! get-by-id read path: the [`Pipeline`] maps a client's logical id to the
 //! physical id, fetches it through the [`Reader`](osproxy_sink::Reader) seam,
 //! and strips the injected tenancy fields so the client sees its logical
-//! document — the write→read round-trip symmetry the model rests on.
+//! document, the write→read round-trip symmetry the model rests on.
 #![deny(missing_docs)]
 
 mod admin;
@@ -48,7 +48,7 @@ pub use search_stream::StreamSearch;
 
 /// Internal entry points exposed **only** for benchmarks (`benches/`), which are
 /// separate crates and so cannot reach `pub(crate)` items. Hidden from docs and
-/// not part of the public API — do not depend on it.
+/// not part of the public API, do not depend on it.
 #[doc(hidden)]
 pub mod bench_support {
     use osproxy_core::FieldName;
@@ -69,8 +69,8 @@ pub mod bench_support {
     }
 
     /// Builds a realistic `_search` response: `n_hits` shared-index hits (each
-    /// carrying the injected `_tenant`) plus an `aggregations` blob of `agg_bytes`
-    /// — the sibling the proxy forwards verbatim past the hits.
+    /// carrying the injected `_tenant`) plus an `aggregations` blob of `agg_bytes`,
+    /// the sibling the proxy forwards verbatim past the hits.
     #[must_use]
     pub fn response(n_hits: usize, agg_bytes: usize) -> Vec<u8> {
         let mut s = String::from(r#"{"took":5,"hits":{"total":{"value":"#);
