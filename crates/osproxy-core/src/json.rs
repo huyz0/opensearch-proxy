@@ -339,12 +339,19 @@ impl<'a> Parser<'a> {
     /// Decodes a string (cursor at the opening quote) into an owned `String`.
     fn string_decode(&mut self) -> Result<String, JsonError> {
         self.expect(b'"')?;
-        let mut out = String::new();
+        // Accumulate raw bytes, not `char`s: a literal multi-byte UTF-8 sequence
+        // must be copied verbatim. Decoding each byte as a `char` (the Latin-1
+        // `char::from(u8)` mapping) would re-encode every continuation byte as its
+        // own code point — e.g. "café" → "cafÃ©" — corrupting any non-ASCII
+        // partition key or id-template input. The validation at the close rejects a
+        // string that is not valid UTF-8 (JSON must be UTF-8), keeping the scanner
+        // strict rather than silently producing mojibake.
+        let mut out: Vec<u8> = Vec::new();
         loop {
             match self.peek().ok_or(JsonError::Invalid)? {
                 b'"' => {
                     self.i += 1;
-                    return Ok(out);
+                    return String::from_utf8(out).map_err(|_| JsonError::Invalid);
                 }
                 b'\\' => {
                     self.i += 1;
@@ -352,10 +359,10 @@ impl<'a> Parser<'a> {
                 }
                 c if c < 0x20 => return Err(JsonError::Invalid),
                 _ => {
-                    // Copy one UTF-8 code unit; multi-byte sequences copy byte by
-                    // byte (each continuation byte is >= 0x80, so it is not an
-                    // escape or terminator and falls through here).
-                    out.push(char::from(self.b[self.i]));
+                    // A literal byte (ASCII, or one byte of a multi-byte sequence):
+                    // copy it verbatim. Continuation bytes are >= 0x80, so they are
+                    // never an escape or terminator and fall through here.
+                    out.push(self.b[self.i]);
                     self.i += 1;
                 }
             }
@@ -363,7 +370,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Decodes one escape sequence (cursor just past the backslash) into `out`.
-    fn decode_escape(&mut self, out: &mut String) -> Result<(), JsonError> {
+    fn decode_escape(&mut self, out: &mut Vec<u8>) -> Result<(), JsonError> {
         let esc = self.peek().ok_or(JsonError::Invalid)?;
         self.i += 1;
         let ch = match esc {
@@ -378,12 +385,12 @@ impl<'a> Parser<'a> {
             b'u' => return self.decode_unicode_escape(out),
             _ => return Err(JsonError::Invalid),
         };
-        out.push(ch);
+        push_char(out, ch);
         Ok(())
     }
 
     /// Decodes a `\u` escape (cursor just past the `u`), pairing surrogates.
-    fn decode_unicode_escape(&mut self, out: &mut String) -> Result<(), JsonError> {
+    fn decode_unicode_escape(&mut self, out: &mut Vec<u8>) -> Result<(), JsonError> {
         let hi = self.hex4()?;
         let code = if (0xD800..=0xDBFF).contains(&hi) {
             // High surrogate: must be followed by `\u` + a low surrogate.
@@ -399,7 +406,7 @@ impl<'a> Parser<'a> {
         } else {
             u32::from(hi)
         };
-        out.push(char::from_u32(code).ok_or(JsonError::Invalid)?);
+        push_char(out, char::from_u32(code).ok_or(JsonError::Invalid)?);
         Ok(())
     }
 
@@ -473,6 +480,12 @@ impl<'a> Parser<'a> {
             Err(JsonError::Invalid)
         }
     }
+}
+
+/// Appends a decoded escape character's UTF-8 encoding to the byte buffer.
+fn push_char(out: &mut Vec<u8>, ch: char) {
+    let mut buf = [0u8; 4];
+    out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
 }
 
 #[cfg(test)]

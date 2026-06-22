@@ -78,6 +78,28 @@ fn scalar_at_path_decodes_escaped_string_value() {
 }
 
 #[test]
+fn scalar_at_path_preserves_multibyte_utf8() {
+    // A literal (un-escaped) multi-byte UTF-8 value must survive verbatim: a
+    // non-ASCII partition key would otherwise be mojibake'd on ingest, breaking
+    // write/read symmetry (the write injects the corrupted value, the read filters
+    // on the verbatim one). Covers 2-byte (é), 3-byte (€), and 4-byte (😀).
+    let body = "{\"tenant\":\"café-€-😀\"}".as_bytes();
+    assert_eq!(scalar_at_path(body, ["tenant"]).unwrap(), "café-€-😀");
+    // The same value reached via `\u` escapes (incl. a surrogate pair for 😀 =
+    // U+1F600) decodes identically, so escaped and literal forms agree.
+    let escaped = b"{\"tenant\":\"caf\\u00e9-\\u20ac-\\ud83d\\ude00\"}";
+    assert_eq!(scalar_at_path(escaped, ["tenant"]).unwrap(), "café-€-😀");
+}
+
+#[test]
+fn decoded_key_preserves_multibyte_utf8() {
+    // Key decoding shares the same path; a non-ASCII key must not be corrupted.
+    let body = "{\"naïve\":1}".as_bytes();
+    let top = object_top_level(body).unwrap();
+    assert_eq!(top.keys, vec!["naïve"]);
+}
+
+#[test]
 fn validate_accepts_well_formed_and_rejects_garbage() {
     assert!(validate(br#"{"a":[1,2,{"b":-3.5e2}],"c":"x"}"#).is_ok());
     assert!(validate(b"  true  ").is_ok());
