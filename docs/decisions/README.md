@@ -2,17 +2,17 @@
 
 Each ADR is an immutable record of one decision: context, options, the decision,
 and why. Superseding a decision means adding a new ADR that references the old
-one — never editing history. This is the permanent, greppable rationale trail so
+one, never editing history. This is the permanent, greppable rationale trail so
 intent can be re-derived, not guessed (docs/10 §5).
 
 | ADR | Decision |
 |-----|----------|
-| [001](001-language-rust.md) | Language: Rust (Go only if FIPS had no Rust path — it does) |
+| [001](001-language-rust.md) | Language: Rust (Go only if FIPS had no Rust path, it does) |
 | [002](002-single-target-search.md) | No synchronous fan-out; every search is single-cluster |
 | [003](003-epoch-gated-migration.md) | Partition migration via epoch-gated pointer flip, no in-path dual-write |
 | [004](004-fips-aws-lc-rs.md) | FIPS via rustls + aws-lc-rs (`fips`), crypto behind a trait |
 | [005](005-readonly-ai-observability.md) | Observability is read-only & shape-only; AI observes, never mutates |
-| [006](006-isolation-filter-or-reject.md) | Read isolation: provably filtered or request rejected — no best-effort |
+| [006](006-isolation-filter-or-reject.md) | Read isolation: provably filtered or request rejected, no best-effort |
 | [007](007-static-spi.md) | SPI compiled in statically; no WASM/dylib dynamic plugins |
 | [008](008-sink-trait-deferred-redundancy.md) | Write `Sink` trait; queue-based redundancy deferred behind it |
 | [009](009-m1-tls-ring-provider.md) | M1 TLS uses the `ring` provider; aws-lc-rs/FIPS at M6 behind the seam |
@@ -20,4 +20,4 @@ intent can be re-derived, not guessed (docs/10 §5).
 | [011](011-traffic-capture-model.md) | Traffic capture: tenant-agnostic tee behind a `Capture` seam, durable at-least-once WAL tier, on-demand via directive |
 | [012](012-modes-dynamism-by-blast-radius.md) | Proxy modes: dynamism rationed by blast radius; tenant isolation is a fail-closed per-request routing decision, never a global switch |
 | [013](013-etcd-directive-store.md) | Reference distributed `DirectiveStore` over etcd (watch-and-cache); directive plane only, migration-over-etcd deferred to an async/fallible seam |
-| [014](014-streaming-body-pipeline.md) | Streaming body pipeline: always stream (route-before-forward is the only buffer), never materialize a `Value` (event scan + byte splice), SPI declares needs & composes shared utils — never raw bytes; INV-MEM dhat-gated |
+| [014](014-streaming-body-pipeline.md) | Streaming body pipeline: always stream (route-before-forward is the only buffer), never materialize a `Value` (event scan + byte splice), SPI declares needs & composes shared utils, never raw bytes; INV-MEM dhat-gated |

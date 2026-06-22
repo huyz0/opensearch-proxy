@@ -1,16 +1,16 @@
-# 02 — SPI Reference
+# 02: SPI Reference
 
 The SPI is the contract between the proxy core and the implementer. It is the
-**most important documented surface in the project** — every item here must
+**most important documented surface in the project**, every item here must
 carry doc comments stating intent, invariants, panics (none), and an example
 (NFR-Q3).
 
 Two layers:
 
-- **Low-level `RoutingSpi`** — full control over the routing decision. Sees the
+- **Low-level `RoutingSpi`**, full control over the routing decision. Sees the
   authenticated principal, request metadata, and a streaming view of the body;
   returns a `RouteDecision`.
-- **High-level `TenancySpi`** — what most users implement. Declares tenancy
+- **High-level `TenancySpi`**, what most users implement. Declares tenancy
   *rules* (partition key, doc-id construction, injected/sensitive fields) and a
   placement lookup. `osproxy-tenancy` implements `RoutingSpi` in terms of it, so
   tenancy users never touch `RouteDecision` plumbing.
@@ -25,7 +25,7 @@ Two layers:
 /// Decides where and how a single request is routed.
 ///
 /// # Invariants
-/// - MUST resolve to exactly one [`Target`] (no synchronous fan-out — ADR-002).
+/// - MUST resolve to exactly one [`Target`] (no synchronous fan-out, ADR-002).
 /// - MUST NOT block; use async for any lookup. Long lookups risk NFR-P latency.
 /// - MUST NOT panic. Return [`SpiError`] for every failure.
 /// - The returned [`RouteDecision::epoch`] MUST come from the placement table
@@ -36,7 +36,7 @@ pub trait RoutingSpi: Send + Sync + 'static {
 }
 ```
 
-### `RequestCtx` — what the SPI sees
+### `RequestCtx`: what the SPI sees
 
 ```rust
 /// Read-only view of an authenticated request, given to the SPI to decide
@@ -53,7 +53,7 @@ pub struct RequestCtx<'a> {
 }
 ```
 
-### `RouteDecision` — what the SPI returns
+### `RouteDecision`: what the SPI returns
 
 ```rust
 pub struct RouteDecision {
@@ -71,7 +71,7 @@ pub struct RouteDecision {
 > what the decision already carries, so they cannot drift out of sync with the
 > write path. The mandatory partition **query filter** and the response **field
 > strip** are both computed from `body_transform` (the injected `PartitionId`
-> field is the isolation key — see `osproxy-engine`'s `read::filter_terms` /
+> field is the isolation key, see `osproxy-engine`'s `read::filter_terms` /
 > `read_shape`), and **cursor affinity** is handled by the engine's cursor signer
 > on the scroll/PIT endpoints rather than a per-decision flag. This is the real
 > shape in `osproxy-spi::decision`; the matching is what keeps write-inject and
@@ -112,7 +112,7 @@ pub trait TenancySpi: Send + Sync + 'static {
     /// Resolve the partition id for a request. Most impls defer to the
     /// declarative `osproxy_tenancy::resolve_partition_spec` (naming a body
     /// field / header / principal attr); override the body to decode an encoded
-    /// header, parse a token, or combine inputs — you choose the order.
+    /// header, parse a token, or combine inputs, you choose the order.
     ///
     /// `body` is a [`BodyDoc`] view, NOT a parsed `serde_json::Value`: the proxy
     /// scans the raw bytes on demand for the one scalar the partition key needs,
@@ -135,7 +135,7 @@ pub trait TenancySpi: Send + Sync + 'static {
     fn sensitive_fields(&self) -> SensitivitySpec;
 
     /// Resolve a partition to its current placement. Looks up the mutable,
-    /// epoch-versioned placement table (NOT a pure function — migration mutates
+    /// epoch-versioned placement table (NOT a pure function, migration mutates
     /// it). Returns the placement *and* the epoch it was read at.
     async fn placement_for(&self, partition: &PartitionId)
         -> Result<PlacementAt, SpiError>;
@@ -166,7 +166,7 @@ pub enum Placement {
 ```rust
 /// How to find the partition id in a request.
 pub enum PartitionKeySpec {
-    /// A JSON path into the document body (ingest) — e.g. "$.tenant_id".
+    /// A JSON path into the document body (ingest), e.g. "$.tenant_id".
     BodyField(JsonPath),
     /// A request header carries it (e.g. resolved by an upstream auth gateway).
     Header(String),
@@ -198,7 +198,7 @@ pub trait CryptoProvider: Send + Sync {
 }
 
 /// Where writes go. OpenSearchSink now; QueueSink (Kafka) later for the
-/// redundancy mode — same RouteDecision feeds both (docs/00 §non-goals). The
+/// redundancy mode, same RouteDecision feeds both (docs/00 §non-goals). The
 /// per-op `Target` rides inside the batch (each `WriteOp` carries its own), so
 /// `write` takes no separate target argument.
 pub trait Sink: Send + Sync {
@@ -215,7 +215,7 @@ pub trait Sink: Send + Sync {
 ///     async fn search(&self, op: SearchOp) -> Result<SearchOutcome, SinkError>;
 ///     async fn count(&self, op: SearchOp) -> Result<CountOutcome, SinkError>;
 ///     async fn cursor(&self, op: CursorOp) -> Result<CursorOutcome, SinkError>;
-///     // Streaming variants (default: unsupported) — response piped back,
+///     // Streaming variants (default: unsupported), response piped back,
 ///     // never buffered (ADR-014): `search_stream`, `forward_stream`.
 ///     async fn search_stream(&self, op: SearchOp) -> Result<StreamingSearch, SinkError>;
 /// }
@@ -238,7 +238,7 @@ pub trait Authorizer: Send + Sync {
 ## 4. Error taxonomy
 
 Every error on the request path is a typed enum (no `anyhow`/strings, NFR-R2).
-Errors are **contextual** — they carry the decision chain so the LLM can
+Errors are **contextual**, they carry the decision chain so the LLM can
 diagnose without source (NFR-T5).
 
 ```rust

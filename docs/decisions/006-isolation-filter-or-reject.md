@@ -1,4 +1,4 @@
-# ADR-006 — Read isolation: provably filtered or rejected
+# ADR-006: Read isolation: provably filtered or rejected
 
 **Status:** Accepted
 
@@ -13,7 +13,7 @@ another tenant's data.
 
 Isolation is a **security boundary** for the supported endpoint set, and **not
 offered (request rejected)** for endpoints that cannot be safely filtered. There
-is no best-effort middle ground — a request is either provably filtered or
+is no best-effort middle ground, a request is either provably filtered or
 rejected.
 
 Mechanism: the proxy wraps the entire client query in

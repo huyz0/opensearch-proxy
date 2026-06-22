@@ -1,6 +1,6 @@
 # FIPS Compliance Boundary
 
-> Status: **release blocker** — the module the build links (AWS-LC-FIPS 3.0) is
+> Status: **release blocker**, the module the build links (AWS-LC-FIPS 3.0) is
 > on the CMVP *Modules In Process* list; its certificate is not yet awarded, so a
 > hard "FIPS 140-3 validated" claim is not defensible until either 3.0's review
 > completes or the build is moved to a validated line (§1a). The proxy
@@ -21,7 +21,7 @@ it here. No NIST engagement, no lab, no fees.
 |-------|-------|
 | Module name | AWS-LC-FIPS |
 | Module version | **3.0** (`fips-2024-09-27`) |
-| CMVP certificate # | **none yet** — on the CMVP *Modules In Process* (MIP) list, "Review Pending" |
+| CMVP certificate # | **none yet**, on the CMVP *Modules In Process* (MIP) list, "Review Pending" |
 | FIPS standard | 140-3, Level 1 (target) |
 | Pinned `aws-lc-rs` crate (`fips` feature) | **=1.17.0** (binds AWS-LC-FIPS 3.0.x) |
 | Pinned `aws-lc-fips-sys` | 0.13.14 (transitive, via the lockfile) |
@@ -43,7 +43,7 @@ is AWS-LC-FIPS **2.0**:
 | AWS-LC-FIPS 1.0 | #4631 | older still |
 
 Moving to 2.0 therefore also pins `rustls`/`tokio-rustls` back to a release that
-accepts `aws-lc-rs < 1.12` — a TLS-stack currency vs awarded-cert tradeoff. Until
+accepts `aws-lc-rs < 1.12`, a TLS-stack currency vs awarded-cert tradeoff. Until
 that is needed, the build tracks 3.0 and inherits its certificate automatically
 once the review completes.
 
@@ -76,7 +76,7 @@ list (suites are keyed on the provider-independent `rustls::CipherSuite` id).
 | TLS 1.3 | `TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384` |
 | TLS 1.2 | `TLS_ECDHE_{ECDSA,RSA}_WITH_AES_128_GCM_SHA256`, `TLS_ECDHE_{ECDSA,RSA}_WITH_AES_256_GCM_SHA384` |
 
-`CHACHA20-POLY1305` (all versions) is excluded — not FIPS-approved. Versions are
+`CHACHA20-POLY1305` (all versions) is excluded, not FIPS-approved. Versions are
 pinned to TLS 1.2/1.3 via `FIPS_VERSIONS` (`with_protocol_versions`); the rustls
 build in the tree ships only 1.2/1.3, so the pin is an explicit, future-proof
 constraint by construction rather than a handshake-tested refusal of older
@@ -92,7 +92,7 @@ only CHACHA20 is rejected, with no fallback to a non-approved suite).
 On the **FIPS build** itself, `crates/osproxy-transport/tests/fips.rs` (run by
 `cargo xtask check-fips`, folded into `xtask ci` where the toolchain is present)
 asserts the linked aws-lc-rs module reports FIPS mode (`fips_mode()`) and offers
-exactly the approved suites — the count match catches a silent shrink if the FIPS
+exactly the approved suites, the count match catches a silent shrink if the FIPS
 module lacked one of the six approved suites.
 
 ## 4. Build provenance
@@ -102,7 +102,7 @@ module lacked one of the six approved suites.
   `ubuntu-latest`. This is load-bearing for FIPS: AWS-LC-FIPS's *delocate* step
   (the FIPS integrity transform that produces `bcm-delocated.S`) only parses the
   assembly emitted by **supported compiler versions**. A bleeding-edge compiler
-  fails the FIPS build — observed: gcc 15.2 fails delocate at `-O3` (release),
+  fails the FIPS build, observed: gcc 15.2 fails delocate at `-O3` (release),
   though it builds in debug. Do **not** work around this by injecting `CFLAGS`;
   that would alter the validated build. Pin the image instead. Bumping the runner
   image is a compliance event (re-verify the build).
@@ -114,7 +114,7 @@ module lacked one of the six approved suites.
 ## 5. Cryptographic boundary diagram
 
 The **cryptographic boundary is the AWS-LC-FIPS module** (the CMVP-validated C
-library) — *not* the proxy, *not* rustls, *not* the aws-lc-rs bindings. Every
+library), *not* the proxy, *not* rustls, *not* the aws-lc-rs bindings. Every
 cryptographic operation crosses into that module; nothing cryptographic happens
 outside it. The proxy's own code does **zero** crypto: it produces and consumes
 plaintext and drives the TLS protocol state machine, which in turn calls the
@@ -128,20 +128,20 @@ module for all key agreement, signing/verification, AEAD, hashing, and random.
 │ osproxy process (NOT in the cryptographic boundary)                             │
 │                                                                                 │
 │  ┌─────────────────────────────────────────────────────────────────────────┐  │
-│  │ osproxy request pipeline — routing, tenancy, rewrite, sink   PLAINTEXT    │  │
+│  │ osproxy request pipeline - routing, tenancy, rewrite, sink   PLAINTEXT    │  │
 │  │ only. Never sees keys or ciphertext. (osproxy-engine/-rewrite/-sink…)     │  │
 │  └─────────────────────────────────────────────────────────────────────────┘  │
 │                          ▲ plaintext records                                    │
 │                          ▼                                                       │
 │  ┌─────────────────────────────────────────────────────────────────────────┐  │
-│  │ rustls — TLS 1.2/1.3 PROTOCOL state machine (handshake orchestration,     │  │
+│  │ rustls - TLS 1.2/1.3 PROTOCOL state machine (handshake orchestration,     │  │
 │  │ record framing, suite/version policy = FIPS_APPROVED_SUITES/FIPS_VERSIONS).│ │
 │  │ Holds no crypto of its own; delegates every primitive across the boundary. │ │
 │  └─────────────────────────────────────────────────────────────────────────┘  │
 │                          │  FFI calls (aws-lc-rs → aws-lc-fips-sys, thin shim,  │
 │                          ▼  no crypto of their own)                              │
 │  ╔═══════════════════════════════════════════════════════════════════════════╗ │
-│  ║ ▓▓▓ CRYPTOGRAPHIC BOUNDARY — AWS-LC-FIPS (CMVP-validated module) ▓▓▓       ║ │
+│  ║ ▓▓▓ CRYPTOGRAPHIC BOUNDARY - AWS-LC-FIPS (CMVP-validated module) ▓▓▓       ║ │
 │  ║   • ECDHE key agreement            • RSA/ECDSA signature verify            ║ │
 │  ║   • AES-128/256-GCM AEAD (record encrypt / decrypt)                        ║ │
 │  ║   • SHA-256/384 (handshake transcript + mTLS cert fingerprint)             ║ │
@@ -162,13 +162,13 @@ module for all key agreement, signing/verification, AEAD, hashing, and random.
 | Randomness requests | Random bytes |
 
 **What never crosses out:** private keys, the ECDHE shared secret, and derived
-session/traffic keys — they are created and consumed inside the module. The proxy
+session/traffic keys, they are created and consumed inside the module. The proxy
 holds only plaintext payloads and opaque handles; a memory disclosure in proxy
 code cannot leak key material, because key material is never in proxy code.
 
 The mTLS client **fingerprint** is a SHA-256 of the peer certificate DER computed
 *through the module* (`cert_fingerprint`, cfg-selected to aws-lc-rs in the FIPS
-build), so even that incidental hash stays inside the boundary — no non-validated
+build), so even that incidental hash stays inside the boundary, no non-validated
 crypto is linked into a FIPS artifact (enforced by the mutually-exclusive build
 features, ADR-009).
 

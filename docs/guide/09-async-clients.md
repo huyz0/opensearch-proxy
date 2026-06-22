@@ -14,7 +14,7 @@ for the contract; this page is for client authors.
 | Status | `200`/`201` | `202` (accepted), `422` (no queue), `503` (enqueue failed) |
 | Body | OpenSearch result (`_version`, `result`, `_shards`) | `{ "op_id", "status", "result":"queued", "_index" }` |
 | Meaning of success | Applied and queryable | **Durably enqueued, not yet applied** |
-| Read-after-write | Guaranteed | **Not** guaranteed — the doc is queryable only once the downstream applies it |
+| Read-after-write | Guaranteed | **Not** guaranteed, the doc is queryable only once the downstream applies it |
 | Errors from apply | In the response | Out-of-band, via the downstream's own channel (the proxy has no status endpoint) |
 
 Unsupported in async mode (rejected with `400`): optimistic concurrency
@@ -31,7 +31,7 @@ a match set over the cap is refused rather than partially deleted.
 ## Selecting async
 
 Per request, send `X-Write-Mode: async` (or `sync` to override a deployment whose
-baseline is async). Optionally send `X-Op-Id: <key>` — a stable idempotency key
+baseline is async). Optionally send `X-Op-Id: <key>`, a stable idempotency key
 (≤128 bytes, `A-Za-z0-9-_.:`). Reuse the same `X-Op-Id` on a retry and the
 downstream applier collapses the duplicate; omit it and the proxy mints one and
 echoes it in the `202`.
@@ -69,6 +69,6 @@ In both cases the rule is the same: **do not read `op_id` as an
 ## Learning the outcome
 
 The proxy does not track outcomes. If you need to know whether an op applied (or
-hit a conflict at a destination), consume the downstream's outcome channel —
-keyed by your `op_id` — and react there (retry, alert, reconcile). Treat `op_id`
+hit a conflict at a destination), consume the downstream's outcome channel,
+keyed by your `op_id`, and react there (retry, alert, reconcile). Treat `op_id`
 as the join key between the `202` you received and any later outcome event.

@@ -1,4 +1,4 @@
-# 10 — Design & Code Review Process
+# 10: Design & Code Review Process
 
 The review process exists to keep the codebase coherent as it is built largely
 by an LLM, and to keep humans out of the debugging loop by catching

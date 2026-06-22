@@ -1,4 +1,4 @@
-# ADR-012 — Proxy modes: dynamism rationed by blast radius; isolation is routing, not a switch
+# ADR-012: Proxy modes: dynamism rationed by blast radius; isolation is routing, not a switch
 
 **Status:** Accepted
 
@@ -6,7 +6,7 @@
 
 osproxy accumulated several independent "modes": tenanted vs tenant-agnostic,
 sync vs async writes, capture on/off, FIPS or not. A natural pull is to make all
-of them maximally dynamic and runtime-configurable — "one proxy that can be
+of them maximally dynamic and runtime-configurable, "one proxy that can be
 anything, flipped live." That pull is dangerous, because the modes do not carry
 equal risk: some change operational behavior, others change a security or
 correctness invariant. Treating them uniformly would put a fleet-wide,
@@ -14,8 +14,8 @@ silently-wrong kill switch next to a harmless tuning knob.
 
 In particular, "serve tenanted and tenant-agnostic traffic from one proxy" (the
 migration shape) could be built as a global `passthrough = on/off` bit. A single
-mutable bit that disables tenant isolation fleet-wide — wrong value silently leaks
-cross-tenant data, irreversibly — is the worst possible design.
+mutable bit that disables tenant isolation fleet-wide, wrong value silently leaks
+cross-tenant data, irreversibly, is the worst possible design.
 
 ## Decision
 
@@ -31,8 +31,8 @@ behavior? (2) is a wrong setting loud or silent? (3) is it cheaply reversible?
 - **Tenant isolation → a per-request, fail-closed routing decision, never a
   global mutable bit.** Tenant-agnostic passthrough is selected per request by an
   **operator-configured logical-index prefix list** (`passthrough_indices`); a
-  non-match keeps full tenancy. The decision is keyed on operator config only —
-  never a client header — so a client cannot opt itself out of isolation, and the
+  non-match keeps full tenancy. The decision is keyed on operator config only,
+  never a client header, so a client cannot opt itself out of isolation, and the
   safe direction (more isolation) is the default for anything unmatched. An empty
   list means whole-instance passthrough (a deliberate transparent-proxy config),
   not an accident.
@@ -40,7 +40,7 @@ behavior? (2) is a wrong setting loud or silent? (3) is it cheaply reversible?
 
 The unifying rule: **composability lives in one per-request decision that is a
 pure function of (request, operator config / current placement+directive state)**,
-pushed behind the seams that already enforce fail-closed + epoch + signing — not a
+pushed behind the seams that already enforce fail-closed + epoch + signing, not a
 pile of independent global mutable mode flags.
 
 ## Why
@@ -49,7 +49,7 @@ pile of independent global mutable mode flags.
   routing outcome means a typo under-exposes (more isolation), never over-exposes.
 - The migration use case ("legacy index passes through, onboarded indices are
   tenanted, same instance") needs *per-request routing*, which the pipeline
-  already does — not a new global mode. It composes with epoch-gated migration
+  already does, not a new global mode. It composes with epoch-gated migration
   (ADR-003) for free.
 - Per-request async keeps the proxy honest: it never silently changes a client's
   consistency guarantees.

@@ -53,7 +53,7 @@ struct MyTenancy;
 impl TenancySpi for MyTenancy {
     /// Resolve the partition (tenant) id. Here we defer to the declarative
     /// resolver, naming a body field `tenant_id`. (Override the body to decode an
-    /// encoded header or combine inputs — see "Deriving the partition with code".)
+    /// encoded header or combine inputs, see "Deriving the partition with code".)
     fn resolve_partition(&self, ctx: &RequestCtx<'_>, body: BodyDoc<'_>)
         -> Result<PartitionId, SpiError>
     {
@@ -142,9 +142,9 @@ attempted:
 When the id is not sitting in a header verbatim (a signed token, a base64 blob, a
 claim inside a structured header), write the `resolve_partition` body yourself.
 You get the full `RequestCtx` (headers, principal, path, query, body) and the
-body as a `BodyDoc` — a byte-scan view, **not** a parsed `serde_json::Value` tree
+body as a `BodyDoc`, a byte-scan view, **not** a parsed `serde_json::Value` tree
 (read a scalar with `body.scalar(path)`; the proxy never materializes the doc,
-ADR-014). **You** pick the order — decode first, then fall back to the
+ADR-014). **You** pick the order, decode first, then fall back to the
 declarative resolver if you like:
 
 ```rust

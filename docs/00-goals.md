@@ -1,22 +1,22 @@
-# 00 — Project Goals, Scope, and Success Criteria
+# 00: Project Goals, Scope, and Success Criteria
 
 ## 1. One-sentence goal
 
 Build a high-performance, low-resource, low-latency OpenSearch routing proxy,
 consumable as a Rust library, that routes each request to the correct physical
-placement based on a pluggable partition-based placement policy — with
+placement based on a pluggable partition-based placement policy, with
 first-class observability designed for LLM-driven debugging and a FIPS-capable
 crypto build.
 
 ## 2. Primary use cases
 
-1. **Logical index / tenancy** — clients address *logical* indices; the proxy
+1. **Logical index / tenancy**, clients address *logical* indices; the proxy
    resolves the *physical* cluster + index from a partition key, injecting
    partition fields and constructing document ids on write and reversing both on
    read.
-2. **Interception** — profiling, telemetry, and auth applied uniformly to all
+2. **Interception**, profiling, telemetry, and auth applied uniformly to all
    OpenSearch traffic at the proxy boundary.
-3. **Operational agility** — partitions can be migrated between placements with
+3. **Operational agility**, partitions can be migrated between placements with
    the proxy guaranteeing write correctness across the cutover.
 
 ## 3. In scope
@@ -43,7 +43,7 @@ crypto build.
 |----------|---------------------|
 | Synchronous fan-out / scatter-gather **search** | Search is always single-cluster. A partition lives in one place. |
 | Cross-cluster result merge, agg merge, cross-cluster scoring | Eliminated by single-target search. |
-| Synchronous dual/triple-write redundancy | Excluded; redundancy is instead **async** — the fan-out write mode (ADR-010, docs/04 §9) durably enqueues a write to Kafka behind the `WriteQueue` seam and a downstream component applies it to 1..N destinations. Honest `202`/`op_id`, never a synchronous fan-out. |
+| Synchronous dual/triple-write redundancy | Excluded; redundancy is instead **async**, the fan-out write mode (ADR-010, docs/04 §9) durably enqueues a write to Kafka behind the `WriteQueue` seam and a downstream component applies it to 1..N destinations. Honest `202`/`op_id`, never a synchronous fan-out. |
 | Copying partition data during migration | External reindex/snapshot tooling does the copy; the proxy only gates the routing flip. |
 | Dynamic plugin loading (WASM/dylib) | SPI is compiled in statically. |
 | The proxy mutating cluster state via AI | Observability is **read-only**; the AI observes, humans/automation act. |

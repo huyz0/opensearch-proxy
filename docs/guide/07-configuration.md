@@ -24,7 +24,7 @@ The canonical key is `snake_case`; the env var is `OSPROXY_` + the upper-cased k
 **Optional file sections.** In the config file you may group keys under a
 `[section]` header purely for readability: inside it a bare key is read as
 `{section}_{key}`, so under `[capture]` you can write `kafka_brokers` instead of
-`capture_kafka_brokers`. It is only sugar — the canonical key (and therefore the
+`capture_kafka_brokers`. It is only sugar, the canonical key (and therefore the
 env var and flag) is unchanged, a fully-qualified key still works inside a section,
 and `[]` returns to the top level. A file with no headers behaves exactly as before.
 
@@ -74,7 +74,7 @@ topic         = osproxy.capture
 | `debug_directive_key` | *(unset)* | Shared HMAC key that verifies signed `X-Debug-Directive` headers. Unset ⇒ that channel rejects everything. |
 | `directive_admin_token` | *(unset → disabled)* | Bearer token gating `POST`/`GET /admin/directives`. Unset ⇒ the endpoint reports `not_enabled`. |
 | `debug_endpoints` | `true` | Whether the pre-auth `/debug/explain` and `/debug/breakglass` surfaces are served. **Set `false` in production** so operational metadata is not exposed unauthenticated. `/metrics` stays on regardless. |
-| `log_diagnostic_captures` | `false` | Push directive-selected break-glass captures off-instance as tagged JSON lines (`"kind":"diagnostic_capture"`, keyed by `trace_id`) so a fleet aggregator can serve them — the fleet-coherent counterpart of the local `/debug/breakglass` ring (`docs/05` §5). Only requests a `ring_buffer`/`capture` directive selects are emitted. |
+| `log_diagnostic_captures` | `false` | Push directive-selected break-glass captures off-instance as tagged JSON lines (`"kind":"diagnostic_capture"`, keyed by `trace_id`) so a fleet aggregator can serve them, the fleet-coherent counterpart of the local `/debug/breakglass` ring (`docs/05` §5). Only requests a `ring_buffer`/`capture` directive selects are emitted. |
 
 ### Control plane & routing
 
@@ -103,7 +103,7 @@ no-op.
 The sink (where captured traffic goes) and the switch (when to capture) are
 separate. The keys below wire the **sink**; capture stays off until the switch is
 on, which is either `capture_default = true` or a published `capture` directive
-(see [Observability](08-observability.md) — capture is on demand through the same
+(see [Observability](08-observability.md), capture is on demand through the same
 control store as diagnostics, so you flip it fleet-wide with no restart).
 
 | Key (`OSPROXY_…`) | Default | Description |
@@ -123,7 +123,7 @@ control store as diagnostics, so you flip it fleet-wide with no restart).
 
 Two delivery tiers: without `capture_wal_dir`, delivery is bounded in-memory
 best-effort (a broker outage past the buffer drops records, and a restart loses
-the buffer). With it, delivery is durable at-least-once — records survive a
+the buffer). With it, delivery is durable at-least-once, records survive a
 restart and replay until acknowledged, so the consumer dedupes on the request id
 the envelope carries. Durability is group-commit: a hard power loss can lose the
 last sub-second of appended-but-undelivered records; a graceful restart loses
@@ -137,7 +137,7 @@ fans the topic out to one or more OpenSearch destinations (see
 [request pipeline §9](../04-request-pipeline.md#9-asynchronous-fan-out-write-mode)
 and [async clients](09-async-clients.md)). Like capture, these keys need a binary
 built with the `fanout` feature; setting them without it is a loud startup
-error. Independent of capture — a proxy can run either, both, or neither.
+error. Independent of capture, a proxy can run either, both, or neither.
 
 | Key (`OSPROXY_…`) | Default | Description |
 |-------------------|---------|-------------|
@@ -151,7 +151,7 @@ error. Independent of capture — a proxy can run either, both, or neither.
 | `fanout_kafka_client_key` | *(unset)* | Client private key PEM for broker mTLS. |
 
 The producer is **broker-acknowledged**: the `202` is returned only once the op
-is acked, never fire-and-forget. The proxy hosts no status surface — whether and
+is acked, never fire-and-forget. The proxy hosts no status surface, whether and
 how a failed apply is reported is the downstream applier's responsibility.
 
 ## Worked examples

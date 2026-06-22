@@ -1,4 +1,4 @@
-# ADR-002 — No synchronous fan-out; single-target search
+# ADR-002: No synchronous fan-out; single-target search
 
 **Status:** Accepted
 
@@ -22,7 +22,7 @@ partition is never split across placements.
 ## Why
 
 - Deletes the entire scatter-gather/merge engine, cross-cluster scoring, and
-  agg-merge correctness problems — enormous scope and correctness reduction.
+  agg-merge correctness problems, enormous scope and correctness reduction.
 - Makes single-cluster search well-defined: it requires that a partition lives in
   one place (ADR-003 preserves this across migration).
 - OpenSearch CCS exists for genuine cross-cluster needs; out of scope here.

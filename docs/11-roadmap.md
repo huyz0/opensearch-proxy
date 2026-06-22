@@ -1,4 +1,4 @@
-# 11 — Delivery History & Status
+# 11: Delivery History & Status
 
 The project was built as thin vertical slices: each milestone shippable, tested to
 the docs/09 bar, and exercising real architectural seams rather than horizontal
@@ -18,7 +18,7 @@ delivery, not a forward plan.
 > - **Async fan-out write mode** (ADR-010, docs/04 §9): per-request `X-Write-Mode`,
 >   honest `202`/`op_id`, protobuf+CBOR op envelope, Kafka queue behind the
 >   `WriteQueue` seam (`fanout` feature). This *is* the queue-based redundancy that
->   was a non-goal — delivered as durable async enqueue, not synchronous dual-write.
+>   was a non-goal, delivered as durable async enqueue, not synchronous dual-write.
 > - **Tenant-agnostic passthrough** (docs/04 §10), per-request by logical-index
 >   prefix so one instance serves tenanted and legacy/agnostic traffic at once.
 > - **Traffic capture** (docs/guide/08): full-fidelity tee to Kafka behind the
@@ -27,14 +27,14 @@ delivery, not a forward plan.
 >   OpenSearch (`_search/point_in_time`, `pit_id`), verified against a real cluster.
 > - **Reference distributed directive store over etcd** (ADR-013, `osproxy-etcd`,
 >   `etcd` feature): watch-and-cache `DirectiveStore` so directive flips reach a
->   fleet with no restart — the seam proven, not the infra mandated.
+>   fleet with no restart, the seam proven, not the infra mandated.
 > - **Fleet-coherent diagnostic sink** (docs/05 §5): directive-selected break-glass
 >   captures pushed off-instance keyed by `trace_id`, so an aggregator can serve
 >   them across a fleet (`DiagnosticSink` seam + stdout reference).
 > - **Modes-UX pass**: SPI collapsed to one `resolve_partition`; `capture`/`fanout`
 >   features split; optional `[section]` config grouping; docs/guide/10 mode map.
 
-## M0 — Workspace & guardrails (foundation)
+## M0: Workspace & guardrails (foundation)
 
 - Workspace + empty crates per docs/01 §2; strict dependency graph wired and
   enforced.
@@ -45,7 +45,7 @@ delivery, not a forward plan.
 - **Exit**: empty pipeline compiles; CI gates active; a trivial PR must pass all
   gates.
 
-## M1 — First vertical slice: single-doc ingest
+## M1: First vertical slice: single-doc ingest
 
 The spine. Smallest path that touches every seam **except** bulk demux and query
 rewrite.
@@ -65,17 +65,17 @@ rewrite.
   symmetry property test (write side) passes; blind-diagnosis passes for
   partition-unresolved + placement-missing + upstream-timeout.
 
-## M2 — Read path & symmetry
+## M2: Read path & symmetry
 
 - Query rewrite (partition filter wrapping) + response field strip (docs/04 §4).
 - Get/delete/update by id with logical→physical id mapping.
-- Full **round-trip symmetry** property test (write+read) green — the headline
+- Full **round-trip symmetry** property test (write+read) green, the headline
   correctness property.
 - Isolation property + adversarial bypass tests (docs/09 §2.7).
 - **Exit**: `_search`, `_count`, `GET/_doc/{id}` symmetric and isolated; endpoint
   matrix subset proven.
 
-## M3 — Bulk demux
+## M3: Bulk demux
 
 - Streaming NDJSON parse, per-doc resolve (with per-request placement cache),
   demux by target, concurrent dispatch, re-interleave `items[]` (docs/04 §3).
@@ -85,7 +85,7 @@ rewrite.
 - **Exit**: mixed-partition bulk routes correctly; memory bounded on large bulk;
   partial failures positioned correctly.
 
-## M4 — Protocols & pooling completeness
+## M4: Protocols & pooling completeness
 
 - HTTP/2 + gRPC ingress; per-request upstream protocol selection.
 - Sharded per-cluster upstream pools; TLS session reuse; downstream keep-alive;
@@ -93,28 +93,28 @@ rewrite.
 - Performance harness + baselines for NFR-P; alloc profiling.
 - **Exit**: NFR-P targets calibrated and met; pool reuse rates verified.
 
-## M5 — Migration & affinity
+## M5: Migration & affinity
 
 - Epoch-gated migration state machine + control-plane state transitions (docs/06).
 - Migration simulation tests (INV-M1..M4).
 - Scroll/PIT affinity pinning (docs/03 §6).
 - **Exit**: migration correctness invariants green under interleaving simulation.
 
-## M6 — FIPS hardening & compliance
+## M6: FIPS hardening & compliance
 
 - FIPS build as release default; suite pinning; boundary doc complete.
-- **Verify live CMVP cert + platform** (docs/07 §5) — release blocker.
+- **Verify live CMVP cert + platform** (docs/07 §5), release blocker.
 - **Exit**: release artifacts FIPS-built; boundary doc signed off.
 
-## M7 — Fleet observability & control plane
+## M7: Fleet observability & control plane
 
 - **The proxy is store-agnostic.** A specific control store is never *mandated*;
-  it is the operator's backend, bound through the existing seams —
+  it is the operator's backend, bound through the existing seams,
   `TenancySpi`/placement lookup for reads, `MigrationStore` (`osproxy-control`) for
   migration transitions, `DirectiveStore` (`osproxy-observe`) for directives. The
   proxy provides the seams, the fleet-safe protocol (poll-fresh + drain barrier,
   `docs/06` §3a), an in-memory reference impl, and an **opt-in reference etcd
-  binding for the directive plane** (ADR-013). So M7 was *not* "implement etcd" — it
+  binding for the directive plane** (ADR-013). So M7 was *not* "implement etcd", it
   is fleet-wide directive propagation, TTL expiry, and the observability below, on
   top of seams that already exist (with etcd as one shipped reference, not a core
   dependency).
@@ -124,18 +124,18 @@ rewrite.
 
 ## Intentionally out of scope (behind existing seams)
 
-These are not gaps — they are deliberate boundaries. The seams exist; the
+These are not gaps, they are deliberate boundaries. The seams exist; the
 implementations are operator infrastructure or excluded by an ADR.
 
-- **Synchronous fan-out / quorum writes** — excluded (ADR-002). The dual/triple-write
+- **Synchronous fan-out / quorum writes**, excluded (ADR-002). The dual/triple-write
   intent is served instead by the **async fan-out write mode** (ADR-010, docs/04 §9):
   writes durably enqueued behind the `WriteQueue` seam, fanned out downstream as
   honest async enqueue (`202`/`op_id`).
 - **Concrete distributed control stores beyond the etcd reference** (Consul/Redis/
-  OS-index, and a `MigrationStore` binding) — operator-provided behind the
+  OS-index, and a `MigrationStore` binding), operator-provided behind the
   `DirectiveStore`/`MigrationStore` seams. A reference etcd directive binding ships
   (ADR-013); migration-over-etcd awaits an async + fallible `MigrationStore` seam.
-- **The external aggregator and AI agent** that consume the diagnostic plane — out
+- **The external aggregator and AI agent** that consume the diagnostic plane, out
   of scope by design (docs/05); the proxy ships the emission seams, not the consumer.
 - Richer admin tooling and `capture`/`fanout` packaging refinements.
 

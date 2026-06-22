@@ -1,4 +1,4 @@
-# 03 — Tenancy & Placement Model
+# 03: Tenancy & Placement Model
 
 ## 1. The partition: the central concept
 
@@ -22,7 +22,7 @@ routes by partition id. Invariants:
 The injected field name(s) in `SharedIndex` are decided by the SPI
 (`injected_fields()`), per the original requirement.
 
-## 3. Placement table — mutable operational state
+## 3. Placement table: mutable operational state
 
 Placement is **not** a pure function of the partition id. It is a mutable,
 versioned table:
@@ -40,7 +40,7 @@ PlacementEntry {
 ```
 
 - Owned by `osproxy-control`, distributed to every proxy instance through a
-  watched store (etcd/Consul/Redis/an OpenSearch index — pluggable backend).
+  watched store (etcd/Consul/Redis/an OpenSearch index, pluggable backend).
 - The **SPI provides the rules; the table provides the current mapping.** This
   split (docs/02) is what lets migration tooling edit placement without touching
   SPI code.
@@ -81,7 +81,7 @@ or override**:
 
 **Stated guarantee level:** isolation is a *security boundary* for the supported
 endpoint set, and *not offered at all* (request rejected) for unsupported
-endpoints. There is no "best effort" middle ground — a request is either
+endpoints. There is no "best effort" middle ground, a request is either
 provably filtered or rejected. This is recorded as a decision so reviewers know
 the bar. See [10](10-review-process.md).
 

@@ -1,6 +1,6 @@
 # Choosing a mode
 
-osproxy has a handful of independent "modes" — tenanted vs tenant-agnostic, sync
+osproxy has a handful of independent "modes", tenanted vs tenant-agnostic, sync
 vs async writes, capture on/off, FIPS or not. The thing to internalize first is
 that **each one is selected at a different layer**: some are a build flag, some
 are a startup config key, some are a per-request header, and one (capture) is a
@@ -16,7 +16,7 @@ This page is the map. Each section links to the page with the full story.
 | **Tenanted vs tenant-agnostic** | Implement `TenancySpi` (code) → tenanted; `passthrough_cluster` + `passthrough_indices` (config) → agnostic, whole-instance or per-index | compile + startup | Tenanted (you must provide a tenancy) |
 | **Sync vs async writes** | `fanout` feature (build) + `fanout_*` (config baseline) + `X-Write-Mode` (per request) | compile + startup + per-request | Sync |
 | **Capture on/off** | `capture` feature (build) + `capture_*` (config) + `capture` diagnostics directive (runtime) | compile + startup + **runtime** | Off |
-| **FIPS crypto** | `--no-default-features --features fips` (build) — a separate artifact | compile | Non-FIPS (`ring`) |
+| **FIPS crypto** | `--no-default-features --features fips` (build), a separate artifact | compile | Non-FIPS (`ring`) |
 
 Two rules of thumb fall out of this table:
 
@@ -24,7 +24,7 @@ Two rules of thumb fall out of this table:
   needs the `fanout` feature and capture needs the `capture` feature, each linking
   only the broker crates it uses (or `--features kafka` for both). A binary built
   without the relevant feature treats a configured `fanout_*`/`capture_*` as a
-  *loud startup error*, never a silent no-op — so you find out at boot, not in
+  *loud startup error*, never a silent no-op, so you find out at boot, not in
   production.
 - **Tenanted is code; agnostic is config.** Going tenant-agnostic is a config key.
   Going tenanted means implementing `TenancySpi` and compiling it into your own
@@ -38,7 +38,7 @@ resolves a partition and a placement, and the body/query are rewritten so a tena
 sees only its own data. You get this by implementing [`TenancySpi`](05-spi-guide.md).
 
 Tenant-agnostic (passthrough) forwards a request verbatim to one cluster with no
-rewrite — a transparent / capture / migration proxy. Set `passthrough_cluster` +
+rewrite, a transparent / capture / migration proxy. Set `passthrough_cluster` +
 `passthrough_endpoint`.
 
 **One proxy can do both at once.** Add `passthrough_indices` (a comma-separated
@@ -46,7 +46,7 @@ list of logical-index prefixes) and *only* those indices pass through verbatim,
 while every other index stays fully tenanted. This is the migration shape: a
 not-yet-onboarded legacy index flows through untouched while onboarded indices are
 isolated, on the same instance. It is **fail-closed** (a non-match keeps tenancy)
-and keyed on the operator's index list only — never a client header — so a client
+and keyed on the operator's index list only, never a client header, so a client
 cannot opt itself out of isolation. See [Overview → Tenant-agnostic mode](01-overview.md#tenant-agnostic-mode).
 
 ```ini
@@ -65,7 +65,7 @@ downstream component applies it. Async needs the `fanout` feature built in and
 
 The key design choice: **async is negotiated per request** with `X-Write-Mode:
 async|sync` over a deployment baseline (`fanout_async_default`). That is the right
-granularity — async changes the consistency contract (no read-after-write), so a
+granularity, async changes the consistency contract (no read-after-write), so a
 client opts in rather than having it flipped on underneath it. See
 [Async Fan-out Clients](09-async-clients.md).
 
@@ -74,7 +74,7 @@ client opts in rather than having it flipped on underneath it. See
 Capture tees a full-fidelity copy of each exchange to a stream for replay. It is
 the most dynamic axis on purpose: built in with the `capture` feature, pointed at a
 topic with `capture_*`, and then **turned on at runtime, fleet-wide, with no
-restart** via a `capture` diagnostics directive — targeted by tenant/index, sampled,
+restart** via a `capture` diagnostics directive, targeted by tenant/index, sampled,
 and TTL'd. It is observability, not a correctness boundary, so it is safe to flip
 live; the default is off and the stream is redacted. See
 [Observability](08-observability.md).
@@ -91,6 +91,6 @@ Deliberately, the dynamism of each axis is rationed by its blast radius. Capture
 fully runtime-dynamic because a wrong setting is bounded and fail-safe. Async is
 per-request because flipping it fleet-wide would silently change clients'
 consistency guarantees. Tenant isolation is a per-request, fail-closed *routing*
-decision — never a global mutable "isolation off" bit, because a wrong value there
+decision, never a global mutable "isolation off" bit, because a wrong value there
 leaks data silently and irreversibly. Composability lives in one per-request
 decision over operator config, not a pile of global mode flags.

@@ -1,6 +1,6 @@
 # OpenSearch Endpoint Matrix (supported handling)
 
-> Status: **implemented** — the classes below are live in `osproxy-transport`'s
+> Status: **implemented**, the classes below are live in `osproxy-transport`'s
 > classifier and `osproxy-engine`'s dispatch. Remaining to-do is version-pinning
 > the exact request/response shapes against a specific OpenSearch release
 > (`[PIN: e.g. 2.x / 3.x]`); the handling classes themselves are stable.
@@ -42,17 +42,17 @@ See docs/02 §5 for the class definitions. Default for unmatched: **reject**
 | index create/mapping/settings | Admin | policy-dependent | usually operator-only |
 | anything else | Unknown | reject (default) / pass-through (configured) | |
 
-### Note — ambiguous multi-index / cross-index search
+### Note: ambiguous multi-index / cross-index search
 
 A search that does not resolve to a single partition (e.g. a wildcard across
 partitions) cannot be served single-target and is **rejected** with
-`SpiError::UnsupportedEndpoint` / a typed ambiguity error — consistent with the
+`SpiError::UnsupportedEndpoint` / a typed ambiguity error, consistent with the
 no-fan-out decision (docs/00 §non-goals). The operator may define explicit logical
 indices that map to a single placement to support such patterns.
 
 ## To verify per row (M1+)
 
 - Exact request/response shapes from the pinned OpenSearch version.
-- Whether the endpoint accepts `_routing`, `_source` filtering, stored fields —
+- Whether the endpoint accepts `_routing`, `_source` filtering, stored fields,
   affects strip logic.
 - Bulk action-line grammar edge cases.

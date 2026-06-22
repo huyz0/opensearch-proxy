@@ -2,7 +2,7 @@
 
 This folder holds the **authoritative external references** the design depends
 on, plus our own derived spec tables. The point is that the design is
-self-contained — an implementer (human or LLM) does not need to go find these
+self-contained, an implementer (human or LLM) does not need to go find these
 elsewhere, and we pin versions so behavior does not drift under us.
 
 | File | What it is |

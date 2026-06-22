@@ -1,4 +1,4 @@
-# ADR-003 — Epoch-gated partition migration, no in-path dual-write
+# ADR-003: Epoch-gated partition migration, no in-path dual-write
 
 **Status:** Accepted
 
@@ -22,9 +22,9 @@ No in-synchronous-path dual-write.
 ## Why
 
 - In-path dual-write would replicate the exact mechanism deliberately deferred to
-  the queue-based redundancy mode (ADR-008) — avoid building it twice.
+  the queue-based redundancy mode (ADR-008), avoid building it twice.
 - Epoch gating reduces correctness to a single invariant: *no write commits
-  against a stale epoch for a migrating partition* — small, testable (INV-M1..M4).
+  against a stale epoch for a migrating partition*, small, testable (INV-M1..M4).
 - Preserves ADR-002's "one partition, one place at any instant."
 
 ## Consequences
@@ -32,5 +32,5 @@ No in-synchronous-path dual-write.
 - Brief retryable write rejection at cutover (clients/SDKs retry; surfaced as a
   normal observable event, not an outage).
 - Migration tooling drives state transitions via the control-plane API
-  (operator/automation, not AI — ADR-005).
+  (operator/automation, not AI, ADR-005).
 - Requires a versioned (generation-stamped) placement table (docs/03).

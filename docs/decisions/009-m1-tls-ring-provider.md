@@ -1,4 +1,4 @@
-# ADR-009 — M1 TLS uses the `ring` provider; aws-lc-rs/FIPS at M6 behind the seam
+# ADR-009: M1 TLS uses the `ring` provider; aws-lc-rs/FIPS at M6 behind the seam
 
 **Status:** Accepted
 
@@ -22,7 +22,7 @@ configuration; no request-path or transport code changes when it is swapped in.
 
 - Keeps local builds and CI green with no native toolchain dependency.
 - The `CryptoProvider` seam is exactly the abstraction that makes the provider a
-  swap, not a rewrite — so deferring aws-lc-rs costs nothing structurally.
+  swap, not a rewrite, so deferring aws-lc-rs costs nothing structurally.
 - Aligns with the roadmap: FIPS hardening (live CMVP cert + platform validation)
   is an M6 release blocker, not an M1 concern.
 

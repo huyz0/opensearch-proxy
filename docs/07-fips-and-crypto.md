@@ -1,4 +1,4 @@
-# 07 — FIPS & Crypto
+# 07: FIPS & Crypto
 
 ## 1. Decision
 
@@ -21,7 +21,7 @@ proxy. Our compliance obligations:
    [docs/specs/fips-boundary.md](specs/fips-boundary.md).
 2. **Platform/tested configuration.** FIPS validation is specific to "tested
    configurations" (OS/arch). We must deploy on a configuration on the
-   certificate's list. Target: standard Linux x86_64 / aarch64 — **must be
+   certificate's list. Target: standard Linux x86_64 / aarch64, **must be
    verified against the live cert before release** (action item, docs/11).
 3. **Cipher suite / version pinning.** The module being validated does not stop
    rustls from negotiating a non-approved suite. The FIPS `CryptoProvider`

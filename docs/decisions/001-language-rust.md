@@ -1,4 +1,4 @@
-# ADR-001 — Language: Rust
+# ADR-001: Language: Rust
 
 **Status:** Accepted
 
@@ -10,9 +10,9 @@ with Go acceptable only if FIPS had no good Rust option.
 
 ## Options
 
-- **Rust** — low footprint, no GC pauses, strong type system for typed errors;
+- **Rust**, low footprint, no GC pauses, strong type system for typed errors;
   FIPS path via aws-lc-rs.
-- **Go** — mature FIPS story (BoringCrypto / Go 1.24 FIPS), institutional
+- **Go**, mature FIPS story (BoringCrypto / Go 1.24 FIPS), institutional
   familiarity; GC pauses, larger footprint, weaker compile-time error typing.
 
 ## Decision
@@ -31,6 +31,6 @@ performance and "every failure is a typed, contextual error" requirements.
 
 ## Consequences
 
-- Crypto module build complexity (C toolchain for aws-lc-rs FIPS) — accepted,
+- Crypto module build complexity (C toolchain for aws-lc-rs FIPS), accepted,
   pinned in CI (docs/07).
 - Team must be comfortable in Rust for an LLM-driven build with high quality bars.

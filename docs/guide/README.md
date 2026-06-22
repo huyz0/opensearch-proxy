@@ -21,7 +21,7 @@ If you are new, read [Overview](01-overview.md), then go straight to
 | 7 | [Configuration](07-configuration.md) | Every setting, its env var, default, and meaning. |
 | 8 | [Observability & Control Plane](08-observability.md) | Tracing, `/debug/explain`, break-glass, runtime directives, OTLP, metrics, and the LLM debugging model. |
 | 9 | [Async Fan-out Clients](09-async-clients.md) | The `202`/`op_id` async write mode, mode negotiation, and how an OpenSearch client (e.g. Java) handles it. |
-| 10 | [Choosing a Mode](10-choosing-a-mode.md) | Tenanted vs agnostic, sync vs async, capture, FIPS — which layer each knob lives at (build / config / per-request / runtime). |
+| 10 | [Choosing a Mode](10-choosing-a-mode.md) | Tenanted vs agnostic, sync vs async, capture, FIPS, which layer each knob lives at (build / config / per-request / runtime). |
 | 11 | [Performance](11-performance.md) | Measured throughput/latency by payload × connections × write mode, hot-path timing, multicore scaling, and the local + CI test environments. |
 
 ## At a glance

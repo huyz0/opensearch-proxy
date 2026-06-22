@@ -93,12 +93,12 @@ resolution, no body rewrite, and no isolation. On its own that is a plain revers
 with osproxy's auth, TLS, pooling, and observability.
 
 **One proxy, both modes.** Add `passthrough_indices` (a comma-separated list of
-logical-index prefixes) and *only* those indices pass through verbatim — every other
+logical-index prefixes) and *only* those indices pass through verbatim. Every other
 index stays fully tenant-isolated. This is the migration shape: a not-yet-onboarded
 (legacy) index flows through untouched while the indices you have onboarded are
 tenanted, on the same instance, with no second deployment. The match is per request,
 **fail-closed** (an index that does not match keeps tenancy), and keyed on the
-operator-configured index list only — never a client header — so a client cannot opt
+operator-configured index list only, never a client header, so a client cannot opt
 itself out of isolation.
 
 Pair it with the `Capture` seam and you get a capture proxy in the style of the

@@ -1,4 +1,4 @@
-# ADR-004 — FIPS via rustls + aws-lc-rs, crypto behind a trait
+# ADR-004: FIPS via rustls + aws-lc-rs, crypto behind a trait
 
 **Status:** Accepted (with a live-verification release blocker)
 
@@ -28,7 +28,7 @@ FIPS.
 
 1. Pin the validated AWS-LC-FIPS version (cert-listed); upgrades are compliance
    events, not routine.
-2. Deploy only on a CMVP "tested configuration" platform — **verify live**.
+2. Deploy only on a CMVP "tested configuration" platform, **verify live**.
 3. Offer only approved TLS versions/suites (config layer, not the module).
 4. Pinned, reproducible FIPS build toolchain.
 

@@ -1,4 +1,4 @@
-# ADR-007 — SPI compiled in statically; no dynamic plugins
+# ADR-007: SPI compiled in statically; no dynamic plugins
 
 **Status:** Accepted
 

@@ -1,4 +1,4 @@
-# ADR-008 — Write `Sink` trait; queue-based redundancy deferred behind it
+# ADR-008: Write `Sink` trait; queue-based redundancy deferred behind it
 
 **Status:** Accepted
 
@@ -6,7 +6,7 @@
 
 The user wants future dual/triple-write redundancy, but explicitly as a
 **pull-based** design: the proxy writes to a queue (Kafka) and separate
-pull-ingesters replicate into 1..N OpenSearch targets — not synchronous multi-write
+pull-ingesters replicate into 1..N OpenSearch targets, not synchronous multi-write
 in the proxy.
 
 ## Decision
@@ -19,7 +19,7 @@ core does not change when redundancy is added.
 ## Why
 
 - Keeps the synchronous path simple and single-target (ADR-002, ADR-003).
-- Isolates "where writes go" from "how routing is decided" — a clean seam so
+- Isolates "where writes go" from "how routing is decided", a clean seam so
   redundancy is additive, not a core rewrite.
 - Matches the user's pull-based redundancy intent (ingesters own replication).
 
@@ -29,4 +29,4 @@ core does not change when redundancy is added.
   general enough for both a synchronous OpenSearch write and an async enqueue.
 - Epoch stamping (ADR-003) lives at the `Sink` boundary so both sinks enforce it.
 - Redundancy concerns (replica count, ordering, idempotency) are the ingester's,
-  not the proxy's — documented when that mode is built.
+  not the proxy's, documented when that mode is built.

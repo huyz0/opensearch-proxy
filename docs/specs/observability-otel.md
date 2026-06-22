@@ -1,6 +1,6 @@
 # OpenTelemetry Conventions
 
-> Status: skeleton — target OTel semantic-conventions version: `[PIN]`.
+> Status: skeleton, target OTel semantic-conventions version: `[PIN]`.
 
 How the proxy exports traces/logs so any OTel-aware tooling (and an LLM with an
 OTel query tool) can consume them. The schema is defined in docs/05; this file
@@ -12,7 +12,7 @@ pins the wire conventions.
   the collector's `/v1/traces`. The span id is the proxy hop's W3C span id, so
   upstream spans nest under it; when the request continued an inbound trace the
   span carries `parentSpanId` (the caller's span), so the proxy nests under the
-  client too — a minted root omits it. Attributes are the shape-only stage data.
+  client too, a minted root omits it. Attributes are the shape-only stage data.
 - **Off by default, near-zero cost when off.** The exporter is wired only when
   `OSPROXY_OTLP_ENDPOINT` (collector base URL) is set; `OSPROXY_SERVICE_NAME`
   sets `service.name`. With no exporter the pipeline skips encoding entirely
@@ -21,17 +21,17 @@ pins the wire conventions.
   `DiagLevel` (pipeline baseline raised by any matching directive, docs/05 §3)
   reaches `Shape`. The baseline defaults to `Shape`, so a configured exporter
   exports every request; lowering the baseline to `Off` makes export purely
-  directive-driven — targeted, sampled, TTL-bounded.
+  directive-driven, targeted, sampled, TTL-bounded.
 - **Never on the request's critical path.** `osproxy-otlp`'s `OtlpHttpExporter`
-  hands off to a background task and ignores the result — a slow or down
+  hands off to a background task and ignores the result, a slow or down
   collector adds no latency and cannot fail a request (ADR-005, read-only obs).
 - The encoder is `osproxy_observe::resource_spans` (pure, I/O-free); the seam is
   `osproxy_observe::SpanExporter` (`NoopExporter` default).
 
 ### Structured logs (correlated by trace id)
 
-One structured JSON log line per request — the shape-only `/debug/explain`
-document, which carries the request's `trace_id` — so logs join the traces/spans
+One structured JSON log line per request, the shape-only `/debug/explain`
+document, which carries the request's `trace_id`, so logs join the traces/spans
 in any aggregator. Off by default (`OSPROXY_LOG_REQUESTS` enables stdout JSON);
 the seam is `osproxy_server::log::RequestLog` (`NoLog` default, `StdoutJsonLog`
 impl). Shape-only by construction, so a log line can never carry a tenant value.
@@ -45,7 +45,7 @@ trace headers rather than starting an island trace:
   engine. If present and well-formed, the request continues that trace (same
   `trace_id`); if absent or malformed, the proxy mints a sampled root.
 - **This hop**: a fresh `span_id` is generated for the proxy's own span, derived
-  from the request id (deterministic, dependency-free — no RNG in `core`).
+  from the request id (deterministic, dependency-free, no RNG in `core`).
 - **Outbound**: every upstream call (write, read, query, and each demuxed
   `_bulk`/`_mget`/`_msearch` sub-request) carries a `traceparent` whose
   `trace_id` matches the inbound trace and whose parent is the proxy's span, so
@@ -53,12 +53,12 @@ trace headers rather than starting an island trace:
 
 The primitive is `osproxy_core::TraceContext` (`TraceContext::propagate`); it is
 injected once at the sink's single send choke point. It holds **only** trace/span
-identity — never request values — so propagation cannot become a value-leak
+identity, never request values, so propagation cannot become a value-leak
 channel (the shape-only rule, docs/05 §7). The context also retains the caller's
 span id so the exported span nests under it (the `parentSpanId` above).
 
 The incoming `tracestate` (the W3C vendor list) is **forwarded verbatim** to every
-upstream call alongside `traceparent` — the proxy is not a tracing vendor, so it
+upstream call alongside `traceparent`, the proxy is not a tracing vendor, so it
 adds no entry of its own. It is carried only when continuing a trace and only
 within the W3C 512-byte cap (an oversized, empty, or parentless `tracestate` is
 dropped, so the header can't be used to amplify downstream).
@@ -121,8 +121,8 @@ The fleet counterpart to the surgical header channel: a controller publishes a
 `DirectiveSet` into a `DirectiveStore` and every proxy instance reads it, so an
 operator can raise verbosity across the fleet (a tenant, an endpoint, a sampled
 slice) without a restart. The pipeline polls the store **fresh per request**
-(`Pipeline::with_directive_store`) — a cheap `Arc`-clone of the current snapshot
-— so a published flip takes effect on the next request fleet-wide.
+(`Pipeline::with_directive_store`), a cheap `Arc`-clone of the current snapshot,
+so a published flip takes effect on the next request fleet-wide.
 
 Like the migration control plane, the proxy ships the **seam plus an in-process
 reference** (`InMemoryDirectiveStore`: `publish` writes, `load` reads), not a
@@ -130,7 +130,7 @@ distributed store; a real etcd/Consul/OpenSearch-index backend implements the
 same `DirectiveStore` trait unchanged, keeping a watched local snapshot so
 `load` stays I/O-free on the hot path. TTL safety is intrinsic: directives carry
 an absolute expiry, so even a published set that is never replaced self-expires
-at evaluation — a forgotten fleet "on" turns itself off.
+at evaluation, a forgotten fleet "on" turns itself off.
 
 The reference binary exposes a **`POST /admin/directives`** channel (enabled by
 `OSPROXY_DIRECTIVE_ADMIN_TOKEN`, presented as `Authorization: Bearer`) that
@@ -138,14 +138,14 @@ publishes a set into the shared store, so the fleet flips with no restart. Body:
 `{"directives":[{"id","level","ttl_secs",<optional "tenant"/"index"/"principal",
 "sample_per_mille","ring_buffer">}]}`. The decoder is **fail-closed**: a bad
 token (401), wrong method (405), or any malformed/unknown/out-of-range field
-(400) leaves the active set unchanged — a misspelled targeting key is rejected
+(400) leaves the active set unchanged, a misspelled targeting key is rejected
 rather than silently widening a directive to the whole fleet. `ttl_secs` is
 relative and resolved to an absolute expiry on publish.
 
 ### 3c. Break-glass ring buffer
 
-When a directive sets `ring_buffer: true`, every request it selects is captured —
-in order — into a bounded in-memory tape (`BreakGlassBuffer`), independent of
+When a directive sets `ring_buffer: true`, every request it selects is captured,
+in order, into a bounded in-memory tape (`BreakGlassBuffer`), independent of
 OTLP export and of the diagnostics level. This is the forensic affordance for the
 case where a *class* of request is failing and the ids aren't known up front:
 flip a `ring_buffer` directive (fleet store or signed header) and read back the
@@ -156,10 +156,10 @@ requests) and bounded (capacity-evicted), so it costs nothing until a directive
 turns it on and cannot grow without limit once on. Each entry is the same
 shape-only explain document, so the tape carries no tenant value, body, or
 credential. The binary serves it at **`GET /debug/breakglass`** (a JSON array,
-oldest first) — the operator read, the same shape-only, would-be-auth-gated
+oldest first), the operator read, the same shape-only, would-be-auth-gated
 surface as `/debug/explain`; the pipeline exposes it via `break_glass()`.
 
 ## 4. `/debug/explain`
 
-Not OTel — a synchronous JSON assembly of a single request's decision chain for
+Not OTel, a synchronous JSON assembly of a single request's decision chain for
 direct LLM consumption (docs/05 §6). It reads from the same span data.

@@ -1,7 +1,7 @@
 # 11. Performance
 
-This page records **what osproxy actually does under load** — throughput and
-latency by payload size, connection count, and write mode — plus the per-request
+This page records **what osproxy actually does under load**: throughput and
+latency by payload size, connection count, and write mode, plus the per-request
 internals that explain the numbers. It is a measurement record, not a set of SLOs:
 absolute numbers are **host-bound**, so what matters is the *shape* (how it scales)
 and the *deltas*. The release targets (NFR-P) live in
@@ -25,15 +25,15 @@ Two harness styles produce the numbers below:
 - **Docker, real OpenSearch** (NFR-P harness): the authoritative end-to-end numbers,
   run in CI and rendered into the run's job summary.
 
-All figures are **recorded, never gated** — CI asserts only host-independent
+All figures are **recorded, never gated**. CI asserts only host-independent
 invariants (correctness, pool reuse, throughput-scaling, bounded footprint, no
 dropped connections).
 
-## Load matrix — payload × connections × mode
+## Load matrix: payload × connections × mode
 
 End-to-end through the full pipeline (ingress → tenancy → rewrite → sink) against
 the in-process mock upstream. **Sync** forwards each write to the upstream and
-returns its result; **async** is the fan-out write mode (ADR-010) — resolve +
+returns its result; **async** is the fan-out write mode (ADR-010), resolve +
 rewrite + enqueue, returning `202` without an upstream round-trip. Local box;
 `rps` is steady-state, `p50/p99` in milliseconds.
 
@@ -52,10 +52,10 @@ rewrite + enqueue, returning `202` without an upstream round-trip. Local box;
 What it shows:
 
 - **Payload dominates throughput.** ~10–18k rps at 256 B and 4 KB, dropping to
-  ~2.7–3.7k at 64 KB — large bodies are bound by parse/copy/upstream-write, not the
+  ~2.7–3.7k at 64 KB. Large bodies are bound by parse/copy/upstream-write, not the
   routing logic.
 - **Async fan-out is consistently faster** (higher rps, lower latency) than sync,
-  because it skips the upstream round-trip — e.g. 256 B/16: 26k vs 10k rps; 64 KB/256:
+  because it skips the upstream round-trip, e.g. 256 B/16: 26k vs 10k rps; 64 KB/256:
   3,705 vs 2,677 rps. This is the cost of synchronous durability vs. accepting a
   `202` and applying downstream.
 - **Latency grows with payload × concurrency**, as expected; p50 stays low at modest
@@ -74,7 +74,7 @@ Rewrite transform timing (`cargo bench -p osproxy-rewrite`, divan, median):
 | `map_physical→logical` | 58 ns | `wrap_query` | 284 ns |
 | `map_logical→physical` | 87 ns | `parse_bulk` | 335 ns |
 
-Every transform is sub-microsecond — <0.1% of a request. Allocations are budgeted
+Every transform is sub-microsecond, <0.1% of a request. Allocations are budgeted
 (dhat, `crates/osproxy-rewrite/tests/memory.rs`): `strip_fields` allocates 0, and
 `wrap_query` is ~12 allocations (down from 33) because the client query is preserved
 as raw bytes (`serde_json::RawValue`), never re-parsed.
@@ -85,7 +85,7 @@ Aggregate throughput (Mops/s) by thread count
 (`cargo test -p osproxy-observe --test contention -- --ignored --test-threads=1`).
 These optimizations shipped after measuring a contention cliff:
 
-**`DirectiveStore::load()` (per request)** — `Mutex<Arc>` → `ArcSwap`:
+**`DirectiveStore::load()` (per request)**, `Mutex<Arc>` → `ArcSwap`:
 
 | threads | 1 | 2 | 4 | 8 | 16 |
 |---------|---|---|---|---|----|
@@ -95,7 +95,7 @@ These optimizations shipped after measuring a contention cliff:
 The mutex scaled **negatively** (contention cliff); `ArcSwap` scales **positively**
 (~5× at 16 cores), at the cost of being ~2× slower uncontended (38→79 ns).
 
-**`ExplainStore::record()` (per request)** — eager JSON → lazy:
+**`ExplainStore::record()` (per request)**, eager JSON → lazy:
 
 | threads | 1 | 2 | 4 | 8 | 16 |
 |---------|---|---|---|---|----|
@@ -125,11 +125,11 @@ connector (flat on loopback; prevents Nagle tail latency on a real network).
 The Docker integration lane fills an NFR-P profile (proxy vs. direct baseline) and
 renders briefs to the job summary. Representative figures:
 
-- **Added latency** (proxy over direct): p50 ≈ 0.08 ms, p99 ≈ 1.7 ms — inside
+- **Added latency** (proxy over direct): p50 ≈ 0.08 ms, p99 ≈ 1.7 ms, inside
   NFR-P1's ~1–2 ms target.
 - **Pool reuse** ≈ 1.0 under steady load (NFR-P4).
 - **Scalability**: throughput scales ~44× (52 → 2,310 rps as concurrency 1 → 64) with
-  p50 flat (~18 → 24 ms) — scales by pool reuse, not latency inflation (NFR-P2).
+  p50 flat (~18 → 24 ms), scales by pool reuse, not latency inflation (NFR-P2).
 - **Footprint**: idle ≈ 11 MiB RSS; bounded growth under a 50k-request soak (NFR-P6).
 
 ## Reproduce everything

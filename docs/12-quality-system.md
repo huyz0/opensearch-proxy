@@ -1,19 +1,19 @@
-# 12 — The Quality System
+# 12: The Quality System
 
 Quality is enforced in **two tiers** that do not overlap:
 
-- **Tier 1 — Deterministic gates.** Mechanical checks with a yes/no answer and no
+- **Tier 1: Deterministic gates.** Mechanical checks with a yes/no answer and no
   human judgment: they pass identically on every machine and every run. These
   *block* merge.
-- **Tier 2 — LLM semantic review.** Judgment-based review of design, naming,
-  abstraction quality, and test meaningfulness — the things a linter cannot see.
+- **Tier 2: LLM semantic review.** Judgment-based review of design, naming,
+  abstraction quality, and test meaningfulness, the things a linter cannot see.
   Driven by the skills system. These *advise* (and gate when high-confidence).
 
 The rule: **if a quality property can be made deterministic, it must be Tier 1.**
 The LLM is spent only on what genuinely needs judgment, never on what a check can
 decide. This keeps quality reproducible and cheap, and keeps the LLM focused.
 
-## Tier 1 — Deterministic gates
+## Tier 1: Deterministic gates
 
 | Property | Mechanism | Command | Why deterministic |
 |----------|-----------|---------|-------------------|
@@ -38,38 +38,38 @@ decide. This keeps quality reproducible and cheap, and keeps the LLM focused.
   reproducible to the nanosecond.
 - **Performance is measured in instruction counts** (`iai-callgrind` over
   callgrind), not wall-clock time. Wall-clock benchmarks are noisy and machine-
-  dependent — useless as a CI gate. Instruction counts are exact, so a real
+  dependent, useless as a CI gate. Instruction counts are exact, so a real
   regression is visible and a refactor that doesn't change work shows zero delta.
   For **local exploration on a dev box without valgrind**, `cargo xtask
   bench-local` runs the same hot paths under `divan` (wall-clock); it is a
   calibration/comparison aid only and never gates a build.
 - **Memory budgets are allocation counts** (`dhat` testing mode), which are exact
-  for a given input — a change that adds a heap allocation to a hot path fails CI.
+  for a given input, a change that adds a heap allocation to a hot path fails CI.
 - **Architecture is a graph check.** The allowed dependency DAG lives in
   `xtask`; each crate's actual internal deps must be a subset, which proves the
   graph stays downward-only and acyclic (no god-coupling creeps in).
 - **Correctness uses property tests** for the invariants that define the proxy
   (round-trip symmetry, isolation, order preservation, id-collision-freedom),
-  not just example tests — see [09](09-testing-and-quality.md).
+  not just example tests, see [09](09-testing-and-quality.md).
 
-## Tier 2 — LLM semantic & design review
+## Tier 2: LLM semantic & design review
 
 What a linter cannot judge, the LLM reviews against the skills system:
 
-- **Altitude / abstraction quality** — is this the right level; is the seam in the
+- **Altitude / abstraction quality**, is this the right level; is the seam in the
   right place; is logic where it belongs per the `architecture` skill?
-- **Naming & intent** — do names reveal intent; does the code read like its
+- **Naming & intent**, do names reveal intent; does the code read like its
   neighbours?
-- **Cohesion** — is a module doing one thing; is a type accreting unrelated
+- **Cohesion**, is a module doing one thing; is a type accreting unrelated
   fields (a god-type the size budget alone won't catch)?
-- **Doc quality** — do SPI docs state intent + invariants, not restate the
+- **Doc quality**, do SPI docs state intent + invariants, not restate the
   signature?
-- **Test meaningfulness** — do assertions actually constrain behavior, or just
+- **Test meaningfulness**, do assertions actually constrain behavior, or just
   inflate coverage? (Backed periodically by `cargo-mutants` in Tier 1.)
 - **Adherence to the invariants** in `AGENTS.md` and the relevant skill.
 
 Driven by the `quality-review` skill, which defines the rubric. It runs through
-the **AI agent's own capabilities — not a CI secret**: the `quality-reviewer`
+the **AI agent's own capabilities, not a CI secret**: the `quality-reviewer`
 subagent (`.claude/agents/`) is spawned before finishing a unit of work, and the
 `/quality-review` command runs it on demand; the repo's `/code-review` and
 `/security-review` are additional passes. High-confidence findings gate; uncertain
@@ -77,12 +77,12 @@ ones advise.
 
 Why agent-native rather than a CI bot: the review belongs in the same loop that
 writes the code, needs no shared secret or external service, and reads the same
-skills the author follows — so the bar is identical and the feedback is immediate.
+skills the author follows, so the bar is identical and the feedback is immediate.
 
 ## How the tiers interact
 
 1. Tier 1 runs first (`cargo xtask ci` locally, the CI gate remotely). If it is
-   red, Tier 2 is not worth spending — fix the mechanical failures first.
+   red, Tier 2 is not worth spending. Fix the mechanical failures first.
 2. Tier 2 reviews the green diff for what judgment is needed: spawn the
    `quality-reviewer` subagent (or run `/quality-review`) before declaring the
    work done.
@@ -92,7 +92,7 @@ skills the author follows — so the bar is identical and the feedback is immedi
 
 ## Live integration lane (Docker)
 
-Most gates run against mocks and in-process fakes — fast and deterministic. One
+Most gates run against mocks and in-process fakes, fast and deterministic. One
 CI lane (`integration`, GitHub-hosted Ubuntu with a Docker daemon) instead runs
 the `#[ignore]`'d testcontainer harnesses against a **real OpenSearch**: the M1
 round-trip exit gate (`tests/testcontainer.rs`) and the NFR-P runners
@@ -100,12 +100,12 @@ round-trip exit gate (`tests/testcontainer.rs`) and the NFR-P runners
 `tests/soak.rs` idle/soak footprint). It runs `--test-threads=1` so a single
 cluster is up at a time.
 
-These harnesses **assert only host-independent invariants** — correctness,
-request completeness, pool reuse, throughput scaling, bounded footprint — because
+These harnesses **assert only host-independent invariants**, correctness,
+request completeness, pool reuse, throughput scaling, bounded footprint, because
 wall-clock latency on a shared runner is noisy. The *measured* numbers (added
 p50/p99, the scalability curve, RSS) are emitted as machine-readable
 profile/verdict JSON (`osproxy-bench`) and uploaded as the `nfr-profiles` build
-artifact: the substrate an operator — or an LLM judge — reads to calibrate the
+artifact: the substrate an operator, or an LLM judge, reads to calibrate the
 still-`[CALIBRATE]` NFR-P thresholds. The judge thresholds live in code
 (`NfrThresholds`/`ScalabilityThresholds`/`FootprintThresholds`), so once
 calibrated they become a real gate without touching the runners.

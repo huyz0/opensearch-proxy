@@ -1,4 +1,4 @@
-# 13 — Security Model
+# 13: Security Model
 
 osproxy sits on the data path of a multi-tenant store, so its security posture is
 a first-class design concern, not an add-on. This doc consolidates the threat
@@ -19,7 +19,7 @@ silent downgrade.
 
 ## 2. Threats and controls
 
-### T1 — Cross-tenant data leak (the headline threat)
+### T1: Cross-tenant data leak (the headline threat)
 - **Read isolation is filter-or-reject** (ADR-006, NFR-S4): every shared-index
   query is wrapped `bool { must: [client_query], filter: [partition term] }`; the
   client query is nested and cannot remove the filter. Endpoints that can't be
@@ -36,7 +36,7 @@ silent downgrade.
 - Enforced by adversarial bypass tests (nested bool/`should`/scripts/`_sql`) and a
   round-trip symmetry property (docs/09 §2.7).
 
-### T2 — Secret / value leak through telemetry
+### T2: Secret / value leak through telemetry
 - **No-value-leak by construction** (NFR-S2, ADR-005, docs/05 §7): the trace API
   only accepts shape/id/name types in value-bearing positions, so a document
   value, query literal, or credential cannot reach a log/span at any verbosity.
@@ -44,7 +44,7 @@ silent downgrade.
   declared-sensitive values.
 - Enforced by a static check + a canary "no value leaks" fuzz test.
 
-### T3 — Credential exposure on the wire
+### T3: Credential exposure on the wire
 - **TLS-for-mutation** (NFR-S1): a write to a tenancy-aware endpoint over cleartext
   is refused at ingress (classification-based, before dispatch), including in
   passthrough. The admin publish path enforces the same.
@@ -54,7 +54,7 @@ silent downgrade.
   pipeline/telemetry** (`osproxy-server::bearer`), so a token never reaches a log
   or upstream.
 
-### T4 — Unauthorized control-plane mutation
+### T4: Unauthorized control-plane mutation
 - **`POST /admin/directives` is token-gated** (bearer, constant-time) and **refused
   over cleartext** so the token isn't exposed; `GET` introspection is at parity.
 - **The publish decoder rejects unknown keys** (`directives_api`), so a misspelled
@@ -64,16 +64,16 @@ silent downgrade.
 - **Cursor affinity envelopes are HMAC-signed** so a continued scroll/PIT can't be
   redirected to another cluster by tampering (docs/03 §6).
 
-### T5 — Blind / unsafe routing
+### T5: Blind / unsafe routing
 - The sink has **no static endpoint catalog**; every upstream URL comes from the
   tenancy's placement or `cluster_endpoint`. An unknown cluster ⇒ fail closed, not
   a blind connection.
 - **Epoch-gated migration write gate** (ADR-003): a write resolved at a stale epoch
   is rejected (retryable), so a placement flip mid-flight can't double-apply.
 
-### T6 — Privileged stream exposure (capture / fan-out)
+### T6: Privileged stream exposure (capture / fan-out)
 - **Capture is off by default, redacts `Authorization`** by default, and is
-  full-fidelity — so it is treated as privileged infrastructure the operator
+  full-fidelity, so it is treated as privileged infrastructure the operator
   secures (ADR-011). Turning it on is operator-gated (baseline or signed directive).
 - **Fan-out** carries resolved ops, not credentials; the queue is operator-secured
   and TLS/mTLS-capable like capture.
@@ -85,7 +85,7 @@ silent downgrade.
   unresolved partition → reject.
 - **No runtime control weakens isolation**: there is deliberately no runtime
   "isolation off" switch and no fleet-wide async-baseline flip (ADR-012). Dynamism
-  is rationed by blast radius — only observability-class capture is runtime-flippable.
+  is rationed by blast radius, only observability-class capture is runtime-flippable.
 - **Loud over silent**: a misconfiguration (e.g. fan-out configured without the
   `fanout` feature, cleartext mutation) is a startup error or a typed rejection,
   never a silent downgrade.
@@ -95,7 +95,7 @@ silent downgrade.
 - Authentication *identity* providers (the `Authenticator` SPI is the seam; the
   proxy ships a reference token map, not an IdP).
 - Authorization policy beyond the `Authorizer` seam.
-- Securing the operator's control store, broker, and upstream clusters — those are
+- Securing the operator's control store, broker, and upstream clusters, those are
   the operator's infrastructure, reached through documented seams.
 - DoS/rate-limiting (handled upstream / at the edge), beyond the bounded-memory
   and circuit-breaker reliability controls (NFR-R, docs/04 §7).

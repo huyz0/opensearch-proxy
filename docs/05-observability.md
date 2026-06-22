@@ -1,10 +1,10 @@
-# 05 — Observability (LLM-debuggable, security-aware)
+# 05: Observability (LLM-debuggable, security-aware)
 
 ## 1. Goal restated
 
 A failure must be diagnosable **by an LLM, from telemetry alone, without reading
 source or asking a human to gather context** (NFR-T1). Observability is
-**read-only** — the AI observes; it never mutates routing or cluster state.
+**read-only**, the AI observes; it never mutates routing or cluster state.
 
 Two constraints pull against each other and are both hard requirements:
 
@@ -15,7 +15,7 @@ Two constraints pull against each other and are both hard requirements:
 ## 2. The span schema (per request)
 
 One trace per request. Spans (all attributes are **shapes, ids, field names,
-sizes, counts — never values**):
+sizes, counts, never values**):
 
 | Span | Attributes |
 |------|-----------|
@@ -30,7 +30,7 @@ sizes, counts — never values**):
 Errors attach `ErrorContext` (code, decision_chain, retryable, remediation) to
 the failing span.
 
-## 3. Diagnostics directive — runtime control without restart
+## 3. Diagnostics directive: runtime control without restart
 
 Verbosity is **data**, not a code path, distributed to every instance:
 
@@ -49,7 +49,7 @@ pub struct DiagnosticsDirective {
 
 1. **Signed request header** (`X-Debug-Directive`, HMAC-signed): surgical,
    single-request, follows the request to whatever instance handles it. Clients
-   cannot self-enable (signature required — NFR-S3). Best for "explain this one
+   cannot self-enable (signature required, NFR-S3). Best for "explain this one
    call."
 2. **Control-plane directive** in the watched store (`osproxy-control`):
    fleet-wide, "watch tenant X for 10 minutes," propagates in seconds, TTL
@@ -57,7 +57,7 @@ pub struct DiagnosticsDirective {
 
 ### Why targeted + TTL
 
-Targeting (by tenant/index/principal/endpoint) is the **cost lever** — you pay
+Targeting (by tenant/index/principal/endpoint) is the **cost lever**, you pay
 for detail only on the partition under investigation, not the fleet. TTL ensures
 verbose mode can't be left on and silently burn money/latency, satisfying the
 low-cost NFR.
@@ -76,33 +76,33 @@ All of these are **shipped** and per-instance by design; fleet rollup is the
 external aggregator's job. They share the `trace_id` so an agent can correlate
 across them (W3C trace-context is propagated to every upstream call).
 
-- **Structured JSON logs** — one shape-only line per request (the `/debug/explain`
+- **Structured JSON logs**, one shape-only line per request (the `/debug/explain`
   document, carrying `trace_id`). Off unless `OSPROXY_LOG_REQUESTS` is set
   (`RequestLog` seam: `NoLog` default / `StdoutJsonLog`).
-- **OTLP export** — a shape-only `resource_spans` SERVER span per request via the
+- **OTLP export**, a shape-only `resource_spans` SERVER span per request via the
   `SpanExporter` seam. Off (near-zero cost) unless `OSPROXY_OTLP_ENDPOINT` is set;
   the `osproxy-otlp` crate POSTs to `{endpoint}/v1/traces`, fire-and-forget. The
   proxy span nests under the caller (`parentSpanId`) so the client→proxy→upstream
   tree reconstructs.
-- **`GET /metrics`** — always-on shape-only counters (requests total/ok/error) and
+- **`GET /metrics`**, always-on shape-only counters (requests total/ok/error) and
   per-cluster pool-reuse snapshot, served **before auth**. This is the one
   introspection surface meant to stay on in production where `/debug/*` is off.
-- **`/debug/explain` + `/debug/breakglass`** — see §6.
-- **`GET`/`POST /admin/directives`** — token-gated, fail-closed. `POST` publishes a
+- **`/debug/explain` + `/debug/breakglass`**, see §6.
+- **`GET`/`POST /admin/directives`**, token-gated, fail-closed. `POST` publishes a
   `DirectiveSet` to the fleet `DirectiveStore` (polled fresh per request → flips
   fleet-wide with no restart); `GET` introspects the active set as shape-only JSON
   that round-trips back to a publish. This is the store-agnostic control-plane
   seam: the proxy ships the seam + an in-memory reference impl, plus an **optional
   etcd-backed `DirectiveStore`** (`osproxy-etcd`, behind the `etcd` feature) that
-  keeps a locally-cached snapshot fresh by an etcd watch — fleet-wide propagation
+  keeps a locally-cached snapshot fresh by an etcd watch, fleet-wide propagation
   with no shared in-process state and no restart (ADR-013). Under etcd the etcd key
   is the control plane, so the local `POST` publish path is disabled (operators
   publish to the key); the same fail-closed decoder validates both paths.
-- **Break-glass ring buffer** — populated only when a matching `ring_buffer: true`
+- **Break-glass ring buffer**, populated only when a matching `ring_buffer: true`
   directive is active: a short-lived in-memory ring of the last N request
   explanations on one instance, served at `/debug/breakglass`. Single-instance
   local debugging; explicitly marginal in a fleet and documented as such.
-- **Diagnostic sink (fleet-coherent break-glass)** — the `DiagnosticSink` seam
+- **Diagnostic sink (fleet-coherent break-glass)**, the `DiagnosticSink` seam
   addresses that single-instance limit: when a `ring_buffer`/`capture` directive
   selects a request, the same shape-only explain doc is also handed to the sink,
   which pushes it **off the instance keyed by `trace_id`** so a fleet aggregator
@@ -116,7 +116,7 @@ across them (W3C trace-context is propagated to every upstream call).
 
 An endpoint that assembles the **full causal story** for one request id into a
 single JSON document purpose-built for LLM consumption: the ordered decision
-chain, each span's shape attributes, the final status, and — on failure — the
+chain, each span's shape attributes, the final status, and, on failure, the
 `ErrorContext` with remediation. This is the primary "no human gathers context"
 affordance (NFR-T4).
 
@@ -124,7 +124,7 @@ Security: the endpoint returns only shape-level data; it cannot reveal tenant
 values because they were never captured. It short-circuits before auth (like
 `/metrics` and `/debug/breakglass`) and is gated by `OSPROXY_DEBUG_ENDPOINTS`
 (default on; **set `false` in production** so operational metadata is not exposed
-unauthenticated — `/metrics` stays on regardless). `/debug/breakglass` serves the
+unauthenticated, `/metrics` stays on regardless). `/debug/breakglass` serves the
 break-glass tape (§5) in the same shape-only form.
 
 ## 7. What is NEVER captured
@@ -134,7 +134,7 @@ break-glass tape (§5) in the same shape-only form.
 - Anything declared sensitive by `TenancySpi::sensitive_fields`.
 
 This is enforced **by construction** (the trace API only accepts shape/id/name
-types for value-bearing positions), not by after-the-fact redaction — so there
+types for value-bearing positions), not by after-the-fact redaction, so there
 is no path by which a value reaches a log. Tested by a static check + a
 runtime "no value leaks" test that fuzzes documents with canary secrets and
 asserts they never appear in any emitted telemetry.

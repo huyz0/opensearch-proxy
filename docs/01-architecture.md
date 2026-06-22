@@ -1,4 +1,4 @@
-# 01 — Architecture & Non-Functional Requirements
+# 01: Architecture & Non-Functional Requirements
 
 ## 1. Language & runtime decision
 
@@ -6,8 +6,8 @@
 type system that lets us make "every failure is a typed, contextual error" a
 compile-time property rather than a convention.
 
-**Go** was the fallback only if FIPS had no credible Rust path. It does — see
-[07-fips-and-crypto.md](07-fips-and-crypto.md) — so Rust stands.
+**Go** was the fallback only if FIPS had no credible Rust path. It does, see
+[07-fips-and-crypto.md](07-fips-and-crypto.md), so Rust stands.
 
 The SPI is **compiled in statically**. Implementers depend on `osproxy-spi` and
 `impl` traits; there is no WASM, dylib, or runtime plugin discovery. Routing
@@ -118,7 +118,7 @@ fixed even where the threshold is tuned later.
 | NFR-R3 | Backpressure: bounded queues everywhere; overload returns `429` with retry guidance, never OOM. |
 | NFR-R4 | Upstream failures (timeout, connection reset, 5xx) are classified retryable/terminal and surfaced with the decision chain. |
 | NFR-R5 | Graceful shutdown drains in-flight requests within a deadline; new requests rejected during drain. |
-| NFR-R6 | No data corruption across partition migration (epoch gating — see [06](06-partition-migration.md)). |
+| NFR-R6 | No data corruption across partition migration (epoch gating, see [06](06-partition-migration.md)). |
 | NFR-R7 | Survives fault-injection suite (slow/dropped upstreams, malformed bodies, partial writes) without panic or stuck request. |
 
 ### 5.3 Traceability / observability
@@ -126,7 +126,7 @@ fixed even where the threshold is tuned later.
 | ID | Requirement |
 |----|-------------|
 | NFR-T1 | Every request emits one causal trace whose spans reconstruct *why* the request routed where it did, with **no source reading required** (verified by the "blind diagnosis" test, [09](09-testing-and-quality.md)). |
-| NFR-T2 | Default verbosity emits **shapes, ids, and field names only** — never tenant values, document bodies, tokens, or credentials. |
+| NFR-T2 | Default verbosity emits **shapes, ids, and field names only**, never tenant values, document bodies, tokens, or credentials. |
 | NFR-T3 | Verbosity is runtime-togglable fleet-wide **without restart**, targeted by tenant/index/principal/endpoint, with TTL auto-expiry. |
 | NFR-T4 | `/debug/explain/{request_id}` returns the full decision chain as one LLM-consumable JSON document. |
 | NFR-T5 | Every error carries: code, decision chain, `retryable`, and a remediation hint. |
@@ -135,20 +135,20 @@ fixed even where the threshold is tuned later.
 
 | ID | Requirement |
 |----|-------------|
-| NFR-S1 | TLS termination required for any request that is mutated (cannot rewrite an encrypted stream). Enforced at ingress on the endpoint classification, before dispatch — so it holds even in **tenant-agnostic passthrough** (docs/04 §10): a write to a tenancy-aware endpoint over cleartext is refused whether it is tenanted or forwarded verbatim. (Read-only admin/`Unknown` pass-through is unaffected.) |
+| NFR-S1 | TLS termination required for any request that is mutated (cannot rewrite an encrypted stream). Enforced at ingress on the endpoint classification, before dispatch, so it holds even in **tenant-agnostic passthrough** (docs/04 §10): a write to a tenancy-aware endpoint over cleartext is refused whether it is tenanted or forwarded verbatim. (Read-only admin/`Unknown` pass-through is unaffected.) |
 | NFR-S2 | No secret/credential/token/tenant value in any log or trace at any verbosity level. Diagnostic capture is shape-only by construction. |
 | NFR-S3 | Debug directives delivered via header are HMAC-signed; clients cannot self-enable expensive tracing. |
-| NFR-S4 | Partition isolation enforced on the read path (query filter cannot be bypassed by client-supplied query) — see [03](03-tenancy-and-placement.md) §isolation for the isolation guarantee level. |
+| NFR-S4 | Partition isolation enforced on the read path (query filter cannot be bypassed by client-supplied query), see [03](03-tenancy-and-placement.md) §isolation for the isolation guarantee level. |
 | NFR-S5 | FIPS build negotiates only FIPS-approved TLS versions and cipher suites. |
 
-The consolidated threat model — actors, trust boundaries, and where each control
-lives — is in [13 — Security Model](13-security-model.md).
+The consolidated threat model (actors, trust boundaries, and where each control
+lives) is in [13: Security Model](13-security-model.md).
 
 ### 5.5 Maintainability / quality
 
 | ID | Requirement |
 |----|-------------|
-| NFR-Q1 | No "god" file/module/type — size and cohesion budgets enforced in CI ([08](08-engineering-standards.md)). |
+| NFR-Q1 | No "god" file/module/type, size and cohesion budgets enforced in CI ([08](08-engineering-standards.md)). |
 | NFR-Q2 | ≥90% semantic test coverage overall; SPI + routing core higher ([09](09-testing-and-quality.md)). |
 | NFR-Q3 | Every public item (type, trait, fn) on the SPI surface has doc comments with intent, invariants, and an example. |
 | NFR-Q4 | Public SPI changes require a design-review note ([10](10-review-process.md)). |

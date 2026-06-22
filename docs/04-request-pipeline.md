@@ -1,4 +1,4 @@
-# 04 — Request Pipeline
+# 04: Request Pipeline
 
 The single pipeline handles both directions. Each stage is a small, testable
 unit with a typed input and output; no stage reaches across into another's
@@ -24,7 +24,7 @@ ingress -> decode -> authenticate -> authorize -> classify -> resolve
 | transform(resp) | rewrite | response(s) + decision | client response | strip / re-interleave |
 | egress | transport | client response | bytes | original protocol |
 
-## 2. Ingest — single document
+## 2. Ingest: single document
 
 `PUT/POST /{logical_index}/_doc[/{id}]`:
 
@@ -39,12 +39,12 @@ ingress -> decode -> authenticate -> authorize -> classify -> resolve
 5. On stale-epoch reject → return retryable error (client/SDK retries; the proxy
    may also auto-retry once after re-resolving, configurable).
 
-## 3. Ingest — bulk demux (the hard path)
+## 3. Ingest: bulk demux (the hard path)
 
 `_bulk` is NDJSON: alternating action + (optional) source lines. A single body
 may contain documents for **different partitions → different placements**.
 
-Algorithm (single pass, streaming — NFR-P7):
+Algorithm (single pass, streaming, NFR-P7):
 
 1. Stream-parse NDJSON line pairs without buffering the whole body.
 2. For each action+doc, extract partition → resolve placement (with a
@@ -77,14 +77,14 @@ Edge cases that MUST be tested:
 1. Resolve partition → single placement (single-cluster; never fan-out).
 2. `SharedIndex`: wrap client query in `bool { must:[client], filter:[term(field=P)] }`.
    The response field-strip is derived from the decision's `body_transform` (the
-   injected names), not a separate decision field — see `read::read_shape` /
+   injected names), not a separate decision field, see `read::read_shape` /
    `filter_terms` (`docs/02` §1).
 3. Dispatch to the one target.
 4. Response: strip injected fields from each hit (and from `fields`/`_source`
    projections) so the tenant sees the logical document.
 5. `_msearch`: each sub-query resolves independently but each must still be
    single-target; a sub-query whose partition resolves elsewhere is fine
-   (different sub-request, different target) — but a *single* sub-query never
+   (different sub-request, different target), but a *single* sub-query never
    fans out.
 
 ## 5. Get / delete / update by id
@@ -117,13 +117,13 @@ stage carries the full upstream context. See [05](05-observability.md).
 
 A mutation can be dispatched in one of two modes:
 
-- **Sync** (the default): forward to the upstream and return its real result —
+- **Sync** (the default): forward to the upstream and return its real result,
   the path described in §2, §3, §5.
 - **Async**: durably enqueue the fully-resolved, epoch-stamped op onto a
   `WriteQueue` and return `202 Accepted` with an `op_id`. A separate downstream
   component consumes the queue and applies each op to one or more destinations
   (fan-out). The proxy's only promise is **durable acceptance into the
-  pipeline** — never application, ordering across destinations, or a per-doc
+  pipeline**, never application, ordering across destinations, or a per-doc
   result.
 
 ### Mode negotiation
@@ -139,14 +139,14 @@ operator sets the baseline or a client sends the header.
 ### The async contract (single-doc / bulk / delete-by-id)
 
 1. Resolve + transform exactly as sync (same partition routing, same
-   epoch-stamped op) — async changes *delivery*, not *correctness*.
+   epoch-stamped op), async changes *delivery*, not *correctness*.
 2. If no queue is wired, refuse with **`422`** (`status:"rejected"`). An async
    request is **never accepted-and-dropped**.
 3. Enqueue. Return **`202`** only **after** the queue acknowledges durable
    acceptance (WAL/broker ack). A queue refusal is reported as **`503`** (the
    same `op_id` makes a retry idempotent downstream).
 4. No live epoch gate runs: the op carries its epoch and the downstream applier
-   owns staleness — there is no synchronous upstream to hold.
+   owns staleness, there is no synchronous upstream to hold.
 
 The `202` body is a generic async envelope, **not** a synthetic OpenSearch
 result:
@@ -155,7 +155,7 @@ result:
 { "op_id": "client-key-1", "status": "accepted", "result": "queued", "_index": "orders" }
 ```
 
-### `op_id` — correlation + idempotency
+### `op_id`: correlation + idempotency
 
 - Client-supplied via the **`X-Op-Id`** header when present and valid
   (non-empty, ≤128 bytes, charset `A-Za-z0-9-_.:`); otherwise the proxy mints
@@ -178,44 +178,44 @@ Each enqueued op is a **protobuf `OpEnvelope`** (`osproxy.fanout.v1`): typed
 metadata (`op_id`, `partition`, `cluster`, `index`, `epoch`, `op_type`, `id`,
 `routing`) plus a `content_type` and an opaque `body`. The downstream applier
 reads the metadata and forwards `body` to OpenSearch verbatim with that
-`Content-Type` — it never parses the document, so the document shape never enters
+`Content-Type`, it never parses the document, so the document shape never enters
 the contract.
 
-- **Body encoding**: **CBOR** (RFC 8949) by default — compact binary, ingested
-  natively by OpenSearch — with JSON selectable for debuggability. This applies
+- **Body encoding**: **CBOR** (RFC 8949) by default, compact binary, ingested
+  natively by OpenSearch, with JSON selectable for debuggability. This applies
   uniformly: a bulk request is demuxed into individual ops, so each bulk item is
   its own CBOR-bodied envelope, the same as a single-doc write (there is no
   binary-NDJSON framing to worry about).
 - **Key**: the Kafka record is keyed by `partition`, so all ops for one logical
   partition keep their order within a partition through the fan-out.
-- **Durability**: the producer is broker-acknowledged — the `202` is returned
+- **Durability**: the producer is broker-acknowledged, the `202` is returned
   only after the op is acked, never fire-and-forget.
 
 ### What async does *not* cover
 
 - **Optimistic concurrency** (`if_seq_no`/`if_primary_term`, `version`),
   **scripted/partial `_update`**, and **`_update_by_query`** cannot be honored
-  async and are rejected (`400`) — they need read-modify-write against current
+  async and are rejected (`400`), they need read-modify-write against current
   state the proxy cannot evaluate at enqueue time. `_update_by_query` is not even
   classified (it falls through to `Unknown` and is rejected).
 - **`_delete_by_query`** is rejected by default, with an **opt-in expansion**
   (`fanout_expand_delete_by_query`): in async mode the proxy runs the
   **partition-scoped** query itself (the same mandatory isolation filter as a
   normal search), caps the match set (refusing over the cap rather than partially
-  deleting), and enqueues a concrete delete per matched id — keeping the op stream
+  deleting), and enqueues a concrete delete per matched id, keeping the op stream
   self-contained and idempotent. It returns a delete-by-query-shaped count where
   `deleted` is what was durably enqueued (not yet applied). Sync mode, expansion
   off, or no queue all reject (`400`/`422`).
 - **No status surface on the proxy.** Whether and how a failed apply is reported
   back is the downstream's responsibility (an outcome topic, an alert, a
-  reconciler) — out of scope here. See [client handling](guide/09-async-clients.md).
+  reconciler), out of scope here. See [client handling](guide/09-async-clients.md).
 - **Read-after-write is not guaranteed**: a `202`'d doc is not queryable until
   the downstream applies it; reads still hit the upstream synchronously.
 
 ## 10. Tenant-agnostic passthrough
 
 A deployment can forward requests **verbatim** to one cluster with no partition
-resolution, body rewrite, or isolation — a transparent / capture / migration
+resolution, body rewrite, or isolation, a transparent / capture / migration
 proxy that still gets osproxy's auth, TLS, pooling, and observability. It is a
 short-circuit *before* the endpoint demux above: a matching request is forwarded
 raw (reusing the same verbatim-forward primitive as the cursor/admin paths) and
@@ -231,7 +231,7 @@ instance can serve both modes at once (the migration shape):
   onboarded legacy index flows through untouched while onboarded indices are
   isolated, on the same instance.
 
-Matching is on the operator-configured index list **only — never a client
-header** — so a client cannot opt itself out of isolation, and a non-match keeps
+Matching is on the operator-configured index list **only, never a client
+header**, so a client cannot opt itself out of isolation, and a non-match keeps
 tenancy (the safe direction). Unset ⇒ pure tenancy mode (the default). See
 [choosing a mode](guide/10-choosing-a-mode.md).

@@ -1,4 +1,4 @@
-# ADR-010 — Async fan-out write mode: same endpoints, `202`/`op_id`, no proxy status surface
+# ADR-010: Async fan-out write mode: same endpoints, `202`/`op_id`, no proxy status surface
 
 **Status:** Accepted
 
@@ -6,12 +6,12 @@
 
 ADR-008 reserved a pull-based redundancy path: the proxy enqueues writes and
 separate ingesters fan them out to 1..N OpenSearch destinations. This ADR settles
-the **client-facing contract** for that mode — how a request selects it, what the
+the **client-facing contract** for that mode, how a request selects it, what the
 proxy returns, and where the boundary of the proxy's responsibility sits.
 
 The tension: OpenSearch's write protocol is synchronous and per-document
 (`_version`, `result`, per-item `_bulk` status, optimistic concurrency). A
-fan-out enqueue cannot honor those — it responds before the write is applied, and
+fan-out enqueue cannot honor those, it responds before the write is applied, and
 "applied" may mean N destinations that converge only eventually.
 
 ## Decision
@@ -34,14 +34,14 @@ fan-out enqueue cannot honor those — it responds before the write is applied, 
    `X-Op-Id` (validated, ≤128 bytes, safe charset) or proxy-minted; always
    echoed. The downstream applier dedups on it (delivery is at-least-once).
 6. **No status surface on the proxy.** Outcome notification (apply success,
-   conflict, failure) is the downstream's responsibility — an outcome topic, an
+   conflict, failure) is the downstream's responsibility, an outcome topic, an
    alert, a reconciler. The proxy does not poll or store outcomes.
 7. **Unsupported-async ops are rejected (`400`), not enqueued.** Optimistic
    concurrency, scripted/partial `_update`, and `_update_by_query` need
    read-modify-write the proxy cannot do at enqueue time. **`_delete_by_query`**
    is reject-by-default with an **opt-in bounded expansion**
    (`fanout_expand_delete_by_query`): the proxy runs the partition-scoped query
-   itself, caps the match set, and enqueues a concrete delete per matched id —
+   itself, caps the match set, and enqueues a concrete delete per matched id,
    never a partial delete, never a query the fan-out can't carry.
 
 ## Why
@@ -50,7 +50,7 @@ fan-out enqueue cannot honor those — it responds before the write is applied, 
   Headers (`X-Write-Mode`, `X-Op-Id`) inject through the stock client transport
   without leaving the typed API; a separate path or query param would not. For
   by-query mutations the native Tasks API (`wait_for_completion=false`) is the
-  reuse point if a poll model is ever wanted — but with no proxy status surface
+  reuse point if a poll model is ever wanted, but with no proxy status surface
   (decision 6) it stays reject-by-default for now.
 - **The dangerous failure is the silent lie**, not the honest refusal. A `422`/
   `503`/`400` can't be misread; a synthetic `result:"created"` over an op that
@@ -66,7 +66,7 @@ fan-out enqueue cannot honor those — it responds before the write is applied, 
   shipped binary wires a durable Kafka/WAL implementation behind the seam (reuses
   the capture-arc producer stack). Default `NoQueue` keeps async off.
 - **Wire format: a protobuf `OpEnvelope`** (`osproxy.fanout.v1`, in
-  `osproxy-server`) — typed metadata wrapper + `content_type` + opaque `body`.
+  `osproxy-server`), typed metadata wrapper + `content_type` + opaque `body`.
   The body is **CBOR** by default (RFC 8949: compact, OpenSearch-native via
   XContent, portable across applier languages), JSON selectable for
   debuggability; bulk stays JSON for now. Protobuf was chosen for the wrapper (IDL
@@ -78,7 +78,7 @@ fan-out enqueue cannot honor those — it responds before the write is applied, 
   queryable only once the downstream applies it; reads still hit the upstream
   synchronously. Client-visible; documented in `guide/09-async-clients.md`.
 - Clients on the typed OpenSearch SDK must parse the `202` envelope themselves
-  (it is not an `IndexResponse`) — handled by a header interceptor + generic
+  (it is not an `IndexResponse`), handled by a header interceptor + generic
   body read, or a thin wrapper reusing the request builders.
 - Bulk per-item correlation (per-item `op_id` vs. `batch_id` + line index) is
   owned by the bulk demux and settled when async bulk lands.

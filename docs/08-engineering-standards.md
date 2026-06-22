@@ -1,10 +1,10 @@
-# 08 — Engineering Standards
+# 08: Engineering Standards
 
 These are enforced in CI, not just recommended. The goal: high code quality, no
-god modules, clear structure, high traceability — verifiable mechanically where
+god modules, clear structure, high traceability, verifiable mechanically where
 possible.
 
-## 1. No god module / file / type — size & cohesion budgets
+## 1. No god module / file / type: size & cohesion budgets
 
 | Budget | Limit | Enforcement |
 |--------|-------|-------------|
@@ -38,7 +38,7 @@ Rationale: budgets are a forcing function for decomposition. They catch the
   clippy::panic, clippy::todo, clippy::unimplemented)]`. Panics are a reliability
   bug (NFR-R1).
 - All request-path errors are typed enums (`thiserror`) carrying `ErrorContext`
-  (code, decision chain, retryable, remediation) — docs/02 §4. **No `anyhow` or
+  (code, decision chain, retryable, remediation), docs/02 §4. **No `anyhow` or
   string errors on the request path.** `anyhow` is permitted only in `xtask` and
   test helpers.
 - Every error code is **stable and documented** in a generated error reference
@@ -66,7 +66,7 @@ Rationale: budgets are a forcing function for decomposition. They catch the
 A library crate must not call bare `tokio::spawn`: it panics when invoked outside
 a running runtime, which a library cannot assume. Background work in a library
 captures a `tokio::runtime::Handle` and spawns on it (so a missing runtime is
-handled, not assumed) — e.g. `osproxy-otlp`'s fire-and-forget span export. The
+handled, not assumed), e.g. `osproxy-otlp`'s fire-and-forget span export. The
 binary (`osproxy-server`) owns the runtime, and `osproxy-transport` spawns only
 from inside its `async` accept loops where a runtime is guaranteed; both are
 exempt. Enforced by `cargo xtask spawn`; a deliberate exception carries an inline
@@ -84,7 +84,7 @@ exempt. Enforced by `cargo xtask spawn`; a deliberate exception carries an inlin
 - Follow the Rust API Guidelines (naming, conversions, `must_use`, error types).
 - Types in the public surface are `#[non_exhaustive]` where future growth is
   expected (error enums, endpoint kinds) so additions aren't breaking.
-- Newtypes for ids (`PartitionId`, `ClusterId`, `Epoch`) — no bare `String`/`u64`
+- Newtypes for ids (`PartitionId`, `ClusterId`, `Epoch`), no bare `String`/`u64`
   identifiers crossing API boundaries (prevents mix-ups, aids traceability).
 
 ## 8. Commits & change discipline
