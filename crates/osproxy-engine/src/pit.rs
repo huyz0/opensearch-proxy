@@ -70,6 +70,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         Ok(PipelineResponse {
             status: outcome.status,
             body,
+            content_type: None,
         })
     }
 
@@ -109,6 +110,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         Ok(PipelineResponse {
             status: outcome.status,
             body,
+            content_type: None,
         })
     }
 
@@ -167,6 +169,10 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         }
         let body = serde_json::to_vec(&serde_json::json!({ "pits": merged_pits }))
             .unwrap_or_else(|_| br#"{"pits":[]}"#.to_vec());
-        Ok(PipelineResponse { status, body })
+        Ok(PipelineResponse {
+            status,
+            body,
+            content_type: None,
+        })
     }
 }

@@ -113,7 +113,7 @@ fixed even where the threshold is tuned later.
 
 | ID | Requirement |
 |----|-------------|
-| NFR-R1 | **No panics** reachable from the request path. Enforced by `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]` on request-path crates; panics only allowed in startup/config with justification. |
+| NFR-R1 | **No panics** reachable from the request path. Enforced by the workspace clippy lints (`unwrap_used`/`expect_used`/`panic`/`todo`/`unimplemented` = `deny` in `[workspace.lints.clippy]`), which every crate opts into via `[lints] workspace = true`; tests opt out through `allow-*-in-tests`. Panics only allowed in startup/config with justification. |
 | NFR-R2 | Every fallible operation returns a typed error from the taxonomy ([02](02-spi.md) §errors); no `anyhow`/string errors on the request path. |
 | NFR-R3 | Backpressure: bounded queues everywhere; overload returns `429` with retry guidance, never OOM. |
 | NFR-R4 | Upstream failures (timeout, connection reset, 5xx) are classified retryable/terminal and surfaced with the decision chain. |

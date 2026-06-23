@@ -104,6 +104,9 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         Ok(PipelineResponse {
             status: outcome.status,
             body: outcome.body,
+            // Admin output (`_cat` etc.) is often `text/plain`; forward the
+            // upstream content type rather than mislabeling it `application/json`.
+            content_type: outcome.content_type,
         })
     }
 }

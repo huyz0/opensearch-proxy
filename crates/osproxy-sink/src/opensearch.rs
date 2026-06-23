@@ -538,6 +538,7 @@ impl Reader for OpenSearchSink {
         let (status, resp, reused) = self
             .forward_send(&fwd, body, "upstream cursor failed")
             .await?;
+        let content_type = content_type_of(&resp);
         let body = resp
             .into_body()
             .collect()
@@ -547,7 +548,9 @@ impl Reader for OpenSearchSink {
             })?
             .to_bytes()
             .to_vec();
-        Ok(CursorOutcome::new(status, body).with_pool_reuse(reused))
+        Ok(CursorOutcome::new(status, body)
+            .with_pool_reuse(reused)
+            .with_content_type(content_type))
     }
 
     async fn search_stream(&self, op: SearchOp) -> Result<StreamingSearch, SinkError> {
@@ -572,12 +575,24 @@ impl Reader for OpenSearchSink {
         let (status, resp, reused) = self
             .forward_send(&op, body, "upstream forward failed")
             .await?;
+        let content_type = content_type_of(&resp);
         Ok(StreamingForward {
             status,
             body: stream_body(resp.into_body()),
+            content_type,
             pool_reuse: reused,
         })
     }
+}
+
+/// The upstream `Content-Type` header value, if present and valid UTF-8. Carried
+/// onto the passthrough outcome so a non-JSON upstream body (e.g. `_cat`'s
+/// `text/plain`) is forwarded with the right type rather than mislabeled JSON.
+fn content_type_of(resp: &Response<Incoming>) -> Option<String> {
+    resp.headers()
+        .get(hyper::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
 }
 
 /// Maps the SPI method to a hyper method for the cursor passthrough.

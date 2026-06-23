@@ -126,6 +126,9 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         Ok(PipelineResponse {
             status: outcome.status,
             body: outcome.body,
+            // Verbatim passthrough: carry the upstream content type so a non-JSON
+            // body is not relabeled `application/json`.
+            content_type: outcome.content_type,
         })
     }
 

@@ -5,6 +5,12 @@
 //! the request trace. The orchestration (classification, trace assembly, the
 //! `/debug/explain` store) lives in [`crate::pipeline`]; this module is the body
 //! of each endpoint, kept separate so neither file becomes a god module.
+//
+// JUSTIFY(file-length): one cohesive family, the per-endpoint handler bodies the
+// pipeline dispatches to (ingest/get/delete/search/count/cursor) plus their two
+// small response shapers. They share the resolve -> dispatch -> shape skeleton
+// and the `wire_trace` helper; splitting them across files would scatter that one
+// pattern for no readability gain. Tests live in `read_tests.rs`/`pipeline_tests.rs`.
 
 use osproxy_core::{ClusterId, TraceContext};
 use osproxy_observe::DispatchInfo;
@@ -51,7 +57,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             .write(batch.with_trace(Some(&wire_trace(ctx))))
             .await?;
         trace.record_dispatch(dispatch_info(&resolved, &ack));
-        Ok(response_for(&ack))
+        Ok(response_for(&resolved, &ack))
     }
 
     /// Resolves `ctx`'s routing, retrying a momentarily-unavailable placement
@@ -134,11 +140,16 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
                 logical_id,
                 &shape.inject_names,
             )?;
-            Ok(PipelineResponse { status: 200, body })
+            Ok(PipelineResponse {
+                status: 200,
+                body,
+                content_type: None,
+            })
         } else {
             Ok(PipelineResponse {
                 status: 404,
                 body: not_found_body(ctx.logical_index(), logical_id),
+                content_type: None,
             })
         }
     }
@@ -190,6 +201,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         Ok(PipelineResponse {
             status,
             body: shape_delete(ctx.logical_index(), logical_id, status),
+            content_type: None,
         })
     }
 
@@ -242,6 +254,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         Ok(PipelineResponse {
             status: outcome.status,
             body,
+            content_type: None,
         })
     }
 
@@ -299,6 +312,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         Ok(PipelineResponse {
             status: outcome.status,
             body,
+            content_type: None,
         })
     }
 
@@ -356,6 +370,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         Ok(PipelineResponse {
             status: outcome.status,
             body: resp_body,
+            content_type: None,
         })
     }
 }
@@ -375,20 +390,30 @@ pub(crate) fn wire_trace(ctx: &RequestCtx<'_>) -> TraceContext {
 /// Shapes a write acknowledgement into an OpenSearch-style ingest response.
 ///
 /// For a single-document write the ack carries one result; its status and the
-/// created/updated outcome are surfaced as the client would expect.
-fn response_for(ack: &WriteAck) -> PipelineResponse {
+/// created/updated outcome are surfaced as the client would expect, with the
+/// `_id` mapped back to the client's logical id (`docs/03` §4). The body is built
+/// with `serde_json` so an id carrying JSON-special characters is escaped, never
+/// hand-interpolated.
+fn response_for(resolved: &Resolved, ack: &WriteAck) -> PipelineResponse {
     let Some(result) = ack.results().first() else {
         // No operations is not reachable from the single-doc path, but never
         // panic: report an empty 200 rather than unwrapping (NFR-R1).
         return PipelineResponse {
             status: 200,
             body: b"{}".to_vec(),
+            content_type: None,
         };
     };
     let outcome = if result.created { "created" } else { "updated" };
-    let body = format!(r#"{{"_id":"{}","result":"{outcome}"}}"#, result.id).into_bytes();
+    let logical_id = crate::read::logical_write_id(resolved, &result.id);
+    let body = serde_json::to_vec(&serde_json::json!({
+        "_id": logical_id,
+        "result": outcome,
+    }))
+    .unwrap_or_else(|_| b"{}".to_vec());
     PipelineResponse {
         status: result.status,
         body,
+        content_type: None,
     }
 }

@@ -48,6 +48,32 @@ pub struct PipelineResponse {
     pub status: u16,
     /// The JSON response body.
     pub body: Vec<u8>,
+    /// The response content type. `None` ⇒ `application/json`: every response the
+    /// proxy *shapes* is JSON, so that is the default. It is set only on the
+    /// verbatim admin/cursor passthrough, where the upstream may answer with a
+    /// non-JSON type (e.g. `_cat` returns `text/plain`); forcing `application/json`
+    /// there would mislabel the body (`docs/03` §6).
+    pub content_type: Option<String>,
+}
+
+impl PipelineResponse {
+    /// A JSON response, the shape every tenancy-aware endpoint returns.
+    #[must_use]
+    pub fn json(status: u16, body: Vec<u8>) -> Self {
+        Self {
+            status,
+            body,
+            content_type: None,
+        }
+    }
+
+    /// Carries the upstream content type verbatim (the admin/cursor passthrough),
+    /// so a non-JSON upstream body is not mislabeled `application/json`.
+    #[must_use]
+    pub fn with_content_type(mut self, content_type: Option<String>) -> Self {
+        self.content_type = content_type;
+        self
+    }
 }
 
 /// Orchestrates requests through a tenancy router and a sink.

@@ -179,10 +179,13 @@ fn map_protocol(version: hyper::Version) -> Protocol {
 }
 
 /// Renders a buffered [`IngressResponse`] into a hyper response, never panicking.
+/// Defaults the content type to `application/json` unless the handler already set
+/// one (a verbatim admin/passthrough body may be e.g. `text/plain`).
 fn render(out: IngressResponse) -> Response<ResponseBody> {
-    let mut builder = Response::builder()
-        .status(out.status)
-        .header("content-type", "application/json");
+    let mut builder = Response::builder().status(out.status);
+    if !has_content_type(&out.headers) {
+        builder = builder.header("content-type", "application/json");
+    }
     for (name, value) in out.headers {
         builder = builder.header(name, value);
     }
@@ -198,15 +201,24 @@ fn render(out: IngressResponse) -> Response<ResponseBody> {
 /// Renders a [`StreamingResponse`] (a verbatim forward) into a hyper response: the
 /// body is the upstream stream, piped straight to the client without buffering.
 fn render_forward(out: StreamingResponse) -> Response<ResponseBody> {
-    let mut builder = Response::builder()
-        .status(out.status)
-        .header("content-type", "application/json");
+    let mut builder = Response::builder().status(out.status);
+    if !has_content_type(&out.headers) {
+        builder = builder.header("content-type", "application/json");
+    }
     for (name, value) in out.headers {
         builder = builder.header(name, value);
     }
     builder
         .body(out.body)
         .unwrap_or_else(|_| Response::new(buffered_response(b"{\"error\":\"internal\"}".to_vec())))
+}
+
+/// Whether a header list already carries a `Content-Type` (case-insensitive), so
+/// the renderers don't override a verbatim passthrough type with JSON.
+fn has_content_type(headers: &[(String, String)]) -> bool {
+    headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
 }
 
 /// A minimal JSON error body, value-free.

@@ -74,6 +74,15 @@ or override**:
 - The rewrite wraps the *entire* client query in a `bool { must: [client_query],
   filter: [term(partition_field = P)] }`. The client query cannot escape the
   filter because it is nested inside.
+- A few search *constructs* are evaluated by OpenSearch **outside** the query, so
+  the wrapping `bool.filter` does not constrain them: a `global` aggregation
+  (defined as "all documents… not influenced by the search query") and a
+  `suggest` block. Left through, either would read across partitions in a shared
+  index. The rewrite therefore **rejects** a shared-index search carrying a
+  `global` aggregation (at any nesting depth) or a `suggest` block
+  (`RewriteError::Unfilterable` → `400`). Ordinary, query-scoped aggregations are
+  unaffected, they already see only the filtered set. A dedicated index/cluster
+  has no filter (the whole target is the partition's), so nothing is screened.
 - Endpoints that cannot be safely filtered (e.g. raw `_sql` passthrough,
   scripted queries that could reference other partitions) are **not** in the
   tenancy-aware set; they are rejected in shared mode (`SpiError::UnsupportedEndpoint`)

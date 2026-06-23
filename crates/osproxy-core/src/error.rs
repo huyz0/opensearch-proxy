@@ -44,6 +44,9 @@ pub enum ErrorCode {
     /// affinity envelope is missing, malformed, or unverifiable. The client must
     /// re-issue the originating search (`docs/03` §6).
     CursorUnresolvable,
+    /// The request body exceeded a size cap (e.g. a single `_bulk` line over the
+    /// per-op limit). A client error: the client must split or shrink the body.
+    PayloadTooLarge,
 }
 
 impl ErrorCode {
@@ -61,6 +64,7 @@ impl ErrorCode {
             Self::UpstreamFailed => "upstream_failed",
             Self::Overloaded => "overloaded",
             Self::CursorUnresolvable => "cursor_unresolvable",
+            Self::PayloadTooLarge => "payload_too_large",
         }
     }
 }
@@ -162,6 +166,7 @@ mod tests {
             ErrorCode::UpstreamFailed,
             ErrorCode::Overloaded,
             ErrorCode::CursorUnresolvable,
+            ErrorCode::PayloadTooLarge,
         ];
         let mut seen = std::collections::HashSet::new();
         for code in all {

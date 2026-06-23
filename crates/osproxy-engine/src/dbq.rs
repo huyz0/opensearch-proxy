@@ -88,6 +88,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             body: serde_json::to_vec(&body).map_err(|_| RequestError::Internal {
                 reason: "serializing delete-by-query response",
             })?,
+            content_type: None,
         })
     }
 

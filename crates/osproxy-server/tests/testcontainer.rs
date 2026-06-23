@@ -200,7 +200,13 @@ async fn ingest_round_trips_to_real_opensearch() {
     .await
     .unwrap();
     assert_eq!(status, 201, "proxy ingest failed: {body}");
-    assert!(body.contains(r#""_id":"acme:7""#), "{body}");
+    // The proxy echoes the client's *logical* id (`7`); the partition-prefixed
+    // physical id (`acme:7`) is an upstream detail and must not leak to the client.
+    assert!(body.contains(r#""_id":"7""#), "{body}");
+    assert!(
+        !body.contains("acme:7"),
+        "physical id leaked to client: {body}"
+    );
 
     // The document is in OpenSearch, in the shared index, at the constructed id,
     // with the injected tenancy field and routing, query OpenSearch directly.

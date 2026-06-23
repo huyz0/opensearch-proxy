@@ -188,6 +188,15 @@ async fn run<H: IngressHandler>(
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, _peer) = accepted?;
+                // Connection ceiling (NFR-R3): the byte budgets bound buffered
+                // memory, but streamed paths reserve no bytes, so cap the live
+                // connection count here. Over the ceiling, drop the new stream
+                // (closing it) rather than serve it. A soft check (a brief accept
+                // race is harmless for a ceiling this size).
+                if active.load(Ordering::Acquire) >= limits.max_connections {
+                    drop(stream);
+                    continue;
+                }
                 spawn_conn(stream, &mode, &handler, &admission, limits, &active, &drain_rx);
             }
             () = &mut shutdown => break,

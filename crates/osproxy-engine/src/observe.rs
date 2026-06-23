@@ -137,6 +137,9 @@ fn remediation(err: &RequestError) -> &'static str {
         RequestError::Cursor { .. } => {
             "the scroll/PIT cursor is expired or invalid; re-issue the originating search"
         }
+        RequestError::PayloadTooLarge { .. } => {
+            "the request body exceeds a size cap; split the batch or shrink the document"
+        }
     }
 }
 

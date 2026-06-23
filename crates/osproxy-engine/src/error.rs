@@ -52,6 +52,15 @@ pub enum RequestError {
         /// A short, value-free reason (e.g. `"missing"`, `"bad signature"`).
         reason: &'static str,
     },
+
+    /// The request body exceeded a size cap (e.g. a single `_bulk` line over the
+    /// per-op limit). A client error (`413`), not an internal fault: the client
+    /// must split or shrink the body.
+    #[error("payload too large: {reason}")]
+    PayloadTooLarge {
+        /// A short, value-free description of the limit that was exceeded.
+        reason: &'static str,
+    },
 }
 
 impl RequestError {
@@ -68,6 +77,7 @@ impl RequestError {
             // a dedicated rewrite code is added (additive, docs/08 §7).
             Self::Rewrite(_) | Self::Internal { .. } => ErrorCode::UnsupportedEndpoint,
             Self::Cursor { .. } => ErrorCode::CursorUnresolvable,
+            Self::PayloadTooLarge { .. } => ErrorCode::PayloadTooLarge,
         }
     }
 
@@ -79,9 +89,13 @@ impl RequestError {
             Self::Sink(e) => e.retryable(),
             // A stale epoch is retryable: the retry re-resolves the placement.
             Self::StaleEpoch { .. } => true,
-            // Malformed body, internal bug, or an unresolvable cursor: a blind
-            // retry cannot help (the cursor case wants a re-issued search).
-            Self::Rewrite(_) | Self::Internal { .. } | Self::Cursor { .. } => false,
+            // Malformed body, internal bug, an unresolvable cursor, or an
+            // over-cap body: a blind retry cannot help (the cursor case wants a
+            // re-issued search; the over-cap case wants a smaller body).
+            Self::Rewrite(_)
+            | Self::Internal { .. }
+            | Self::Cursor { .. }
+            | Self::PayloadTooLarge { .. } => false,
         }
     }
 }

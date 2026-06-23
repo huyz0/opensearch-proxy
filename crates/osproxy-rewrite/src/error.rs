@@ -56,6 +56,18 @@ pub enum RewriteError {
     /// usable for `GetById`/`DeleteById` (`docs/03` §4, `docs/04` §5).
     #[error("id template is not reversible: needs exactly one body placeholder")]
     IrreversibleIdTemplate,
+
+    /// A shared-index search carries a construct that escapes the mandatory
+    /// partition filter, a `global` aggregation (which OpenSearch evaluates
+    /// against the whole index, ignoring the query) or a `suggest` block (which
+    /// runs independent of the query). Either would read across partitions, so
+    /// it is refused: the isolation boundary is filter-or-reject, never
+    /// best-effort (`docs/03` §5, NFR-S4). Carries only the construct name.
+    #[error("search construct bypasses the partition filter: {construct}")]
+    Unfilterable {
+        /// The offending construct: `"global aggregation"` or `"suggest"`.
+        construct: &'static str,
+    },
 }
 
 /// Maps a byte-scanner failure onto the transform error vocabulary, so the

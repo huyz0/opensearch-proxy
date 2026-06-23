@@ -101,7 +101,14 @@ async fn ingest_doc_returns_created_response() {
     let resp = p.handle(&c).await.unwrap();
     assert_eq!(resp.status, 201);
     let body = String::from_utf8(resp.body).unwrap();
-    assert!(body.contains(r#""_id":"acme:7""#), "{body}");
+    // The response echoes the client's *logical* id (`7`), not the partition-
+    // prefixed physical id (`acme:7`) the proxy wrote upstream, so the id round-
+    // trips: a later GET/DELETE of `7` resolves to the same document (`docs/03` §4).
+    assert!(body.contains(r#""_id":"7""#), "{body}");
+    assert!(
+        !body.contains("acme:7"),
+        "physical id must not leak: {body}"
+    );
     assert!(body.contains(r#""result":"created""#));
 }
 
@@ -127,6 +134,36 @@ async fn unimplemented_endpoint_is_unsupported() {
             endpoint: EndpointKind::Admin
         })
     ));
+}
+
+#[tokio::test]
+async fn a_global_aggregation_search_is_rejected_before_dispatch() {
+    // End-to-end through the live dispatch (not just the pure `wrap_query` unit):
+    // a shared-index `_search` carrying a `global` aggregation, which OpenSearch
+    // evaluates across the whole index ignoring the partition filter, is refused
+    // at the rewrite stage (NFR-S4, `docs/03` §5), so it never reaches the sink.
+    let p = pipeline();
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r");
+    // A search body carries the query, so the partition resolves from the header.
+    let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
+    let c = ctx(
+        &principal,
+        &rid,
+        &headers,
+        EndpointKind::Search,
+        br#"{"size":0,"aggs":{"leak":{"global":{},"aggs":{"all":{"top_hits":{"size":50}}}}}}"#,
+    );
+    let err = p.handle(&c).await.unwrap_err();
+    // Surfaced as a rejected request shape (the isolation guard), non-retryable.
+    assert!(matches!(err, RequestError::Rewrite(_)), "{err:?}");
+    assert_eq!(err.code(), osproxy_core::ErrorCode::UnsupportedEndpoint);
+    assert!(!err.retryable());
+    // The in-memory sink saw no search: the request failed before any dispatch.
+    assert!(
+        p.sink().recorded_searches().is_empty(),
+        "must not reach the cluster"
+    );
 }
 
 #[tokio::test]

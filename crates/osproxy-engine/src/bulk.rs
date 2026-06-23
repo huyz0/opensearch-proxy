@@ -109,6 +109,7 @@ pub(crate) async fn ingest_bulk<R: Router, S: Sink>(
         body: serde_json::to_vec(&body).map_err(|_| RequestError::Internal {
             reason: "serializing bulk response",
         })?,
+        content_type: None,
     })
 }
 
@@ -166,6 +167,7 @@ pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
         body: serde_json::to_vec(&body).map_err(|_| RequestError::Internal {
             reason: "serializing bulk response",
         })?,
+        content_type: None,
     })
 }
 
@@ -242,7 +244,8 @@ impl NdjsonReader {
                 return Ok(Some(std::mem::take(&mut self.buf)));
             }
             if self.buf.len() > MAX_LINE_BYTES {
-                return Err(RequestError::Internal {
+                // A client-caused over-cap line is a `413`, not an internal fault.
+                return Err(RequestError::PayloadTooLarge {
                     reason: "bulk line exceeds the per-op size cap",
                 });
             }
@@ -335,6 +338,7 @@ pub(crate) async fn ingest_bulk_async<R: Router>(
         body: serde_json::to_vec(&body).map_err(|_| RequestError::Internal {
             reason: "serializing bulk response",
         })?,
+        content_type: None,
     })
 }
 

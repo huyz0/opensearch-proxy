@@ -184,6 +184,7 @@ pub(crate) fn accepted_response(op_id: &str, index: &str) -> PipelineResponse {
             "_index": index,
         }))
         .unwrap_or_else(|_| b"{}".to_vec()),
+        content_type: None,
     }
 }
 
@@ -199,6 +200,7 @@ pub(crate) fn unsupported_response(reason: &str, index: &str) -> PipelineRespons
             "_index": index,
         }))
         .unwrap_or_else(|_| b"{}".to_vec()),
+        content_type: None,
     }
 }
 
@@ -214,6 +216,7 @@ pub(crate) fn unavailable_response(index: &str) -> PipelineResponse {
             "_index": index,
         }))
         .unwrap_or_else(|_| b"{}".to_vec()),
+        content_type: None,
     }
 }
 
@@ -230,6 +233,7 @@ pub(crate) fn enqueue_failed_response(op_id: &str, index: &str) -> PipelineRespo
             "_index": index,
         }))
         .unwrap_or_else(|_| b"{}".to_vec()),
+        content_type: None,
     }
 }
 

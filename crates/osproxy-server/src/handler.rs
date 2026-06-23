@@ -355,7 +355,7 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
         let (response, ok) = match result {
             Ok(resp) => {
                 let ok = (200..300).contains(&resp.status);
-                (IngressResponse::json(resp.status, resp.body), ok)
+                (ingress_from(resp), ok)
             }
             Err(err) => (
                 IngressResponse::json(status_for(&err), error_body(&err)),
@@ -396,7 +396,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         let (response, ok) = match result {
             Ok(resp) => {
                 let ok = (200..300).contains(&resp.status);
-                (IngressResponse::json(resp.status, resp.body), ok)
+                (ingress_from(resp), ok)
             }
             Err(err) => (
                 IngressResponse::json(status_for(&err), error_body(&err)),
@@ -445,7 +445,13 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         let response = match result {
             Ok(forward) => {
                 self.after_streamed(&request_id, (200..300).contains(&forward.status));
-                StreamingResponse::stream(forward.status, forward.body)
+                let mut response = StreamingResponse::stream(forward.status, forward.body);
+                // Carry the upstream content type so a non-JSON verbatim forward
+                // (e.g. a passed-through `_cat`) is not relabeled `application/json`.
+                if let Some(content_type) = forward.content_type {
+                    response = response.with_header("content-type", content_type);
+                }
+                response
             }
             Err(err) => {
                 self.after_streamed(&request_id, false);
@@ -624,6 +630,18 @@ fn build_ctx<'a>(
     .with_path(&req.path)
 }
 
+/// Builds the ingress response from a pipeline response, carrying its content type
+/// when set, so a verbatim admin/passthrough body (e.g. `_cat` `text/plain`) is
+/// not mislabeled `application/json`. A shaped response leaves it `None` and the
+/// transport defaults to JSON.
+fn ingress_from(resp: PipelineResponse) -> IngressResponse {
+    let out = IngressResponse::json(resp.status, resp.body);
+    match resp.content_type {
+        Some(content_type) => out.with_header("content-type", content_type),
+        None => out,
+    }
+}
+
 /// Extracts client credentials from a request: a bearer token from
 /// `Authorization` and the verified mTLS client-certificate identity, if any.
 fn credentials_from(req: &IngressRequest) -> ClientCredentials {
@@ -646,6 +664,7 @@ fn status_for(err: &RequestError) -> u16 {
         ErrorCode::Unauthorized => 403,
         ErrorCode::PlacementMissing => 404,
         ErrorCode::StaleEpoch => 409,
+        ErrorCode::PayloadTooLarge => 413,
         ErrorCode::UpstreamFailed => 502,
         ErrorCode::PlacementBackendUnavailable | ErrorCode::Overloaded => 503,
         // ErrorCode is non-exhaustive; an unmapped code is an internal fault.

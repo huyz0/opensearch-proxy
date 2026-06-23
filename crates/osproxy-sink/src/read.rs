@@ -388,6 +388,10 @@ pub struct StreamingForward {
     pub status: u16,
     /// The upstream response body, streamed back verbatim.
     pub body: crate::ByteBody,
+    /// The upstream `Content-Type`, forwarded verbatim so a non-JSON passthrough
+    /// body is not mislabeled `application/json`. `None` ⇒ the caller defaults to
+    /// JSON.
+    pub content_type: Option<String>,
     /// Whether this op rode a reused pooled connection (NFR-P telemetry).
     pub pool_reuse: bool,
 }
@@ -432,6 +436,10 @@ pub struct CursorOutcome {
     pub status: u16,
     /// The raw upstream response body.
     pub body: Vec<u8>,
+    /// The upstream `Content-Type`, forwarded verbatim so an admin/cursor
+    /// passthrough body (e.g. a `_cat` `text/plain`) is not mislabeled
+    /// `application/json`. `None` ⇒ the caller defaults to JSON.
+    pub content_type: Option<String>,
     /// Whether this op rode a reused pooled connection (NFR-P telemetry).
     pub pool_reuse: bool,
 }
@@ -443,6 +451,7 @@ impl CursorOutcome {
         Self {
             status,
             body,
+            content_type: None,
             pool_reuse: false,
         }
     }
@@ -451,6 +460,13 @@ impl CursorOutcome {
     #[must_use]
     pub fn with_pool_reuse(mut self, reused: bool) -> Self {
         self.pool_reuse = reused;
+        self
+    }
+
+    /// Carries the upstream `Content-Type` (builder style).
+    #[must_use]
+    pub fn with_content_type(mut self, content_type: Option<String>) -> Self {
+        self.content_type = content_type;
         self
     }
 }

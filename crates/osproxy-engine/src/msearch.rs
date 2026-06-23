@@ -71,6 +71,7 @@ pub(crate) async fn multi_search<R: Router, S: Reader>(
     Ok(PipelineResponse {
         status: 200,
         body: assemble_responses(&responses),
+        content_type: None,
     })
 }
 

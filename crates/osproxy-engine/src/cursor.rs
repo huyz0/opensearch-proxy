@@ -165,8 +165,12 @@ pub(crate) fn rewrite_cursor_body(client_body: &[u8], id_field: &str, real_id: &
         .filter(serde_json::Value::is_object)
         .unwrap_or_else(|| serde_json::json!({}));
     v[id_field] = serde_json::Value::String(real_id.to_owned());
-    serde_json::to_vec(&v)
-        .unwrap_or_else(|_| format!(r#"{{"{id_field}":"{real_id}"}}"#).into_bytes())
+    // The fallback is all but unreachable (`v` is a freshly built object), but
+    // still escapes via serde rather than interpolating the id into JSON by hand.
+    serde_json::to_vec(&v).unwrap_or_else(|_| {
+        serde_json::to_vec(&serde_json::json!({ id_field: real_id }))
+            .unwrap_or_else(|_| b"{}".to_vec())
+    })
 }
 
 #[cfg(test)]

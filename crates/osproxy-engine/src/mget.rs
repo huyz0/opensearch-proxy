@@ -68,6 +68,7 @@ pub(crate) async fn multi_get<R: Router, S: Reader>(
         body: serde_json::to_vec(&body).map_err(|_| RequestError::Internal {
             reason: "serializing mget response",
         })?,
+        content_type: None,
     })
 }
 

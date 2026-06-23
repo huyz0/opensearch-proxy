@@ -27,14 +27,23 @@ pub struct IngressLimits {
     pub max_body_bytes: usize,
     /// The largest total of concurrently-buffered bodies (else `429`).
     pub inflight_ceiling: usize,
+    /// The largest number of concurrent connections accepted. The byte ceilings
+    /// above bound *buffered* memory, but the streaming paths (verbatim forward,
+    /// streamed `_bulk`/`_search`) reserve no bytes, so without this a flood of
+    /// slow streaming connections has no backpressure. Beyond this count a newly
+    /// accepted connection is closed immediately rather than served.
+    pub max_connections: usize,
 }
 
 impl Default for IngressLimits {
     fn default() -> Self {
         // 8 MiB per body, 256 MiB in flight, bulk-sized, bounded, never OOM.
+        // 16k concurrent connections caps the streaming/file-descriptor surface
+        // well under a typical `ulimit -n`; raise it for a high-fan-in deployment.
         Self {
             max_body_bytes: 8 * 1024 * 1024,
             inflight_ceiling: 256 * 1024 * 1024,
+            max_connections: 16 * 1024,
         }
     }
 }

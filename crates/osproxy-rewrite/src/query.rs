@@ -24,10 +24,18 @@ use crate::error::RewriteError;
 /// terms become its `filter` clause. All other top-level keys (`size`, `sort`,
 /// `_source`, `aggs`, …) are preserved untouched.
 ///
+/// When `filter` is non-empty (a shared index, where isolation depends on the
+/// filter), the body is also screened for constructs that escape it, a `global`
+/// aggregation or a `suggest` block, and rejected with [`RewriteError::Unfilterable`]
+/// (`docs/03` §5, NFR-S4). With an empty `filter` (a dedicated index/cluster, the
+/// whole target belongs to the partition) nothing is screened.
+///
 /// # Errors
 ///
 /// Returns [`RewriteError::InvalidJson`] if `body` is non-empty but not valid
-/// JSON, or [`RewriteError::NotAnObject`] if it is not a JSON object.
+/// JSON, [`RewriteError::NotAnObject`] if it is not a JSON object, or
+/// [`RewriteError::Unfilterable`] if a partition filter is in force and the body
+/// carries a construct that would bypass it.
 ///
 /// # Examples
 ///
@@ -52,6 +60,14 @@ pub fn wrap_query(body: &[u8], filter: &[(FieldName, Value)]) -> Result<Vec<u8>,
     // proves the body is an object, so the isolation guarantee is unchanged; we
     // only avoid re-allocating subtrees the proxy does not inspect.
     let mut top = parse_top(body)?;
+
+    // Isolation depends on the filter only when there is one (a shared index). If
+    // so, refuse any sibling construct that OpenSearch evaluates outside the
+    // query, a `global` aggregation or a `suggest` block, since the wrapping
+    // `bool.filter` cannot constrain it (NFR-S4, `docs/03` §5).
+    if !filter.is_empty() {
+        reject_unfilterable(&top)?;
+    }
 
     // The client's query becomes the inner `must`; absent means match-all. It is
     // re-embedded verbatim (its raw bytes), never re-serialized.
@@ -118,6 +134,50 @@ fn parse_top(body: &[u8]) -> Result<BTreeMap<String, Box<RawValue>>, RewriteErro
             Err(_) => Err(RewriteError::InvalidJson),
         },
     }
+}
+
+/// Rejects search bodies whose top level carries a construct that escapes the
+/// partition filter (`docs/03` §5): a `suggest` block, or an `aggs`/`aggregations`
+/// tree containing a `global` aggregation. Only the small request-side agg
+/// *definition* is parsed (never the response), so the no-materialization posture
+/// holds. Fail-closed: a malformed agg subtree is itself rejected.
+fn reject_unfilterable(top: &BTreeMap<String, Box<RawValue>>) -> Result<(), RewriteError> {
+    if top.contains_key("suggest") {
+        return Err(RewriteError::Unfilterable {
+            construct: "suggest",
+        });
+    }
+    for key in ["aggs", "aggregations"] {
+        if let Some(raw) = top.get(key) {
+            let aggs: Value = serde_json::from_slice(raw.get().as_bytes())
+                .map_err(|_| RewriteError::InvalidJson)?;
+            if contains_global_agg(&aggs) {
+                return Err(RewriteError::Unfilterable {
+                    construct: "global aggregation",
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether an aggregations object contains a `global` bucket at any nesting
+/// depth. An aggregation is `{"<name>": {"<type>": …, "aggs": {…}}}`; a `global`
+/// agg is the one whose body has a `"global"` key. Recurses through nested
+/// `aggs`/`aggregations` so a `global` buried under other buckets is still found.
+fn contains_global_agg(aggs: &Value) -> bool {
+    let Some(obj) = aggs.as_object() else {
+        return false;
+    };
+    obj.values().any(|agg| {
+        agg.as_object().is_some_and(|agg| {
+            agg.contains_key("global")
+                || ["aggs", "aggregations"]
+                    .iter()
+                    .filter_map(|k| agg.get(*k))
+                    .any(contains_global_agg)
+        })
+    })
 }
 
 #[cfg(test)]
@@ -222,6 +282,56 @@ mod tests {
         let doc: Value = serde_json::from_slice(&wrapped).unwrap();
         assert_eq!(doc["query"]["bool"]["filter"][0]["term"]["_active"], true);
         assert_eq!(doc["query"]["bool"]["filter"][1]["term"]["_shard"], 7);
+    }
+
+    #[test]
+    fn a_global_aggregation_is_rejected_under_a_partition_filter() {
+        // `global` ignores the query, so under a shared-index filter it would read
+        // across partitions (NFR-S4). Reject it, even nested under other aggs.
+        let body = br#"{"size":0,"aggs":{"outer":{"terms":{"field":"k"},"aggs":{"leak":{"global":{},"aggs":{"hits":{"top_hits":{"size":50}}}}}}}}"#;
+        assert_eq!(
+            wrap_query(body, &filter()).unwrap_err(),
+            RewriteError::Unfilterable {
+                construct: "global aggregation"
+            }
+        );
+        // The `aggregations` spelling is caught too.
+        let body = br#"{"aggregations":{"g":{"global":{}}}}"#;
+        assert!(matches!(
+            wrap_query(body, &filter()).unwrap_err(),
+            RewriteError::Unfilterable { .. }
+        ));
+    }
+
+    #[test]
+    fn a_suggest_block_is_rejected_under_a_partition_filter() {
+        let body = br#"{"suggest":{"s":{"text":"x","term":{"field":"msg"}}}}"#;
+        assert_eq!(
+            wrap_query(body, &filter()).unwrap_err(),
+            RewriteError::Unfilterable {
+                construct: "suggest"
+            }
+        );
+    }
+
+    #[test]
+    fn ordinary_query_scoped_aggregations_are_allowed() {
+        // A normal aggregation respects the wrapping `bool.filter`, so it stays.
+        let body = br#"{"aggs":{"by_k":{"terms":{"field":"k"}}}}"#;
+        let wrapped = wrap_query(body, &filter()).unwrap();
+        let doc: Value = serde_json::from_slice(&wrapped).unwrap();
+        assert_eq!(doc["aggs"]["by_k"]["terms"]["field"], "k");
+        assert_eq!(doc["query"]["bool"]["filter"][0]["term"]["_tenant"], "acme");
+    }
+
+    #[test]
+    fn unfilterable_constructs_are_allowed_without_a_partition_filter() {
+        // A dedicated index/cluster has no filter (the whole target is the
+        // partition's), so a `global` agg or `suggest` is harmless and passes.
+        let body = br#"{"aggs":{"g":{"global":{}}},"suggest":{"s":{"text":"x"}}}"#;
+        let wrapped = wrap_query(body, &[]).unwrap();
+        let doc: Value = serde_json::from_slice(&wrapped).unwrap();
+        assert_eq!(doc["aggs"]["g"]["global"], serde_json::json!({}));
     }
 
     #[test]

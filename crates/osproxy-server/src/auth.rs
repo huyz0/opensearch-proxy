@@ -25,6 +25,21 @@ impl Authorizer for AllowAllAuthorizer {
 }
 
 /// A bearer-token authenticator over a static `token -> principal id` map.
+///
+/// This is a **reference** implementation; a real deployment supplies its own
+/// [`Authenticator`] (OIDC, LDAP, an mTLS-subject mapping, …). Two deliberate
+/// properties follow from it being a reference, not a hardened identity provider:
+///
+/// - **Token lookup is a `HashMap::get`, not a constant-time compare.** The map's
+///   randomized `SipHash` makes a timing oracle impractical, and the privileged
+///   admin token (a single fixed secret) *does* use a constant-time compare
+///   (`crate::bearer`). A deployment that treats data-plane tokens as
+///   timing-sensitive secrets should plug in its own authenticator.
+/// - **In token mode the verified mTLS client identity is not the principal.**
+///   mTLS provides transport authentication (the cert chain is verified by the
+///   TLS layer); the principal id here comes from the token map. A deployment
+///   wanting *certificate-derived* identity supplies an authenticator that maps
+///   `client_cert_subject` to a principal.
 #[derive(Debug, Default)]
 pub struct ReferenceAuthenticator {
     tokens: HashMap<String, String>,

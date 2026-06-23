@@ -115,6 +115,26 @@ fn physical_id_and_routing(
     Ok((physical_id, routing))
 }
 
+/// Maps a write acknowledgement's **physical** `_id` back to the client's logical
+/// id, so an ingest/delete response echoes the id the client used, not the
+/// partition-prefixed physical id (`docs/03` §4). Mirrors the read and bulk paths,
+/// which already reverse the id rule. With no id rule (a dedicated index) the
+/// client id is already physical; an irreversible template falls back to the
+/// physical id rather than failing the otherwise-successful write.
+pub(crate) fn logical_write_id(resolved: &Resolved, physical_id: &str) -> String {
+    match read_shape(&resolved.decision.body_transform).id_rule {
+        Some(rule) => map_physical_to_logical(
+            rule.template.as_str(),
+            resolved.partition.as_str(),
+            physical_id,
+        )
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| physical_id.to_owned()),
+        None => physical_id.to_owned(),
+    }
+}
+
 /// Shapes a found upstream document into the client's logical view: presents the
 /// logical index and id, drops `_routing`, and strips injected tenancy fields
 /// from `_source` (the read-path inverse of the write-path inject, `docs/03`).
@@ -177,7 +197,8 @@ pub(crate) fn not_found_body(logical_index: &str, logical_id: &str) -> Vec<u8> {
 /// # Errors
 ///
 /// Returns [`RequestError::Rewrite`] if the client search body is not a JSON
-/// object (or is invalid JSON).
+/// object (or is invalid JSON), or carries a construct that escapes the partition
+/// filter (`global` aggregation / `suggest`) under a shared-index placement.
 pub(crate) fn build_search_op(
     resolved: &Resolved,
     body: &[u8],

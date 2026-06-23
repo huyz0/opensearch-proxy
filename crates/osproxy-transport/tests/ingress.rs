@@ -67,6 +67,7 @@ async fn body_over_the_per_request_cap_is_413() {
     let limits = IngressLimits {
         max_body_bytes: 16,
         inflight_ceiling: 1024,
+        ..IngressLimits::default()
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -92,6 +93,7 @@ async fn body_over_the_inflight_ceiling_is_shed_with_429() {
     let limits = IngressLimits {
         max_body_bytes: 1024,
         inflight_ceiling: 8,
+        ..IngressLimits::default()
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -163,4 +165,94 @@ async fn unsupported_method_gets_405() {
 
     let resp = client.request(req).await.unwrap();
     assert_eq!(resp.status(), 405);
+}
+
+/// A handler that sets a non-JSON content type, like a verbatim admin/passthrough
+/// forward of a `_cat` `text/plain` body.
+struct TextHandler;
+
+impl IngressHandler for TextHandler {
+    async fn handle(&self, _req: IngressRequest) -> IngressResponse {
+        IngressResponse::json(200, b"green open .kibana".to_vec())
+            .with_header("content-type", "text/plain; charset=UTF-8")
+    }
+}
+
+#[tokio::test]
+async fn a_handler_content_type_is_not_overridden_with_json() {
+    // The transport defaults responses to `application/json`, but must not clobber
+    // a content type the handler already set (the verbatim-passthrough fix): a
+    // forwarded `_cat` body stays `text/plain`.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = serve(listener, Arc::new(TextHandler)).await;
+    });
+
+    let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri(format!("http://{addr}/_cat/indices"))
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    let resp = client.request(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert!(ct.starts_with("text/plain"), "content type preserved: {ct}");
+}
+
+/// A handler that blocks long enough to keep a connection in-flight, so the test
+/// can hold the single connection slot while a second connection is attempted.
+struct SlowHandler;
+
+impl IngressHandler for SlowHandler {
+    async fn handle(&self, _req: IngressRequest) -> IngressResponse {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        IngressResponse::json(200, b"{}".to_vec())
+    }
+}
+
+#[tokio::test]
+async fn connections_over_the_ceiling_are_closed() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let limits = IngressLimits {
+        max_connections: 1,
+        ..IngressLimits::default()
+    };
+    tokio::spawn(async move {
+        let _ = serve_with_limits(listener, Arc::new(SlowHandler), limits).await;
+    });
+
+    // First connection: occupy the single slot with an in-flight (slow) request.
+    // The accept loop increments the live count synchronously before accepting
+    // again, so once this request is sent and accepted the slot is taken.
+    let mut c1 = TcpStream::connect(addr).await.unwrap();
+    c1.write_all(b"GET /_cat/health HTTP/1.1\r\nHost: x\r\n\r\n")
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Second connection: over the ceiling, so the server closes it immediately.
+    let mut c2 = TcpStream::connect(addr).await.unwrap();
+    let _ = c2
+        .write_all(b"GET /_cat/health HTTP/1.1\r\nHost: x\r\n\r\n")
+        .await;
+    let mut buf = Vec::new();
+    let n = tokio::time::timeout(std::time::Duration::from_secs(1), c2.read_to_end(&mut buf))
+        .await
+        .expect("the dropped connection closes well within the timeout")
+        .unwrap_or(0);
+    assert_eq!(
+        n, 0,
+        "over-ceiling connection closed with no response: {buf:?}"
+    );
+    drop(c1);
 }
