@@ -416,7 +416,7 @@ impl OpenSearchSink {
             Some(q) if !q.is_empty() => format!("{}{}?{q}", pool.base, op.path),
             _ => format!("{}{}", pool.base, op.path),
         };
-        let req = Request::builder()
+        let mut req = Request::builder()
             .method(hyper_method(op.method))
             .uri(uri)
             .header("content-type", "application/json")
@@ -424,6 +424,10 @@ impl OpenSearchSink {
             .map_err(|_| SinkError::Transport {
                 kind: "building upstream forward request",
             })?;
+        // Relay the client's forwarded headers verbatim (the policy already
+        // dropped hop-by-hop/framing). Applied before `send` injects the proxy
+        // trace, so a proxy span (when export is on) still wins on `traceparent`.
+        apply_forward_headers(&mut req, &op.forward_headers);
         let (resp, reused) = self
             .send(&pool, op.protocol, req, op.trace.as_ref(), fail_kind)
             .await?;
@@ -534,6 +538,7 @@ impl Reader for OpenSearchSink {
             endpoint: op.endpoint,
             protocol: op.protocol,
             trace: op.trace,
+            forward_headers: op.forward_headers,
         };
         let (status, resp, reused) = self
             .forward_send(&fwd, body, "upstream cursor failed")
@@ -582,6 +587,22 @@ impl Reader for OpenSearchSink {
             content_type,
             pool_reuse: reused,
         })
+    }
+}
+
+/// Relays the client's forwarded headers onto the upstream request. Each is
+/// `insert`ed (so a forwarded `content-type` overrides the builder's default, as a
+/// verbatim passthrough should). A name or value that is not valid for the wire is
+/// skipped; forwarding is best-effort and never fails the request.
+fn apply_forward_headers<B>(req: &mut Request<B>, headers: &[(String, String)]) {
+    use hyper::header::{HeaderName, HeaderValue};
+    for (name, value) in headers {
+        if let (Ok(n), Ok(v)) = (
+            HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            req.headers_mut().insert(n, v);
+        }
     }
 }
 

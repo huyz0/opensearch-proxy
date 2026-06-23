@@ -356,7 +356,8 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         let body = rewrite_cursor_body(ctx.body(), req.id_field, &real_id);
         let op = CursorOp::new(cluster.clone(), ctx.method(), req.upstream_path, body)
             .with_endpoint(self.router.cluster_endpoint(&cluster))
-            .with_trace(Some(wire_trace(ctx)));
+            .with_trace(self.upstream_trace(ctx))
+            .with_forward_headers(ctx.forward_headers().to_vec());
         let outcome = self.sink.cursor(op).await?;
         // A scroll continue's response carries the *next* page's `_scroll_id`;
         // re-wrap it with the same cluster so the client's next continue verifies

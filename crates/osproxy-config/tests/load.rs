@@ -2,6 +2,10 @@
 //! resolution and the file→env→flags precedence without touching the process
 //! environment (env layering is covered by `Config::load` in the binary; here we
 //! drive the deterministic file/flag/pair paths).
+//
+// JUSTIFY(file-length): one cohesive suite of config validation/layering cases
+// over a shared `resolve` helper, each a small self-contained scenario; splitting
+// it across files would scatter the harness without adding clarity.
 
 use osproxy_config::{Config, ConfigError, DiagBaseline};
 
@@ -28,6 +32,29 @@ fn defaults_apply_when_nothing_is_set() {
         cfg.require_tls_for_mutation,
         "NFR-S1 enforced unless opted out"
     );
+    assert!(
+        cfg.header_forwarding.enabled,
+        "client headers forwarded by default (sidecar trust)"
+    );
+    assert!(cfg.header_forwarding.deny.is_empty(), "nothing denied");
+}
+
+#[test]
+fn header_forwarding_is_configurable() {
+    // The registry must know both keys, so an operator can disable forwarding or
+    // deny specific headers (e.g. keep the client credential off the cluster).
+    let cfg = resolve(&[
+        ("forward_client_headers", "false"),
+        ("forward_header_deny", "authorization, x-internal"),
+    ])
+    .unwrap();
+    assert!(!cfg.header_forwarding.enabled);
+    assert_eq!(
+        cfg.header_forwarding.deny,
+        vec!["authorization", "x-internal"]
+    );
+    // A bad bool fails closed (typed error), like every other flag.
+    assert!(resolve(&[("forward_client_headers", "perhaps")]).is_err());
 }
 
 #[test]

@@ -25,7 +25,6 @@ use osproxy_observe::{DispatchInfo, RequestTrace};
 use osproxy_sink::{ByteBody, CursorOp, ForwardOp, Reader, Sink, StreamingForward};
 use osproxy_tenancy::Router;
 
-use crate::endpoints::wire_trace;
 use crate::error::RequestError;
 use crate::pipeline::{Pipeline, PipelineResponse};
 use osproxy_spi::RequestCtx;
@@ -116,7 +115,8 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         .with_endpoint(policy.endpoint.clone())
         .with_query(ctx.query().map(str::to_owned))
         .with_protocol(ctx.protocol())
-        .with_trace(Some(wire_trace(ctx)));
+        .with_trace(self.upstream_trace(ctx))
+        .with_forward_headers(ctx.forward_headers().to_vec());
         let outcome = self.sink.cursor(op).await?;
         trace.record_dispatch(DispatchInfo {
             cluster: policy.cluster.clone(),
@@ -148,7 +148,8 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             .with_endpoint(endpoint)
             .with_query(ctx.query().map(str::to_owned))
             .with_protocol(ctx.protocol())
-            .with_trace(Some(wire_trace(ctx)));
+            .with_trace(self.upstream_trace(ctx))
+            .with_forward_headers(ctx.forward_headers().to_vec());
         let outcome = self.sink.forward_stream(op, body).await?;
         trace.record_dispatch(DispatchInfo {
             cluster,

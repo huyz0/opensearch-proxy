@@ -166,6 +166,41 @@ async fn a_global_aggregation_search_is_rejected_before_dispatch() {
     );
 }
 
+/// An exporter that reports itself enabled, so the tracing-gate treats the proxy
+/// as adding a span of its own.
+#[derive(Debug)]
+struct OnExporter;
+impl osproxy_observe::SpanExporter for OnExporter {
+    fn enabled(&self) -> bool {
+        true
+    }
+    fn export(&self, _payload: serde_json::Value) {}
+}
+
+#[test]
+fn upstream_trace_is_gated_on_span_export() {
+    // The transparent-tracing rule: with export off (the default) the proxy adds
+    // no span and injects no `traceparent` upstream (the client's own trace
+    // headers ride through the forwarded set instead); with export on it injects
+    // its hop so the upstream span nests under the proxy's.
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r");
+    let headers = vec![("traceparent".to_owned(), "00-abc-def-01".to_owned())];
+    let c = ctx(&principal, &rid, &headers, EndpointKind::Search, b"{}");
+
+    let off = pipeline();
+    assert!(
+        off.upstream_trace(&c).is_none(),
+        "no proxy traceparent injected when span export is off"
+    );
+
+    let on = pipeline().with_exporter(std::sync::Arc::new(OnExporter));
+    assert!(
+        on.upstream_trace(&c).is_some(),
+        "the proxy injects its span when span export is on"
+    );
+}
+
 #[tokio::test]
 async fn explain_records_success_spans() {
     let p = pipeline();

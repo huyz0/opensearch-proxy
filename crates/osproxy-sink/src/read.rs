@@ -256,6 +256,10 @@ pub struct CursorOp {
     pub protocol: Protocol,
     /// The W3C trace context to forward downstream.
     pub trace: Option<TraceContext>,
+    /// Client headers to relay verbatim to the upstream (the forwarding policy's
+    /// output). Applied before [`trace`](Self::trace), so a proxy-injected trace
+    /// header wins when span export is on. Empty by default.
+    pub forward_headers: Vec<(String, String)>,
 }
 
 impl CursorOp {
@@ -276,7 +280,15 @@ impl CursorOp {
             endpoint: None,
             protocol: Protocol::Http1,
             trace: None,
+            forward_headers: Vec::new(),
         }
+    }
+
+    /// Sets the client headers to relay verbatim to the upstream (builder style).
+    #[must_use]
+    pub fn with_forward_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.forward_headers = headers;
+        self
     }
 
     /// Sets the pinned cluster's base URL (builder style), when the engine knows
@@ -332,6 +344,9 @@ pub struct ForwardOp {
     pub protocol: Protocol,
     /// The W3C trace context to forward downstream.
     pub trace: Option<TraceContext>,
+    /// Client headers to relay verbatim to the upstream (the forwarding policy's
+    /// output). Applied before [`trace`](Self::trace). Empty by default.
+    pub forward_headers: Vec<(String, String)>,
 }
 
 impl ForwardOp {
@@ -346,7 +361,15 @@ impl ForwardOp {
             endpoint: None,
             protocol: Protocol::Http1,
             trace: None,
+            forward_headers: Vec::new(),
         }
+    }
+
+    /// Sets the client headers to relay verbatim to the upstream (builder style).
+    #[must_use]
+    pub fn with_forward_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.forward_headers = headers;
+        self
     }
 
     /// Sets the cluster's base URL (builder style).

@@ -367,6 +367,22 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         &self.sink
     }
 
+    /// The trace context to inject onto an upstream request, or `None` when the
+    /// proxy is not adding a span of its own (span export off). With export off the
+    /// proxy stays transparent to tracing: the client's own trace headers (W3C, B3,
+    /// anything) ride through verbatim in the forwarded header set, and the proxy
+    /// inserts no `traceparent` of its own (`docs/05`). With export on it injects
+    /// its hop's `traceparent`, overriding the client's so the upstream span nests
+    /// under the proxy's.
+    pub(crate) fn upstream_trace(
+        &self,
+        ctx: &RequestCtx<'_>,
+    ) -> Option<osproxy_core::TraceContext> {
+        self.exporter
+            .enabled()
+            .then(|| crate::endpoints::wire_trace(ctx))
+    }
+
     /// Handles an authenticated request, dispatching on its endpoint class.
     ///
     /// Records a shape-only causal trace for every request (success or failure)

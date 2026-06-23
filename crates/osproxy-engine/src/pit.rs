@@ -16,7 +16,6 @@ use std::collections::BTreeMap;
 use osproxy_core::ClusterId;
 
 use crate::cursor::{forwardable_query, rewrite_pit_id, wrap_pit_id_in_response};
-use crate::endpoints::wire_trace;
 use crate::error::RequestError;
 use crate::observe::resolve_info;
 use crate::pipeline::{Pipeline, PipelineResponse};
@@ -49,7 +48,8 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         let body = rewrite_pit_id(search_op.body, &real_pit);
         let op = CursorOp::new(cluster.clone(), ctx.method(), "/_search", body)
             .with_endpoint(self.router.cluster_endpoint(&cluster))
-            .with_trace(Some(wire_trace(ctx)));
+            .with_trace(self.upstream_trace(ctx))
+            .with_forward_headers(ctx.forward_headers().to_vec());
         let outcome = self.sink.cursor(op).await?;
         trace.record_dispatch(DispatchInfo {
             cluster: cluster.clone(),
@@ -96,7 +96,8 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         .with_endpoint(target.endpoint.clone())
         // Forward `keep_alive` (allow-listed) so the PIT gets the requested TTL.
         .with_query(forwardable_query(ctx.query()))
-        .with_trace(Some(wire_trace(ctx)));
+        .with_trace(self.upstream_trace(ctx))
+            .with_forward_headers(ctx.forward_headers().to_vec());
         let outcome = self.sink.cursor(op).await?;
         let body = match &self.cursor_signer {
             Some(signer) => wrap_pit_id_in_response(outcome.body, signer.as_ref(), &target.cluster),
@@ -151,7 +152,8 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
                 serde_json::to_vec(&body).unwrap_or_default(),
             )
             .with_endpoint(self.router.cluster_endpoint(&cluster))
-            .with_trace(Some(wire_trace(ctx)));
+            .with_trace(self.upstream_trace(ctx))
+            .with_forward_headers(ctx.forward_headers().to_vec());
             let outcome = self.sink.cursor(op).await?;
             if outcome.status >= 400 {
                 status = outcome.status;

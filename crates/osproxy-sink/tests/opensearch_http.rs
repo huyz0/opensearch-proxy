@@ -38,6 +38,7 @@ struct Captured {
     version: String,
     traceparent: Option<String>,
     tracestate: Option<String>,
+    all_headers: Vec<(String, String)>,
 }
 
 /// Starts a one-shot mock server returning `response` (status 201) and capturing
@@ -65,6 +66,11 @@ async fn start_mock(response: &'static str) -> (String, Arc<Mutex<Captured>>) {
                 };
                 let traceparent = header("traceparent");
                 let tracestate = header("tracestate");
+                let all_headers = req
+                    .headers()
+                    .iter()
+                    .map(|(k, v)| (k.as_str().to_owned(), v.to_str().unwrap_or("").to_owned()))
+                    .collect();
                 let body = req.into_body().collect().await.unwrap().to_bytes();
                 *captured.lock().unwrap() = Captured {
                     method,
@@ -73,6 +79,7 @@ async fn start_mock(response: &'static str) -> (String, Arc<Mutex<Captured>>) {
                     version,
                     traceparent,
                     tracestate,
+                    all_headers,
                 };
                 Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from(response))))
             }
@@ -199,6 +206,53 @@ async fn cursor_passthrough_forwards_method_path_and_body_to_the_pinned_cluster(
     assert!(
         outcome.body.starts_with(br#"{"_scroll_id""#),
         "the upstream response is forwarded back verbatim"
+    );
+}
+
+#[tokio::test]
+async fn forwarded_client_headers_reach_the_upstream() {
+    // The header-forwarding path: headers the engine put on the op (already
+    // sanitized by the policy) are relayed verbatim to the cluster, and a
+    // forwarded content type overrides the proxy's default JSON.
+    let (base, captured) = start_mock(r#"{"ok":true}"#).await;
+    let sink = OpenSearchSink::new();
+
+    let op = CursorOp::new(
+        ClusterId::from("eu-1"),
+        HttpMethod::Get,
+        "/_cat/health",
+        Vec::new(),
+    )
+    .with_endpoint(Some(base))
+    .with_forward_headers(vec![
+        ("x-custom-header".to_owned(), "abc".to_owned()),
+        ("authorization".to_owned(), "Bearer client-token".to_owned()),
+        ("content-type".to_owned(), "text/plain".to_owned()),
+    ]);
+    sink.cursor(op).await.unwrap();
+
+    let got = captured.lock().unwrap().clone();
+    let header = |name: &str| {
+        got.all_headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(
+        header("x-custom-header"),
+        Some("abc"),
+        "{:?}",
+        got.all_headers
+    );
+    assert_eq!(
+        header("authorization"),
+        Some("Bearer client-token"),
+        "the client credential is forwarded by default (sidecar trust)"
+    );
+    assert_eq!(
+        header("content-type"),
+        Some("text/plain"),
+        "a forwarded content type overrides the proxy default"
     );
 }
 

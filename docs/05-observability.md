@@ -74,7 +74,18 @@ low-cost NFR.
 
 All of these are **shipped** and per-instance by design; fleet rollup is the
 external aggregator's job. They share the `trace_id` so an agent can correlate
-across them (W3C trace-context is propagated to every upstream call).
+across them.
+
+**Upstream trace headers are gated on span export.** When OTLP export is on the
+proxy is a span in the distributed trace: it injects its own `traceparent`
+(child of the caller's, so the upstream span nests under the proxy's) and
+forwards the caller's `tracestate` verbatim. When export is **off** (the
+default) the proxy adds no span, so it injects nothing and stays transparent to
+tracing: the client's own trace headers ride through in the forwarded header set
+(see [04 §10](04-request-pipeline.md)) untouched, including non-W3C formats like
+B3 that the proxy does not itself parse. This way a proxy that is not
+participating in tracing never inserts a `traceparent` pointing at a span it
+never exported.
 
 - **Structured JSON logs**, one shape-only line per request (the `/debug/explain`
   document, carrying `trace_id`). Off unless `OSPROXY_LOG_REQUESTS` is set

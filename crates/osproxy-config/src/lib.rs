@@ -56,6 +56,10 @@ pub struct Config {
     /// default). Used for a transparent proxy or to pass selected (e.g. not-yet-
     /// onboarded) indices through verbatim while tenant-isolating the rest.
     pub passthrough: Option<PassthroughConfig>,
+    /// Which client headers the proxy relays to the upstream when it forwards a
+    /// request (the verbatim passthrough/admin/cursor paths). Pass-all by default
+    /// (sidecar trust), minus the mandatory hop-by-hop/framing set.
+    pub header_forwarding: HeaderForwardingConfig,
     /// Full-fidelity traffic capture to a Kafka topic, or `None` (off). Requires
     /// the binary be built with the `capture` feature; a configured capture
     /// on a binary without it is a loud startup error rather than a silent no-op.
@@ -214,6 +218,32 @@ pub struct AdminPassthroughConfig {
     /// The admin cluster's base URL, or `None` to resolve it via the tenancy's
     /// `cluster_endpoint` lookup.
     pub endpoint: Option<String>,
+}
+
+/// Client-to-upstream header forwarding (`forward_client_headers` /
+/// `forward_header_deny`). The proxy rebuilds the upstream request, so this
+/// decides which of the client's own headers ride along.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeaderForwardingConfig {
+    /// Forward client headers to the upstream at all (default `true`). `false`
+    /// relays only the proxy-managed headers (content type, trace).
+    pub enabled: bool,
+    /// Extra headers to drop (case-insensitive), on top of the mandatory
+    /// hop-by-hop/framing set. E.g. `authorization` to keep the client credential
+    /// off the cluster. Empty by default (pass-all).
+    pub deny: Vec<String>,
+}
+
+impl Default for HeaderForwardingConfig {
+    fn default() -> Self {
+        // Pass-all: the sidecar-trust default. The proxy is typically co-located
+        // with the client, so the client's own headers (including auth and vendor
+        // tracing) should reach the cluster unless an operator restricts them.
+        Self {
+            enabled: true,
+            deny: Vec::new(),
+        }
+    }
 }
 
 /// Tenant-agnostic passthrough: forward matching requests verbatim to one

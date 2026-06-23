@@ -25,6 +25,7 @@ use osproxy_transport::{
 };
 
 use crate::auth::AllowAllAuthorizer;
+use crate::forward_headers::ForwardPolicy;
 use crate::log::{NoLog, RequestLog};
 use crate::tenancy::ReferenceTenancy;
 use osproxy_capture::{Capture, CaptureRecord, NoCapture};
@@ -66,6 +67,11 @@ pub struct AppHandler<A, Z = AllowAllAuthorizer> {
     /// the shape-only telemetry, the records carry bodies and values, so capture
     /// is deliberate and the stream is privileged (`capture` module).
     capture: Box<dyn Capture>,
+    /// Which client headers to relay verbatim to the upstream. Default pass-all
+    /// (sidecar trust), minus the mandatory hop-by-hop/framing set. Computed from
+    /// the *raw* request headers (so the client `Authorization` is available),
+    /// separate from the auth-stripped view the pipeline routes on.
+    forward_policy: ForwardPolicy,
 }
 
 impl<A, Z> std::fmt::Debug for AppHandler<A, Z> {
@@ -93,6 +99,7 @@ impl<A: Authenticator> AppHandler<A, AllowAllAuthorizer> {
             require_tls_for_mutation: true,
             debug_endpoints: true,
             capture: Box::new(NoCapture),
+            forward_policy: ForwardPolicy::pass_all(),
         }
     }
 }
@@ -114,7 +121,17 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
             require_tls_for_mutation: self.require_tls_for_mutation,
             debug_endpoints: self.debug_endpoints,
             capture: self.capture,
+            forward_policy: self.forward_policy,
         }
+    }
+
+    /// Sets the client-to-upstream header forwarding policy (builder style).
+    /// Default pass-all (sidecar trust). Restrict it to keep specific headers
+    /// (e.g. `authorization`) off the cluster, or disable forwarding entirely.
+    #[must_use]
+    pub fn with_forward_policy(mut self, policy: ForwardPolicy) -> Self {
+        self.forward_policy = policy;
+        self
     }
 
     /// Sets the full-fidelity traffic capture (builder style). Off by default.
@@ -387,7 +404,11 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         // partition header, `traceparent`, and `x-debug-directive` are preserved,
         // the engine still needs them.
         let safe_headers = crate::bearer::without_authorization(&req.headers);
-        let ctx = build_ctx(&req, &principal, &request_id, &safe_headers);
+        // The forwarded set is computed from the *raw* headers (so the client
+        // `Authorization` is available per the pass-all default), independent of
+        // the auth-stripped view the pipeline routes on.
+        let forward = self.forward_policy.forward_set(&req.headers);
+        let ctx = build_ctx(&req, &principal, &request_id, &safe_headers, &forward);
 
         // Echo the request id so a client (or LLM) can fetch its
         // /debug/explain/{id} afterward. `should_capture` is the live per-request
@@ -435,8 +456,12 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         };
 
         let safe_headers = crate::bearer::without_authorization(&req.headers);
+        // The forwarded set is computed from the *raw* headers (so the client
+        // `Authorization` is available per the pass-all default), independent of
+        // the auth-stripped view the pipeline routes on.
+        let forward = self.forward_policy.forward_set(&req.headers);
         // The body is the streamed `body` argument, not `req.body` (empty here).
-        let ctx = build_ctx(&req, &principal, &request_id, &safe_headers);
+        let ctx = build_ctx(&req, &principal, &request_id, &safe_headers, &forward);
 
         // Both directions stream: the request body pipes upstream, the upstream
         // response pipes back, neither buffered.
@@ -479,9 +504,13 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
             Err(resp) => return to_streaming(resp),
         };
         let safe_headers = crate::bearer::without_authorization(&req.headers);
+        // The forwarded set is computed from the *raw* headers (so the client
+        // `Authorization` is available per the pass-all default), independent of
+        // the auth-stripped view the pipeline routes on.
+        let forward = self.forward_policy.forward_set(&req.headers);
         // Unlike the forward/bulk streams, the search query body *is* needed and is
         // the buffered `req.body`; only the response streams.
-        let ctx = build_ctx(&req, &principal, &request_id, &safe_headers);
+        let ctx = build_ctx(&req, &principal, &request_id, &safe_headers, &forward);
 
         let (result, _capture) = self.pipeline.search_streamed(&ctx).await;
         let response = match result {
@@ -513,8 +542,12 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
             Err(resp) => return resp,
         };
         let safe_headers = crate::bearer::without_authorization(&req.headers);
+        // The forwarded set is computed from the *raw* headers (so the client
+        // `Authorization` is available per the pass-all default), independent of
+        // the auth-stripped view the pipeline routes on.
+        let forward = self.forward_policy.forward_set(&req.headers);
         // The body is the streamed NDJSON batch, not `req.body` (empty here).
-        let ctx = build_ctx(&req, &principal, &request_id, &safe_headers);
+        let ctx = build_ctx(&req, &principal, &request_id, &safe_headers, &forward);
 
         let stream = osproxy_sink::stream_body(body);
         let (result, should_capture) = self.pipeline.handle_bulk_streamed(&ctx, stream).await;
@@ -614,6 +647,7 @@ fn build_ctx<'a>(
     principal: &'a Principal,
     request_id: &'a RequestId,
     safe_headers: &'a [(String, String)],
+    forward_headers: &'a [(String, String)],
 ) -> RequestCtx<'a> {
     RequestCtx::new(
         principal,
@@ -628,6 +662,7 @@ fn build_ctx<'a>(
     .with_doc_id(req.doc_id.as_deref())
     .with_query(req.query.as_deref())
     .with_path(&req.path)
+    .with_forward_headers(forward_headers)
 }
 
 /// Builds the ingress response from a pipeline response, carrying its content type

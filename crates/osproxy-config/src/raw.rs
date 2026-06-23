@@ -39,6 +39,8 @@ pub(crate) const KEYS: &[&str] = &[
     "passthrough_cluster",
     "passthrough_endpoint",
     "passthrough_indices",
+    "forward_client_headers",
+    "forward_header_deny",
     "capture_default",
     "capture_kafka_brokers",
     "capture_topic",

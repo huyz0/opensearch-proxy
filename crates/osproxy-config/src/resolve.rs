@@ -9,7 +9,8 @@ use std::net::SocketAddr;
 use crate::raw::Raw;
 use crate::{
     AdminPassthroughConfig, CaptureTlsConfig, Config, ConfigError, DiagBaseline, EtcdConfig,
-    FanoutBodyEncoding, FanoutConfig, ObservabilityConfig, PassthroughConfig, TlsConfig,
+    FanoutBodyEncoding, FanoutConfig, HeaderForwardingConfig, ObservabilityConfig,
+    PassthroughConfig, TlsConfig,
 };
 
 mod resolve_capture;
@@ -32,6 +33,10 @@ pub(crate) fn resolve(raw: &Raw) -> Result<Config, ConfigError> {
         admin_passthrough: admin_passthrough(raw),
         cursor_affinity_key: opt(raw, "cursor_affinity_key"),
         passthrough: passthrough(raw)?,
+        header_forwarding: HeaderForwardingConfig {
+            enabled: bool_or(raw, "forward_client_headers", true)?,
+            deny: csv(raw, "forward_header_deny"),
+        },
         capture: resolve_capture::capture(raw)?,
         capture_default: bool_or(raw, "capture_default", false)?,
         fanout: fanout(raw)?,

@@ -1,4 +1,10 @@
 //! The read-only view of an authenticated request handed to the SPI.
+//
+// JUSTIFY(file-length): one cohesive unit, the `RequestCtx` request view plus its
+// small companion types (`HeaderView`, `BodyDoc`, `Protocol`, `HttpMethod`) and
+// the builder/getter surface SPI implementers compile against. They share the
+// borrowed-`'a` request lifetime and exist to be read together; splitting them
+// would scatter the request facade for no gain. Tests live in the `tests` module.
 
 use osproxy_core::{EndpointKind, PrincipalId, RequestId};
 
@@ -182,6 +188,7 @@ pub struct RequestCtx<'a> {
     body: &'a [u8],
     query: Option<&'a str>,
     path: &'a str,
+    forward_headers: &'a [(String, String)],
 }
 
 impl<'a> RequestCtx<'a> {
@@ -215,7 +222,20 @@ impl<'a> RequestCtx<'a> {
             body,
             query: None,
             path: "",
+            forward_headers: &[],
         }
+    }
+
+    /// Sets the client headers to forward verbatim to the upstream (builder
+    /// style). Distinct from [`headers`](Self::headers): that view is the
+    /// auth-stripped set used for routing and observability, while this is the
+    /// policy-sanitized set the proxy relays to the cluster (which may include the
+    /// client's `Authorization` and vendor trace headers). Empty by default, so
+    /// the upstream sees only the proxy-managed headers unless the binding fills it.
+    #[must_use]
+    pub fn with_forward_headers(mut self, forward_headers: &'a [(String, String)]) -> Self {
+        self.forward_headers = forward_headers;
+        self
     }
 
     /// Sets the raw request path (e.g. `/_cat/indices`). Builder style. Used by
@@ -314,6 +334,13 @@ impl<'a> RequestCtx<'a> {
     #[must_use]
     pub fn headers(&self) -> HeaderView<'a> {
         self.headers
+    }
+
+    /// The client headers to forward verbatim to the upstream (`with_forward_headers`),
+    /// or an empty slice if none were attached.
+    #[must_use]
+    pub fn forward_headers(&self) -> &'a [(String, String)] {
+        self.forward_headers
     }
 
     /// The raw request body.

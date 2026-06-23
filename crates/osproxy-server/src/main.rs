@@ -8,6 +8,12 @@
 //!
 //! M1 serves single-document ingest over HTTP/1.1, cleartext or TLS
 //! (`docs/11`); mTLS and the FIPS provider attach in later slices.
+//
+// JUSTIFY(file-length): the binary's wiring + its small per-concern helper fns
+// (config→provider, pipeline/handler assembly, OTLP/directive/passthrough/admin
+// wiring). They are the single place the crates are composed; each helper is tiny
+// and only meaningful next to the `run` sequence it feeds, so splitting across
+// files would scatter the wiring this module exists to centralize (docs/08 §3).
 
 use std::collections::HashMap;
 use std::process::ExitCode;
@@ -55,6 +61,13 @@ async fn main() -> ExitCode {
 
 /// Loads and validates configuration (file → env → flags), builds the pipeline,
 /// and serves until interrupted.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the binary's top-level wiring: load config, build the sink/tenancy/\
+              pipeline/handler, then bind and serve. It is one sequential startup \
+              sequence; extracting fragments would only scatter the wiring it exists \
+              to centralize (docs/08 §3)."
+)]
 async fn run() -> Result<(), String> {
     // Load + fully validate config (file → env → flags) before any socket opens;
     // an invalid value is a typed error naming the field (`docs/01` §6).
@@ -86,7 +99,8 @@ async fn run() -> Result<(), String> {
     let app = AppHandler::new(pipeline, ReferenceAuthenticator::new(tokens))
         .with_request_log(request_log(cfg.observability.log_requests))
         .with_require_tls_for_mutation(cfg.require_tls_for_mutation)
-        .with_debug_endpoints(debug_endpoints(cfg.observability.debug_endpoints));
+        .with_debug_endpoints(debug_endpoints(cfg.observability.debug_endpoints))
+        .with_forward_policy(forward_policy(&cfg));
     let app = capture::attach(app, &cfg).await?;
     let handler = Arc::new(with_directive_admin(
         app,
@@ -192,6 +206,15 @@ fn debug_endpoints(enabled: bool) -> bool {
         println!("osproxy /debug endpoints: off");
     }
     enabled
+}
+
+/// Maps the header-forwarding config to the handler's `ForwardPolicy`: which
+/// client headers ride through to the upstream (pass-all by default).
+fn forward_policy(cfg: &Config) -> osproxy_server::forward_headers::ForwardPolicy {
+    osproxy_server::forward_headers::ForwardPolicy {
+        enabled: cfg.header_forwarding.enabled,
+        deny: cfg.header_forwarding.deny.clone(),
+    }
 }
 
 /// Wires OTLP span export onto the pipeline when `OSPROXY_OTLP_ENDPOINT` is set

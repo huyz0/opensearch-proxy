@@ -235,3 +235,28 @@ Matching is on the operator-configured index list **only, never a client
 header**, so a client cannot opt itself out of isolation, and a non-match keeps
 tenancy (the safe direction). Unset ⇒ pure tenancy mode (the default). See
 [choosing a mode](guide/10-choosing-a-mode.md).
+
+## 11. Client header forwarding
+
+The proxy rebuilds the upstream request from scratch, so by default the cluster
+sees only the headers the proxy manages (content type, and, when span export is
+on, `traceparent`/`tracestate`). For a sidecar / transparent deployment that is
+too lossy, so on the verbatim-forward paths (passthrough, admin, cursor) the
+proxy relays the client's own headers too:
+
+- **Default pass-all** (sidecar trust, `forward_client_headers=true`): every
+  client header rides through, **minus** a mandatory set that is never safe to
+  relay verbatim — hop-by-hop (`connection`, `keep-alive`, `proxy-*`, `te`,
+  `trailer`, `transfer-encoding`, `upgrade`) plus `host` and `content-length`
+  (the proxy targets a different host and may re-frame the body).
+- **Configurable deny** (`forward_header_deny`): drop named headers on top of the
+  mandatory set, e.g. `authorization` to keep the client credential off the
+  cluster. The client's `Authorization` is otherwise forwarded by default (the
+  proxy still authenticates the client itself; it is consumed *and* relayed).
+
+This is computed from the **raw** request headers (so the client `Authorization`
+is available), independent of the auth-stripped view the pipeline routes and
+traces on. Trace headers ride through here like any other client header; whether
+the proxy overrides them with its own span is the export-gated decision in
+[05 §5](05-observability.md), so with export off a client's W3C **or** B3 trace
+context passes through untouched.
