@@ -302,10 +302,14 @@ impl OpenSearchSink {
         pool: &ClusterPool,
         protocol: Protocol,
         mut req: Request<ByteBody>,
+        forward: &[(String, String)],
         trace: Option<&TraceContext>,
         fail_kind: &'static str,
     ) -> Result<(Response<Incoming>, bool), SinkError> {
-        // Propagate the W3C trace context to every upstream call (one choke point).
+        // One choke point for upstream headers: relay the client's forwarded set
+        // (the policy already dropped hop-by-hop/framing), then inject the proxy's
+        // trace last so a proxy span (when export is on) wins on `traceparent`.
+        apply_forward_headers(&mut req, forward);
         crate::trace_headers::inject_trace(&mut req, trace);
         if !pool.breaker.allows(self.clock.now(), self.cooldown) {
             return Err(SinkError::Transport {
@@ -369,6 +373,7 @@ impl OpenSearchSink {
                 &pool,
                 op.protocol,
                 req,
+                &op.forward_headers,
                 op.trace.as_ref(),
                 "upstream query failed",
             )
@@ -416,7 +421,7 @@ impl OpenSearchSink {
             Some(q) if !q.is_empty() => format!("{}{}?{q}", pool.base, op.path),
             _ => format!("{}{}", pool.base, op.path),
         };
-        let mut req = Request::builder()
+        let req = Request::builder()
             .method(hyper_method(op.method))
             .uri(uri)
             .header("content-type", "application/json")
@@ -424,12 +429,15 @@ impl OpenSearchSink {
             .map_err(|_| SinkError::Transport {
                 kind: "building upstream forward request",
             })?;
-        // Relay the client's forwarded headers verbatim (the policy already
-        // dropped hop-by-hop/framing). Applied before `send` injects the proxy
-        // trace, so a proxy span (when export is on) still wins on `traceparent`.
-        apply_forward_headers(&mut req, &op.forward_headers);
         let (resp, reused) = self
-            .send(&pool, op.protocol, req, op.trace.as_ref(), fail_kind)
+            .send(
+                &pool,
+                op.protocol,
+                req,
+                &op.forward_headers,
+                op.trace.as_ref(),
+                fail_kind,
+            )
             .await?;
         let status = resp.status().as_u16();
         reject_5xx(status)?;
@@ -447,6 +455,7 @@ impl OpenSearchSink {
                 &pool,
                 op.protocol,
                 req,
+                &op.forward_headers,
                 op.trace.as_ref(),
                 "upstream request failed",
             )
@@ -488,6 +497,7 @@ impl Reader for OpenSearchSink {
                 &pool,
                 op.protocol,
                 req,
+                &op.forward_headers,
                 op.trace.as_ref(),
                 "upstream read failed",
             )

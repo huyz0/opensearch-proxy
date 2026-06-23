@@ -24,6 +24,9 @@ pub struct WriteOp {
     /// The W3C trace context to forward downstream (`traceparent`), so the
     /// upstream's spans join this request's distributed trace.
     pub trace: Option<TraceContext>,
+    /// Client headers to relay verbatim to the upstream (the forwarding policy's
+    /// output). Applied before [`trace`](Self::trace). Empty by default.
+    pub forward_headers: Vec<(String, String)>,
 }
 
 impl WriteOp {
@@ -36,6 +39,7 @@ impl WriteOp {
             epoch,
             protocol: Protocol::Http1,
             trace: None,
+            forward_headers: Vec::new(),
         }
     }
 
@@ -50,6 +54,13 @@ impl WriteOp {
     #[must_use]
     pub fn with_trace(mut self, trace: Option<TraceContext>) -> Self {
         self.trace = trace;
+        self
+    }
+
+    /// Sets the client headers to relay verbatim to the upstream (builder style).
+    #[must_use]
+    pub fn with_forward_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.forward_headers = headers;
         self
     }
 }
@@ -137,6 +148,16 @@ impl WriteBatch {
             // Clone per op: one context fans across the whole batch (it carries an
             // owned tracestate, so it is no longer `Copy`). Borrowed, not consumed.
             op.trace = trace.cloned();
+        }
+        self
+    }
+
+    /// Tags every operation in the batch with the same forwarded client headers
+    /// (builder style), so all upstream requests for this batch relay them.
+    #[must_use]
+    pub fn with_forward_headers(mut self, headers: &[(String, String)]) -> Self {
+        for op in &mut self.ops {
+            op.forward_headers = headers.to_vec();
         }
         self
     }

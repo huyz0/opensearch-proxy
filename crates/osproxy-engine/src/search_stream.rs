@@ -18,7 +18,6 @@ use osproxy_spi::RequestCtx;
 use osproxy_tenancy::Router;
 
 use crate::cursor::{forwardable_query, pit_id_in_body};
-use crate::endpoints::wire_trace;
 use crate::error::RequestError;
 use crate::observe::{read_dispatch_info, resolve_info};
 use crate::pipeline::Pipeline;
@@ -54,7 +53,8 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             .search_stream(
                 search_op
                     .with_query(forwardable_query(ctx.query()))
-                    .with_trace(Some(wire_trace(ctx))),
+                    .with_trace(self.upstream_trace(ctx))
+                    .with_forward_headers(ctx.forward_headers().to_vec()),
             )
             .await?;
         trace.record_dispatch(read_dispatch_info(

@@ -59,6 +59,7 @@ pub(crate) async fn prepare<R: Router>(
     cache: &mut HashMap<(PartitionId, String), Resolved>,
     item: BulkItem,
     retry: crate::RetryPolicy,
+    up_trace: Option<&osproxy_core::TraceContext>,
 ) -> Result<Prepared, ItemFailure> {
     let action = item.action.keyword();
     let logical_index = item
@@ -105,7 +106,8 @@ pub(crate) async fn prepare<R: Router>(
     let mut prepared = build_op(&resolved, &item, action, logical_index)?;
     prepared.op = prepared
         .op
-        .with_trace(Some(crate::endpoints::wire_trace(ctx)));
+        .with_trace(up_trace.cloned())
+        .with_forward_headers(ctx.forward_headers().to_vec());
     Ok(prepared)
 }
 

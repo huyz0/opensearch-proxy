@@ -37,6 +37,9 @@ pub struct ReadOp {
     /// upstream's spans join this request's distributed trace. `None` = no
     /// propagation header is sent.
     pub trace: Option<TraceContext>,
+    /// Client headers to relay verbatim to the upstream (the forwarding policy's
+    /// output). Applied before [`trace`](Self::trace). Empty by default.
+    pub forward_headers: Vec<(String, String)>,
 }
 
 impl ReadOp {
@@ -49,6 +52,7 @@ impl ReadOp {
             routing,
             protocol: Protocol::Http1,
             trace: None,
+            forward_headers: Vec::new(),
         }
     }
 
@@ -63,6 +67,13 @@ impl ReadOp {
     #[must_use]
     pub fn with_trace(mut self, trace: Option<TraceContext>) -> Self {
         self.trace = trace;
+        self
+    }
+
+    /// Sets the client headers to relay verbatim to the upstream (builder style).
+    #[must_use]
+    pub fn with_forward_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.forward_headers = headers;
         self
     }
 }
@@ -131,6 +142,9 @@ pub struct SearchOp {
     pub query: Option<String>,
     /// The W3C trace context to forward downstream (`traceparent`).
     pub trace: Option<TraceContext>,
+    /// Client headers to relay verbatim to the upstream (the forwarding policy's
+    /// output). Applied before [`trace`](Self::trace). Empty by default.
+    pub forward_headers: Vec<(String, String)>,
 }
 
 impl SearchOp {
@@ -143,6 +157,7 @@ impl SearchOp {
             protocol: Protocol::Http1,
             query: None,
             trace: None,
+            forward_headers: Vec::new(),
         }
     }
 
@@ -164,6 +179,13 @@ impl SearchOp {
     #[must_use]
     pub fn with_trace(mut self, trace: Option<TraceContext>) -> Self {
         self.trace = trace;
+        self
+    }
+
+    /// Sets the client headers to relay verbatim to the upstream (builder style).
+    #[must_use]
+    pub fn with_forward_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.forward_headers = headers;
         self
     }
 }

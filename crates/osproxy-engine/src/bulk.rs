@@ -70,6 +70,7 @@ pub(crate) async fn ingest_bulk<R: Router, S: Sink>(
     sink: &S,
     ctx: &RequestCtx<'_>,
     retry: crate::RetryPolicy,
+    up_trace: Option<osproxy_core::TraceContext>,
 ) -> Result<PipelineResponse, RequestError> {
     let items = parse_bulk(ctx.body())?;
     let n = items.len();
@@ -83,7 +84,7 @@ pub(crate) async fn ingest_bulk<R: Router, S: Sink>(
     let mut cache: HashMap<(PartitionId, String), Resolved> = HashMap::new();
 
     for (ordinal, item) in items.into_iter().enumerate() {
-        match prepare(router, ctx, &mut cache, item, retry).await {
+        match prepare(router, ctx, &mut cache, item, retry, up_trace.as_ref()).await {
             Ok(p) => {
                 buffer_and_flush(
                     router,
@@ -136,6 +137,7 @@ pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
     ctx: &RequestCtx<'_>,
     body: ByteBody,
     retry: crate::RetryPolicy,
+    up_trace: Option<osproxy_core::TraceContext>,
 ) -> Result<PipelineResponse, RequestError> {
     let mut reader = NdjsonReader::new(body);
     let mut lines: Vec<Value> = Vec::new();
@@ -148,7 +150,7 @@ pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
         let ord = ordinal;
         ordinal += 1;
         lines.push(Value::Null);
-        match prepare(router, ctx, &mut cache, item, retry).await {
+        match prepare(router, ctx, &mut cache, item, retry, up_trace.as_ref()).await {
             // Flush a target mid-stream once it reaches the count or byte threshold,
             // so the transformed working set stays bounded (NFR-P7), the same
             // backpressure as the buffered path, here over a live stream.
@@ -283,6 +285,7 @@ pub(crate) async fn ingest_bulk_async<R: Router>(
     queue: &dyn WriteQueue,
     ctx: &RequestCtx<'_>,
     retry: crate::RetryPolicy,
+    up_trace: Option<osproxy_core::TraceContext>,
 ) -> Result<PipelineResponse, RequestError> {
     let index = ctx.logical_index();
     // A query-level unsupported op (optimistic concurrency) refuses the whole
@@ -314,7 +317,7 @@ pub(crate) async fn ingest_bulk_async<R: Router>(
             }});
             continue;
         }
-        match prepare(router, ctx, &mut cache, item, retry).await {
+        match prepare(router, ctx, &mut cache, item, retry, up_trace.as_ref()).await {
             Ok(p) => {
                 let op_id = format!("{batch_id}:{ordinal}");
                 let write = QueuedWrite {

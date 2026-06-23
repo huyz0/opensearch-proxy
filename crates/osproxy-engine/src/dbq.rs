@@ -17,7 +17,6 @@ use serde_json::{json, Value};
 use crate::asyncwrite::{
     op_id_for, unavailable_response, unsupported_response, QueuedWrite, WriteMode,
 };
-use crate::endpoints::wire_trace;
 use crate::error::RequestError;
 use crate::observe::resolve_info;
 use crate::pipeline::{Pipeline, PipelineResponse};
@@ -103,7 +102,11 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         search_op.body = cap_ids_only(&search_op.body)?;
         let outcome = self
             .sink
-            .search(search_op.with_trace(Some(wire_trace(ctx))))
+            .search(
+                search_op
+                    .with_trace(self.upstream_trace(ctx))
+                    .with_forward_headers(ctx.forward_headers().to_vec()),
+            )
             .await?;
         serde_json::from_slice(&outcome.body)
             .map_err(|_| osproxy_rewrite::RewriteError::InvalidJson.into())

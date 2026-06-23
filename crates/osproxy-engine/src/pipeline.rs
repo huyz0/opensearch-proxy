@@ -606,9 +606,16 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         // Bulk records its outcome positionally in the response, not per-stage, so
         // the trace passes straight from open to close with no mid-stage spans.
         let trace = Self::begin_streamed_trace(ctx);
-        let result =
-            crate::bulk::ingest_bulk_streamed(&self.router, &self.sink, ctx, body, self.retry)
-                .await;
+        let up_trace = self.upstream_trace(ctx);
+        let result = crate::bulk::ingest_bulk_streamed(
+            &self.router,
+            &self.sink,
+            ctx,
+            body,
+            self.retry,
+            up_trace,
+        )
+        .await;
         self.finish_streamed_trace(ctx, trace, result)
     }
 

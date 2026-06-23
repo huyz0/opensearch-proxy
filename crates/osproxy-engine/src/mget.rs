@@ -41,6 +41,7 @@ pub(crate) async fn multi_get<R: Router, S: Reader>(
     sink: &S,
     ctx: &RequestCtx<'_>,
     retry: crate::RetryPolicy,
+    up_trace: Option<osproxy_core::TraceContext>,
 ) -> Result<PipelineResponse, RequestError> {
     let items = parse_mget(ctx.body())?;
     let n = items.len();
@@ -54,7 +55,17 @@ pub(crate) async fn multi_get<R: Router, S: Reader>(
     let mut cache: HashMap<String, Resolved> = HashMap::new();
 
     for (ordinal, item) in items.into_iter().enumerate() {
-        match prepare(router, ctx, &partition, &mut cache, &item, retry).await {
+        match prepare(
+            router,
+            ctx,
+            &partition,
+            &mut cache,
+            &item,
+            retry,
+            up_trace.as_ref(),
+        )
+        .await
+        {
             Ok(p) => prepared[ordinal] = Some(p),
             Err(line) => docs[ordinal] = line,
         }
@@ -82,6 +93,12 @@ struct Prepared {
 
 /// Prepares one requested document: resolve its placement (cached per logical
 /// index), then build the read op mapping the logical id to the physical id.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a per-document prepare genuinely needs the router, request, resolved \
+              partition, placement cache, the item, the retry policy, and the gated \
+              upstream trace; bundling them would only shuffle the same values."
+)]
 async fn prepare<R: Router>(
     router: &R,
     ctx: &RequestCtx<'_>,
@@ -89,6 +106,7 @@ async fn prepare<R: Router>(
     cache: &mut HashMap<String, Resolved>,
     item: &MgetItem,
     retry: crate::RetryPolicy,
+    up_trace: Option<&osproxy_core::TraceContext>,
 ) -> Result<Prepared, Value> {
     let logical_index = item
         .index
@@ -112,7 +130,9 @@ async fn prepare<R: Router>(
     let (op, shape) = build_read_op(&resolved, &item.id)
         .map_err(|_| error_doc(&logical_index, &item.id, "irreversible_id"))?;
     Ok(Prepared {
-        op: op.with_trace(Some(crate::endpoints::wire_trace(ctx))),
+        op: op
+            .with_trace(up_trace.cloned())
+            .with_forward_headers(ctx.forward_headers().to_vec()),
         shape,
         logical_index,
         logical_id: item.id.clone(),

@@ -241,8 +241,10 @@ tenancy (the safe direction). Unset ⇒ pure tenancy mode (the default). See
 The proxy rebuilds the upstream request from scratch, so by default the cluster
 sees only the headers the proxy manages (content type, and, when span export is
 on, `traceparent`/`tracestate`). For a sidecar / transparent deployment that is
-too lossy, so on the verbatim-forward paths (passthrough, admin, cursor) the
-proxy relays the client's own headers too:
+too lossy, so on **every** routing path — the verbatim forward (passthrough,
+admin, cursor) **and** the tenancy-shaped ones (ingest, get/delete, search,
+count, bulk, `_mget`/`_msearch`) — the proxy relays the client's own headers too,
+applied at the sink's single upstream-send choke point:
 
 - **Default pass-all** (sidecar trust, `forward_client_headers=true`): every
   client header rides through, **minus** a mandatory set that is never safe to

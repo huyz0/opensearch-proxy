@@ -52,9 +52,14 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         }
 
         self.gate_write(&resolved).await?;
+        let up_trace = self.upstream_trace(ctx);
         let ack = self
             .sink
-            .write(batch.with_trace(Some(&wire_trace(ctx))))
+            .write(
+                batch
+                    .with_trace(up_trace.as_ref())
+                    .with_forward_headers(ctx.forward_headers()),
+            )
             .await?;
         trace.record_dispatch(dispatch_info(&resolved, &ack));
         Ok(response_for(&resolved, &ack))
@@ -101,10 +106,18 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
                 self.write_queue.as_ref(),
                 ctx,
                 self.retry,
+                self.upstream_trace(ctx),
             )
             .await;
         }
-        crate::bulk::ingest_bulk(&self.router, &self.sink, ctx, self.retry).await
+        crate::bulk::ingest_bulk(
+            &self.router,
+            &self.sink,
+            ctx,
+            self.retry,
+            self.upstream_trace(ctx),
+        )
+        .await
     }
 
     /// The get-by-id read path (`docs/04` §5): resolve the partition, map the
@@ -125,7 +138,11 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
 
         let outcome = self
             .sink
-            .get(read_op.with_trace(Some(wire_trace(ctx))))
+            .get(
+                read_op
+                    .with_trace(self.upstream_trace(ctx))
+                    .with_forward_headers(ctx.forward_headers().to_vec()),
+            )
             .await?;
         trace.record_dispatch(read_dispatch_info(
             &resolved,
@@ -166,7 +183,14 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         ctx: &RequestCtx<'_>,
         _trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
-        crate::mget::multi_get(&self.router, &self.sink, ctx, self.retry).await
+        crate::mget::multi_get(
+            &self.router,
+            &self.sink,
+            ctx,
+            self.retry,
+            self.upstream_trace(ctx),
+        )
+        .await
     }
 
     /// The delete-by-id path (`docs/04` §5): resolve the partition, map the
@@ -191,9 +215,14 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         }
 
         self.gate_write(&resolved).await?;
+        let up_trace = self.upstream_trace(ctx);
         let ack = self
             .sink
-            .write(WriteBatch::single(op).with_trace(Some(&wire_trace(ctx))))
+            .write(
+                WriteBatch::single(op)
+                    .with_trace(up_trace.as_ref())
+                    .with_forward_headers(ctx.forward_headers()),
+            )
             .await?;
         trace.record_dispatch(dispatch_info(&resolved, &ack));
 
@@ -232,7 +261,8 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
                     // Forward only allow-listed cursor params (e.g. `scroll=1m`)
                     // so a scroll-opening search actually opens one upstream.
                     .with_query(forwardable_query(ctx.query()))
-                    .with_trace(Some(wire_trace(ctx))),
+                    .with_trace(self.upstream_trace(ctx))
+                    .with_forward_headers(ctx.forward_headers().to_vec()),
             )
             .await?;
         trace.record_dispatch(read_dispatch_info(
@@ -283,7 +313,14 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         ctx: &RequestCtx<'_>,
         _trace: &mut RequestTrace,
     ) -> Result<PipelineResponse, RequestError> {
-        crate::msearch::multi_search(&self.router, &self.sink, ctx, self.retry).await
+        crate::msearch::multi_search(
+            &self.router,
+            &self.sink,
+            ctx,
+            self.retry,
+            self.upstream_trace(ctx),
+        )
+        .await
     }
 
     /// The count path (`docs/04` §4): same mandatory partition filter as search,
@@ -300,7 +337,11 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         let (search_op, _shape) = build_search_op(&resolved, ctx.body())?;
         let outcome = self
             .sink
-            .count(search_op.with_trace(Some(wire_trace(ctx))))
+            .count(
+                search_op
+                    .with_trace(self.upstream_trace(ctx))
+                    .with_forward_headers(ctx.forward_headers().to_vec()),
+            )
             .await?;
         trace.record_dispatch(read_dispatch_info(
             &resolved,

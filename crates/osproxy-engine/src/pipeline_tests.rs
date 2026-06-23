@@ -202,6 +202,40 @@ fn upstream_trace_is_gated_on_span_export() {
 }
 
 #[tokio::test]
+async fn shaped_writes_carry_the_forwarded_client_headers() {
+    // The tenancy-shaped paths thread `ctx.forward_headers()` onto the write op, so
+    // a sidecar's client headers reach the cluster on ingest too (not just the
+    // verbatim passthrough). The in-memory sink records the op the engine built.
+    let p = pipeline();
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r");
+    let headers = vec![];
+    let forward = vec![("x-source".to_owned(), "edge".to_owned())];
+    let c = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Put,
+        EndpointKind::IngestDoc,
+        Protocol::Http1,
+        "logical",
+        HeaderView::new(&headers),
+        br#"{"tenant_id":"acme","id":7}"#,
+    )
+    .with_forward_headers(&forward);
+    p.handle(&c).await.unwrap();
+
+    let recorded = p.sink().recorded();
+    let op = &recorded[0].ops()[0];
+    assert!(
+        op.forward_headers
+            .iter()
+            .any(|(k, v)| k == "x-source" && v == "edge"),
+        "the write op carries the forwarded header: {:?}",
+        op.forward_headers
+    );
+}
+
+#[tokio::test]
 async fn explain_records_success_spans() {
     let p = pipeline();
     let principal = Principal::new(PrincipalId::from("svc"));
