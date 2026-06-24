@@ -134,7 +134,10 @@ implementations are operator infrastructure or excluded by an ADR.
 - **Concrete distributed control stores beyond the etcd reference** (Consul/Redis/
   OS-index, and a `MigrationStore` binding), operator-provided behind the
   `DirectiveStore`/`MigrationStore` seams. A reference etcd directive binding ships
-  (ADR-013); migration-over-etcd awaits an async + fallible `MigrationStore` seam.
+  (ADR-013). The `MigrationStore` seam is now **async + fallible** (a backend
+  failure surfaces as `MigrationError::Backend` and never half-applies a
+  transition), so a distributed migration backend can implement it; the concrete
+  migration-over-etcd binding itself remains operator infrastructure.
 - **The external aggregator and AI agent** that consume the diagnostic plane, out
   of scope by design (docs/05); the proxy ships the emission seams, not the consumer.
 - Richer admin tooling and `capture`/`fanout` packaging refinements.

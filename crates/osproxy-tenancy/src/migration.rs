@@ -116,4 +116,13 @@ pub enum MigrationError {
     /// `complete_migration` requires the `Cutover` phase.
     #[error("migration is not in cutover")]
     NotCutover,
+    /// The distributed [`MigrationStore`](crate) backend was unreachable or
+    /// rejected the operation (network/store failure, not a logical phase error).
+    /// Retryable by the controller; never inferred for the in-process table, which
+    /// has no backend to fail. The value-free `reason` is for the operator/LLM.
+    #[error("migration store backend failure: {reason}")]
+    Backend {
+        /// A short, value-free description of the backend failure.
+        reason: &'static str,
+    },
 }

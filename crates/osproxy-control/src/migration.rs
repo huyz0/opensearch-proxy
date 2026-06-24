@@ -18,6 +18,13 @@
 //! Time comes from an injected [`Clock`], so the barrier is deterministic in
 //! tests. One controller drives a given partition's migration (`docs/06` §5:
 //! operator/automation-driven, never AI-mutated).
+//!
+//! The [`MigrationStore`] seam is **async and fallible**: the in-process
+//! [`PlacementTable`] resolves transitions synchronously and never fails on the
+//! backend, but a distributed backend (etcd/Consul) does network I/O and may
+//! report it unreachable via [`MigrationError::Backend`]. The [`ControlPlane`]
+//! treats such a failure as a refused transition that leaves the partition
+//! unchanged, never a half-applied flip.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -39,12 +46,20 @@ pub const DEFAULT_DRAIN_BARRIER: Duration = Duration::from_secs(30);
 /// Implemented in-process by [`PlacementTable`] (and `Arc<PlacementTable>`); a
 /// distributed watched store (etcd/Consul/Redis/OS index) implements the same
 /// contract in M7 without changing the control protocol above it.
+#[allow(
+    async_fn_in_trait,
+    reason = "driven by a single operator/automation controller, not the request \
+              hot path; consumed through generics in ControlPlane (no dyn), where \
+              Send is verified at the await site, mirroring the SPI traits (docs/02 §2). \
+              A distributed backend (etcd/Consul) needs async + fallible I/O here."
+)]
 pub trait MigrationStore {
     /// Begins migrating `partition` toward `to` (`Active` → `Draining`).
     ///
     /// # Errors
-    /// [`MigrationError`] if the partition is unknown or already migrating.
-    fn begin_migration(
+    /// [`MigrationError`] if the partition is unknown or already migrating, or
+    /// [`MigrationError::Backend`] if a distributed backend is unreachable.
+    async fn begin_migration(
         &self,
         partition: &PartitionId,
         to: Placement,
@@ -54,66 +69,66 @@ pub trait MigrationStore {
     /// `Cutover`); writes are now rejected fleet-wide.
     ///
     /// # Errors
-    /// [`MigrationError`] if the partition is not draining.
-    fn enter_cutover(&self, partition: &PartitionId) -> Result<Epoch, MigrationError>;
+    /// [`MigrationError`] if the partition is not draining (or a backend failure).
+    async fn enter_cutover(&self, partition: &PartitionId) -> Result<Epoch, MigrationError>;
 
     /// Completes the migration, the pointer flip (`Cutover` → `Active(to)`).
     ///
     /// # Errors
-    /// [`MigrationError`] if the partition is not in cutover.
-    fn complete_migration(&self, partition: &PartitionId) -> Result<Epoch, MigrationError>;
+    /// [`MigrationError`] if the partition is not in cutover (or a backend failure).
+    async fn complete_migration(&self, partition: &PartitionId) -> Result<Epoch, MigrationError>;
 
     /// Aborts an in-flight migration, returning it to its origin.
     ///
     /// # Errors
-    /// [`MigrationError`] if the partition is not migrating.
-    fn abort_migration(&self, partition: &PartitionId) -> Result<Epoch, MigrationError>;
+    /// [`MigrationError`] if the partition is not migrating (or a backend failure).
+    async fn abort_migration(&self, partition: &PartitionId) -> Result<Epoch, MigrationError>;
 
     /// The partition's current migration state and stamped epoch, or `None`.
-    fn state(&self, partition: &PartitionId) -> Option<(PartitionState, Epoch)>;
+    async fn state(&self, partition: &PartitionId) -> Option<(PartitionState, Epoch)>;
 }
 
 impl MigrationStore for PlacementTable {
-    fn begin_migration(
+    async fn begin_migration(
         &self,
         partition: &PartitionId,
         to: Placement,
     ) -> Result<Epoch, MigrationError> {
         PlacementTable::begin_migration(self, partition, to)
     }
-    fn enter_cutover(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
+    async fn enter_cutover(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
         PlacementTable::enter_cutover(self, partition)
     }
-    fn complete_migration(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
+    async fn complete_migration(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
         PlacementTable::complete_migration(self, partition)
     }
-    fn abort_migration(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
+    async fn abort_migration(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
         PlacementTable::abort_migration(self, partition)
     }
-    fn state(&self, partition: &PartitionId) -> Option<(PartitionState, Epoch)> {
+    async fn state(&self, partition: &PartitionId) -> Option<(PartitionState, Epoch)> {
         PlacementTable::state(self, partition)
     }
 }
 
-impl<T: MigrationStore + ?Sized> MigrationStore for Arc<T> {
-    fn begin_migration(
+impl<T: MigrationStore + Sync + ?Sized> MigrationStore for Arc<T> {
+    async fn begin_migration(
         &self,
         partition: &PartitionId,
         to: Placement,
     ) -> Result<Epoch, MigrationError> {
-        (**self).begin_migration(partition, to)
+        (**self).begin_migration(partition, to).await
     }
-    fn enter_cutover(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
-        (**self).enter_cutover(partition)
+    async fn enter_cutover(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
+        (**self).enter_cutover(partition).await
     }
-    fn complete_migration(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
-        (**self).complete_migration(partition)
+    async fn complete_migration(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
+        (**self).complete_migration(partition).await
     }
-    fn abort_migration(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
-        (**self).abort_migration(partition)
+    async fn abort_migration(&self, partition: &PartitionId) -> Result<Epoch, MigrationError> {
+        (**self).abort_migration(partition).await
     }
-    fn state(&self, partition: &PartitionId) -> Option<(PartitionState, Epoch)> {
-        (**self).state(partition)
+    async fn state(&self, partition: &PartitionId) -> Option<(PartitionState, Epoch)> {
+        (**self).state(partition).await
     }
 }
 
@@ -189,12 +204,12 @@ impl<S: MigrationStore> ControlPlane<S> {
     ///
     /// # Errors
     /// [`ControlError::Transition`] if the partition is unknown or migrating.
-    pub fn begin_migration(
+    pub async fn begin_migration(
         &self,
         partition: &PartitionId,
         to: Placement,
     ) -> Result<Epoch, ControlError> {
-        Ok(self.store.begin_migration(partition, to)?)
+        Ok(self.store.begin_migration(partition, to).await?)
     }
 
     /// Enters the cutover window and starts the drain barrier clock. Writes are
@@ -202,8 +217,8 @@ impl<S: MigrationStore> ControlPlane<S> {
     ///
     /// # Errors
     /// [`ControlError::Transition`] if the partition is not draining.
-    pub fn enter_cutover(&self, partition: &PartitionId) -> Result<Epoch, ControlError> {
-        let epoch = self.store.enter_cutover(partition)?;
+    pub async fn enter_cutover(&self, partition: &PartitionId) -> Result<Epoch, ControlError> {
+        let epoch = self.store.enter_cutover(partition).await?;
         self.lock().insert(partition.clone(), self.clock.now());
         Ok(epoch)
     }
@@ -215,10 +230,10 @@ impl<S: MigrationStore> ControlPlane<S> {
     /// # Errors
     /// [`ControlError::BarrierPending`] if the barrier has not elapsed;
     /// [`ControlError::Transition`] if the partition is not in cutover.
-    pub fn complete_migration(&self, partition: &PartitionId) -> Result<Epoch, ControlError> {
+    pub async fn complete_migration(&self, partition: &PartitionId) -> Result<Epoch, ControlError> {
         let now = self.clock.now();
         let in_cutover = matches!(
-            self.store.state(partition),
+            self.store.state(partition).await,
             Some((
                 PartitionState::Migrating {
                     phase: Phase::Cutover,
@@ -238,7 +253,7 @@ impl<S: MigrationStore> ControlPlane<S> {
                 });
             }
         }
-        let epoch = self.store.complete_migration(partition)?;
+        let epoch = self.store.complete_migration(partition).await?;
         self.lock().remove(partition);
         Ok(epoch)
     }
@@ -248,17 +263,16 @@ impl<S: MigrationStore> ControlPlane<S> {
     ///
     /// # Errors
     /// [`ControlError::Transition`] if the partition is not migrating.
-    pub fn abort_migration(&self, partition: &PartitionId) -> Result<Epoch, ControlError> {
-        let epoch = self.store.abort_migration(partition)?;
+    pub async fn abort_migration(&self, partition: &PartitionId) -> Result<Epoch, ControlError> {
+        let epoch = self.store.abort_migration(partition).await?;
         self.lock().remove(partition);
         Ok(epoch)
     }
 
     /// The partition's current migration state and epoch, or `None`. For
     /// operator/observability read-out (`docs/06` §5).
-    #[must_use]
-    pub fn state(&self, partition: &PartitionId) -> Option<(PartitionState, Epoch)> {
-        self.store.state(partition)
+    pub async fn state(&self, partition: &PartitionId) -> Option<(PartitionState, Epoch)> {
+        self.store.state(partition).await
     }
 
     /// Locks the cutover-time map, recovering a poisoned lock, it is plain

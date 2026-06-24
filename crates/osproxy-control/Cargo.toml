@@ -14,5 +14,10 @@ osproxy-spi.workspace = true
 osproxy-tenancy.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+# The control plane is now async (a distributed MigrationStore does network I/O),
+# so the control-plane tests drive it on a small current-thread runtime.
+tokio = { workspace = true, features = ["macros", "rt"] }
+
 [lints]
 workspace = true
