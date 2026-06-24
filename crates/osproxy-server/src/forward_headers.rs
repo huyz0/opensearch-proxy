@@ -38,6 +38,13 @@ const NEVER_FORWARD: &[&str] = &[
     // the client's values do not apply. The upstream request builder sets these.
     "host",
     "content-length",
+    // Content negotiation the proxy does not manage: if the client's
+    // `accept-encoding` reached the upstream, the cluster could gzip a response
+    // the proxy then relays without round-tripping `content-encoding`, handing the
+    // client compressed bytes labeled as identity. The proxy is not a
+    // compression-transparent hop, so it never negotiates a transfer-coding it
+    // would have to decode (full compression passthrough is a separate opt-in).
+    "accept-encoding",
 ];
 
 /// Whether `name` is a header the proxy must never relay verbatim to the upstream.
@@ -97,6 +104,7 @@ mod tests {
             ("Connection".to_owned(), "keep-alive".to_owned()),
             ("Host".to_owned(), "client.local".to_owned()),
             ("Content-Length".to_owned(), "42".to_owned()),
+            ("Accept-Encoding".to_owned(), "gzip".to_owned()),
         ]
     }
 
@@ -118,6 +126,9 @@ mod tests {
         assert!(!n.contains(&"connection".to_owned()));
         assert!(!n.contains(&"host".to_owned()));
         assert!(!n.contains(&"content-length".to_owned()));
+        // The proxy never lets the client negotiate a transfer-coding it cannot
+        // round-trip, so a response is never gzipped-but-mislabeled.
+        assert!(!n.contains(&"accept-encoding".to_owned()));
     }
 
     #[test]

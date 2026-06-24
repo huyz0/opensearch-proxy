@@ -235,6 +235,30 @@ async fn shaped_writes_carry_the_forwarded_client_headers() {
     );
 }
 
+#[test]
+fn wire_trace_continues_a_b3_multi_header_client() {
+    // A B3-native client (Istio/Zipkin) using the multi-header form, with no W3C
+    // traceparent: the proxy must continue the same trace (NFR-T1 continuity), not
+    // mint a new root, so its exported span joins the client's B3 trace.
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r");
+    let headers = vec![
+        (
+            "X-B3-TraceId".to_owned(),
+            "4bf92f3577b34da6a3ce929d0e0e4736".to_owned(),
+        ),
+        ("X-B3-SpanId".to_owned(), "00f067aa0ba902b7".to_owned()),
+        ("X-B3-Sampled".to_owned(), "1".to_owned()),
+    ];
+    let c = ctx(&principal, &rid, &headers, EndpointKind::Search, b"{}");
+    let wired = crate::endpoints::wire_trace(&c);
+    assert_eq!(wired.trace_id_hex(), "4bf92f3577b34da6a3ce929d0e0e4736");
+    assert_eq!(
+        wired.parent_span_id_hex().as_deref(),
+        Some("00f067aa0ba902b7")
+    );
+}
+
 #[tokio::test]
 async fn explain_records_success_spans() {
     let p = pipeline();

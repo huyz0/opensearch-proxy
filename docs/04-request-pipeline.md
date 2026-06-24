@@ -249,8 +249,11 @@ applied at the sink's single upstream-send choke point:
 - **Default pass-all** (sidecar trust, `forward_client_headers=true`): every
   client header rides through, **minus** a mandatory set that is never safe to
   relay verbatim — hop-by-hop (`connection`, `keep-alive`, `proxy-*`, `te`,
-  `trailer`, `transfer-encoding`, `upgrade`) plus `host` and `content-length`
-  (the proxy targets a different host and may re-frame the body).
+  `trailer`, `transfer-encoding`, `upgrade`), `host`/`content-length` (the proxy
+  targets a different host and may re-frame the body), and `accept-encoding` (the
+  proxy is not a compression-transparent hop, so it never lets the client
+  negotiate a transfer-coding it would relay back without round-tripping
+  `content-encoding`; full compression passthrough is a separate opt-in).
 - **Configurable deny** (`forward_header_deny`): drop named headers on top of the
   mandatory set, e.g. `authorization` to keep the client credential off the
   cluster. The client's `Authorization` is otherwise forwarded by default (the

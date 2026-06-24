@@ -167,11 +167,16 @@ distributed trace and `trace_id` ties the OTLP span, `/debug/explain`, and the
 structured log together. Export cost is gated behind the exporter being enabled *and*
 the effective diag level, so `Off` costs almost nothing.
 
+**B3 (Zipkin/Istio) is continued too.** When exporting, the proxy continues the
+caller's trace from a W3C `traceparent` or, when only **B3** is present (single
+`b3` or the `X-B3-*` multi-header form), from that — preserving the `trace_id` so a
+B3-native client's trace stays connected even though the proxy emits W3C
+downstream.
+
 **Tracing is transparent when export is off (the default).** With no exporter the
 proxy adds no span and injects **no** `traceparent` of its own — it stays out of the
 trace. The client's own trace headers instead pass straight through to the upstream
-in the forwarded header set (see below), including non-W3C formats like **B3**
-(Zipkin/Istio) that the proxy does not parse. So a proxy that is not itself
+in the forwarded header set (see below), B3 included. So a proxy that is not itself
 exporting never inserts a `traceparent` pointing at a span it never recorded.
 
 ## Forwarding client headers to the upstream

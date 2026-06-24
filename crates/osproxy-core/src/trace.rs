@@ -59,7 +59,29 @@ impl TraceContext {
         incoming_tracestate: Option<&str>,
         request: &RequestId,
     ) -> Self {
-        match incoming_traceparent.and_then(Self::parse) {
+        Self::propagate_with_b3(incoming_traceparent, incoming_tracestate, None, request)
+    }
+
+    /// Like [`propagate`](Self::propagate), but also continues a caller that
+    /// arrived with a **B3** context (Zipkin/Istio, `b3` single-header form) when
+    /// no W3C `traceparent` is present. W3C wins when both are supplied. This keeps
+    /// the trace connected end to end for a B3-native client even though the proxy
+    /// itself speaks W3C downstream: the caller's `trace_id` is preserved, so the
+    /// proxy's exported span shares the client's trace rather than starting a new
+    /// root. B3 carries no `tracestate`, so a B3-continued context forwards none.
+    #[must_use]
+    pub fn propagate_with_b3(
+        incoming_traceparent: Option<&str>,
+        incoming_tracestate: Option<&str>,
+        incoming_b3: Option<&str>,
+        request: &RequestId,
+    ) -> Self {
+        let from_w3c = incoming_traceparent.and_then(Self::parse);
+        // W3C first; fall back to B3 only when there is no usable `traceparent`.
+        let parent = from_w3c
+            .clone()
+            .or_else(|| incoming_b3.and_then(Self::parse_b3));
+        match parent {
             // Continue the caller's trace: keep its trace_id and sampling, but
             // present our own span as the parent of the downstream call, and
             // remember the caller's span as our own parent.
@@ -67,7 +89,13 @@ impl TraceContext {
                 trace_id: parent.trace_id,
                 span_id: derive8(request, SPAN_SEED),
                 parent_span_id: Some(parent.span_id),
-                tracestate: sanitize_tracestate(incoming_tracestate),
+                // `tracestate` is a W3C concept; only forward it when the context
+                // was continued from a `traceparent`, never from B3.
+                tracestate: if from_w3c.is_some() {
+                    sanitize_tracestate(incoming_tracestate)
+                } else {
+                    None
+                },
                 sampled: parent.sampled,
             },
             // No usable upstream context: this request is the trace root. Sample
@@ -80,6 +108,51 @@ impl TraceContext {
                 sampled: true,
             },
         }
+    }
+
+    /// Parses a **B3** single-header value (`{trace}-{span}[-{sampled}[-{parent}]]`,
+    /// the Zipkin/Istio form). The trace id is 128- or 64-bit (32 or 16 hex, the
+    /// 64-bit form right-aligned into 128 bits, per the B3 spec); the span id is
+    /// 64-bit (16 hex). A sampling-only `b3` (`0`/`1`/`d` with no ids) carries no
+    /// trace to continue and returns `None`, as does any malformed or all-zero id.
+    #[must_use]
+    pub fn parse_b3(value: &str) -> Option<Self> {
+        let mut parts = value.split('-');
+        let trace_hex = parts.next()?;
+        // No span id ⇒ a sampling-only `b3` (e.g. `b3: 0`); nothing to continue.
+        let span_hex = parts.next()?;
+        let sampled = match parts.next() {
+            None | Some("1" | "d") => true,
+            Some("0") => false,
+            Some(_) => return None,
+        };
+        // An optional parent span id may follow; the proxy does not use it (it
+        // becomes the proxy's parent only via `propagate`), but reject extras.
+        if parts.clone().count() > 1 {
+            return None;
+        }
+        let mut trace_id = [0u8; 16];
+        match trace_hex.len() {
+            32 => decode_hex(trace_hex, &mut trace_id)?,
+            // 64-bit trace id: right-align into the low 8 bytes (B3 §128-bit).
+            16 => decode_hex(trace_hex, &mut trace_id[8..])?,
+            _ => return None,
+        }
+        let mut span_id = [0u8; 8];
+        if span_hex.len() != 16 {
+            return None;
+        }
+        decode_hex(span_hex, &mut span_id)?;
+        if trace_id == [0u8; 16] || span_id == [0u8; 8] {
+            return None;
+        }
+        Some(Self {
+            trace_id,
+            span_id,
+            parent_span_id: None,
+            tracestate: None,
+            sampled,
+        })
     }
 
     /// Parses a W3C `traceparent` value (`00-<32hex>-<16hex>-<2hex>`). Returns

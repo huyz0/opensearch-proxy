@@ -79,13 +79,15 @@ across them.
 **Upstream trace headers are gated on span export.** When OTLP export is on the
 proxy is a span in the distributed trace: it injects its own `traceparent`
 (child of the caller's, so the upstream span nests under the proxy's) and
-forwards the caller's `tracestate` verbatim. When export is **off** (the
-default) the proxy adds no span, so it injects nothing and stays transparent to
-tracing: the client's own trace headers ride through in the forwarded header set
-(see [04 §10](04-request-pipeline.md)) untouched, including non-W3C formats like
-B3 that the proxy does not itself parse. This way a proxy that is not
-participating in tracing never inserts a `traceparent` pointing at a span it
-never exported.
+forwards the caller's `tracestate` verbatim. It continues the caller's trace from
+a W3C `traceparent`, or — when only **B3** (Zipkin/Istio, single `b3` or the
+`X-B3-*` multi-header form) is present — from that, so a B3-native client's trace
+stays connected (its `trace_id` is preserved) even though the proxy speaks W3C
+downstream. When export is **off** (the default) the proxy adds no span, so it
+injects nothing and stays transparent to tracing: the client's own trace headers
+ride through in the forwarded header set (see [04 §11](04-request-pipeline.md))
+untouched, B3 included. Either way a proxy that is not participating in tracing
+never inserts a `traceparent` pointing at a span it never exported.
 
 - **Structured JSON logs**, one shape-only line per request (the `/debug/explain`
   document, carrying `trace_id`). Off unless `OSPROXY_LOG_REQUESTS` is set

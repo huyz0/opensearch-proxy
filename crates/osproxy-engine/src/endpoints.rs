@@ -418,15 +418,36 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
 }
 
 /// The W3C trace context to forward to the upstream for this request: continues
-/// the client's incoming `traceparent` (keeping the trace connected end-to-end)
-/// or mints a new root when absent, always with a fresh span id for the proxy's
+/// the client's incoming `traceparent` (keeping the trace connected end-to-end),
+/// falls back to a **B3** context (Zipkin/Istio) when only that is present, or
+/// mints a new root when neither is, always with a fresh span id for the proxy's
 /// hop (`docs/05` §2). Pure identity, never carries request values.
 pub(crate) fn wire_trace(ctx: &RequestCtx<'_>) -> TraceContext {
-    TraceContext::propagate(
+    let b3 = b3_single(ctx);
+    TraceContext::propagate_with_b3(
         ctx.headers().get("traceparent"),
         ctx.headers().get("tracestate"),
+        b3.as_deref(),
         ctx.request_id(),
     )
+}
+
+/// The caller's B3 context as a single-header value: the `b3` header if present,
+/// else assembled from the multi-header `X-B3-TraceId`/`X-B3-SpanId`/`X-B3-Sampled`
+/// form so both B3 shapes continue the trace. `None` if no B3 trace+span is given.
+fn b3_single(ctx: &RequestCtx<'_>) -> Option<String> {
+    let h = ctx.headers();
+    if let Some(single) = h.get("b3") {
+        return Some(single.to_owned());
+    }
+    let trace = h.get("x-b3-traceid")?;
+    let span = h.get("x-b3-spanid")?;
+    let mut out = format!("{trace}-{span}");
+    if let Some(sampled) = h.get("x-b3-sampled") {
+        out.push('-');
+        out.push_str(sampled);
+    }
+    Some(out)
 }
 
 /// Shapes a write acknowledgement into an OpenSearch-style ingest response.

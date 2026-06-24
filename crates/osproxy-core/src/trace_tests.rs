@@ -138,3 +138,70 @@ fn derived_ids_are_stable_per_request_and_distinct_across_requests() {
     assert_eq!(a1, a2, "same request id derives the same context");
     assert_ne!(a1, b, "different requests get different traces");
 }
+
+// --- B3 (Zipkin/Istio) ingress ---------------------------------------------
+
+const B3_TRACE: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
+const B3_SPAN: &str = "00f067aa0ba902b7";
+
+#[test]
+fn parses_a_b3_single_header_128_and_64_bit() {
+    // 128-bit trace id, sampled.
+    let c = TraceContext::parse_b3(&format!("{B3_TRACE}-{B3_SPAN}-1")).expect("128-bit");
+    assert_eq!(c.trace_id_hex(), B3_TRACE);
+    assert!(c.sampled());
+    // 64-bit trace id is right-aligned into 128 bits.
+    let c64 = TraceContext::parse_b3(&format!("a3ce929d0e0e4736-{B3_SPAN}")).expect("64-bit");
+    assert_eq!(c64.trace_id_hex(), "0000000000000000a3ce929d0e0e4736");
+    // Sampling flag honored.
+    assert!(!TraceContext::parse_b3(&format!("{B3_TRACE}-{B3_SPAN}-0"))
+        .unwrap()
+        .sampled());
+}
+
+#[test]
+fn rejects_b3_without_a_trace_to_continue() {
+    for bad in [
+        "0",                                                    // sampling-only deny
+        "1",                                                    // sampling-only accept
+        B3_TRACE,                                               // trace but no span
+        &format!("xxxx-{B3_SPAN}"),                             // non-hex trace
+        &format!("{B3_TRACE}-{B3_SPAN}-2"),                     // bad sampling flag
+        &format!("00000000000000000000000000000000-{B3_SPAN}"), // zero trace
+    ] {
+        assert!(
+            TraceContext::parse_b3(bad).is_none(),
+            "should reject: {bad:?}"
+        );
+    }
+}
+
+#[test]
+fn b3_continues_the_trace_when_no_traceparent_is_present() {
+    let rid = RequestId::from("req-b3");
+    let b3 = format!("{B3_TRACE}-{B3_SPAN}-1");
+    let ctx = TraceContext::propagate_with_b3(None, None, Some(&b3), &rid);
+    // The proxy's span shares the client's B3 trace id (continuity), with a fresh
+    // span for the proxy hop and the client's span as its parent.
+    assert_eq!(ctx.trace_id_hex(), B3_TRACE);
+    assert_eq!(ctx.parent_span_id_hex().as_deref(), Some(B3_SPAN));
+    assert_ne!(
+        ctx.span_id_hex(),
+        B3_SPAN,
+        "the proxy hop gets its own span"
+    );
+    assert!(ctx.sampled());
+    // B3 carries no tracestate.
+    assert!(ctx.to_tracestate().is_none());
+}
+
+#[test]
+fn w3c_traceparent_wins_over_b3_when_both_are_present() {
+    let b3 = "11111111111111111111111111111111-2222222222222222-1";
+    let ctx = TraceContext::propagate_with_b3(Some(SAMPLE), None, Some(b3), &RequestId::from("r"));
+    assert_eq!(
+        ctx.trace_id_hex(),
+        "4bf92f3577b34da6a3ce929d0e0e4736",
+        "W3C trace id, not B3"
+    );
+}
