@@ -92,6 +92,11 @@ partition*).
 ## 6. Invariants (tested)
 
 - INV-M1: No write commits against a stale epoch for a `Migrating` partition.
+  This is the **synchronous** write gate (single-doc, delete, and per-op at bulk
+  flush): a held write is surfaced as a retryable stale-epoch `409`. The async
+  fan-out mode (docs/04 §9) runs no live gate, it enqueues the epoch-stamped op
+  and the downstream applier owns staleness, so async writes are eventual by
+  contract, not gated at enqueue.
 - INV-M2: After `Cutover` completes, no in-flight request resolves to the old
   placement (epoch monotonicity guarantees this).
 - INV-M3: A migration that aborts mid-flight returns the partition to `Active(A)`
