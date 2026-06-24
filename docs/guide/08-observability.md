@@ -160,11 +160,32 @@ flow through the control plane; see [Partition Migration](../06-partition-migrat
 
 When `OSPROXY_OTLP_ENDPOINT` is set, osproxy exports the shape-only `SERVER` span to
 an OTLP collector (fire-and-forget, drop-if-saturated, never blocking the request).
-It **propagates W3C trace-context**: the incoming `traceparent` is parsed, the proxy
-span nests under the caller, and `traceparent` is injected into every upstream call, so
-so the proxy joins your distributed trace, and `trace_id` ties the OTLP span,
-`/debug/explain`, and the structured log together. Export cost is gated behind the
-exporter being enabled *and* the effective diag level, so `Off` costs almost nothing.
+It then **participates in W3C trace-context**: the incoming `traceparent` is parsed,
+the proxy span nests under the caller, and the proxy injects its own `traceparent`
+into every upstream call (overriding the client's), so the proxy is a hop in your
+distributed trace and `trace_id` ties the OTLP span, `/debug/explain`, and the
+structured log together. Export cost is gated behind the exporter being enabled *and*
+the effective diag level, so `Off` costs almost nothing.
+
+**Tracing is transparent when export is off (the default).** With no exporter the
+proxy adds no span and injects **no** `traceparent` of its own — it stays out of the
+trace. The client's own trace headers instead pass straight through to the upstream
+in the forwarded header set (see below), including non-W3C formats like **B3**
+(Zipkin/Istio) that the proxy does not parse. So a proxy that is not itself
+exporting never inserts a `traceparent` pointing at a span it never recorded.
+
+## Forwarding client headers to the upstream
+
+When the proxy forwards a request it rebuilds it for the upstream, so by default the
+cluster would see only the headers the proxy manages. For a sidecar / transparent
+deployment that is too lossy, so by default osproxy **relays the client's own
+headers** to the cluster on every request — custom routing hints, vendor trace
+headers (B3, …), and (by default) the client's `Authorization`. A mandatory set is
+never relayed: hop-by-hop headers plus `host`/`content-length` (the proxy re-frames
+the request). Control it with `forward_client_headers` (default `true`, sidecar
+trust) and `forward_header_deny` (e.g. add `authorization` to keep the client
+credential off the cluster); see [Configuration](07-configuration.md) and
+[Request pipeline §11](../04-request-pipeline.md).
 
 ## `/metrics`, the always-on prod-safe surface
 
