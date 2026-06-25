@@ -55,7 +55,8 @@ pre.mermaid svg { max-width: none; height: auto; }
 .mermaid-lightbox {
   position: fixed; inset: 0; z-index: 1000; cursor: zoom-out;
   display: flex; align-items: center; justify-content: center;
-  padding: 2rem; background: rgba(0, 0, 0, 0.75);
+  padding: 2rem; background: rgba(0, 0, 0, 0.9);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
 }
 .mermaid-lightbox svg { max-width: 96vw; max-height: 92vh; width: auto; height: auto; }
 `;
