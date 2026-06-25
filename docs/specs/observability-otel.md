@@ -43,16 +43,23 @@ trace headers rather than starting an island trace:
 
 - **Inbound**: a client's `traceparent` (W3C Trace Context) is parsed at the
   engine. If present and well-formed, the request continues that trace (same
-  `trace_id`); if absent or malformed, the proxy mints a sampled root.
+  `trace_id`); if only **B3** (Zipkin/Istio, single `b3` or `X-B3-*` multi-header)
+  is present, the request continues *that* trace instead (`trace_id` preserved);
+  if neither is present or both are malformed, the proxy mints a sampled root.
 - **This hop**: a fresh `span_id` is generated for the proxy's own span, derived
   from the request id (deterministic, dependency-free, no RNG in `core`).
-- **Outbound**: every upstream call (write, read, query, and each demuxed
-  `_bulk`/`_mget`/`_msearch` sub-request) carries a `traceparent` whose
-  `trace_id` matches the inbound trace and whose parent is the proxy's span, so
-  OpenSearch's spans nest under the proxy.
+- **Outbound (gated on span export)**: when OTLP export is **on**, every upstream
+  call (write, read, query, and each demuxed `_bulk`/`_mget`/`_msearch`
+  sub-request) carries a `traceparent` whose `trace_id` matches the inbound trace
+  and whose parent is the proxy's span, so OpenSearch's spans nest under the
+  proxy. When export is **off** (the default) the proxy adds no span and injects
+  **no** `traceparent` of its own, staying transparent: the client's trace headers
+  (W3C or B3) pass through verbatim in the forwarded header set (docs/04 §11), so
+  the proxy never inserts a `traceparent` pointing at a span it never exported.
 
-The primitive is `osproxy_core::TraceContext` (`TraceContext::propagate`); it is
-injected once at the sink's single send choke point. It holds **only** trace/span
+The primitive is `osproxy_core::TraceContext` (`TraceContext::propagate_with_b3`);
+the proxy `traceparent`/`tracestate` are injected once at the sink's single send
+choke point, gated on the exporter being enabled. It holds **only** trace/span
 identity, never request values, so propagation cannot become a value-leak
 channel (the shape-only rule, docs/05 §7). The context also retains the caller's
 span id so the exported span nests under it (the `parentSpanId` above).
