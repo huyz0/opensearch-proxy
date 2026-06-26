@@ -32,6 +32,35 @@ dylibs).
   *future* mode built on a queue (Kafka) + pull-based ingesters, not the
   synchronous path.
 
+## Installing
+
+Two ways to consume osproxy, matching its two modes:
+
+**Run the proxy (prebuilt binary).** Each release attaches a static `osproxy`
+binary (a default build and a FIPS build) to its
+[GitHub Release](https://github.com/huyz0/opensearch-proxy/releases) — no Rust
+toolchain required:
+
+```sh
+curl -L https://github.com/huyz0/opensearch-proxy/releases/latest/download/osproxy-v1.0.0-x86_64-unknown-linux-gnu -o osproxy
+chmod +x osproxy && ./osproxy --help
+```
+
+Or install it with cargo from crates.io:
+
+```sh
+cargo install osproxy-server   # the `osproxy` binary
+```
+
+**Build a custom proxy (the SPI).** Depend on the published crates and compile
+your placement policy in statically:
+
+```toml
+[dependencies]
+osproxy-spi = "1.0"
+osproxy-engine = "1.0"
+```
+
 ## Building & development setup
 
 ### Required tools

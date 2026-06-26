@@ -30,7 +30,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.0.0"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.94"
 license = "Apache-2.0"
@@ -38,27 +38,31 @@ authors = ["Huy Nguyen"]
 repository = "https://github.com/huyz0/opensearch-proxy"
 
 [workspace.dependencies]
-# Internal crates (path deps; versions track the workspace).
-osproxy-core = { path = "crates/osproxy-core" }
-osproxy-spi = { path = "crates/osproxy-spi" }
-osproxy-tenancy = { path = "crates/osproxy-tenancy" }
+# Internal crates: `path` drives local builds, `version` is what crates.io records
+# for the published dependency (the registry rejects a path-only dep), so the two
+# must move together on every release. `osproxy-bench` is intentionally version-less
+# below: it is `publish = false` and only a dev-dependency, so its path edge is
+# stripped on publish and must not carry a registry version.
+osproxy-core = { path = "crates/osproxy-core", version = "1.0.0" }
+osproxy-spi = { path = "crates/osproxy-spi", version = "1.0.0" }
+osproxy-tenancy = { path = "crates/osproxy-tenancy", version = "1.0.0" }
 # default-features off so a consumer can pick the crypto provider feature
 # (`non-fips`/`fips`) without the default `non-fips` being force-unioned in.
-osproxy-transport = { path = "crates/osproxy-transport", default-features = false }
-osproxy-rewrite = { path = "crates/osproxy-rewrite" }
-osproxy-sink = { path = "crates/osproxy-sink" }
-osproxy-control = { path = "crates/osproxy-control" }
-osproxy-observe = { path = "crates/osproxy-observe" }
-osproxy-otlp = { path = "crates/osproxy-otlp" }
-osproxy-etcd = { path = "crates/osproxy-etcd" }
-osproxy-engine = { path = "crates/osproxy-engine" }
-osproxy-config = { path = "crates/osproxy-config" }
-osproxy-capture = { path = "crates/osproxy-capture" }
-osproxy-kafka = { path = "crates/osproxy-kafka" }
+osproxy-transport = { path = "crates/osproxy-transport", version = "1.0.0", default-features = false }
+osproxy-rewrite = { path = "crates/osproxy-rewrite", version = "1.0.0" }
+osproxy-sink = { path = "crates/osproxy-sink", version = "1.0.0" }
+osproxy-control = { path = "crates/osproxy-control", version = "1.0.0" }
+osproxy-observe = { path = "crates/osproxy-observe", version = "1.0.0" }
+osproxy-otlp = { path = "crates/osproxy-otlp", version = "1.0.0" }
+osproxy-etcd = { path = "crates/osproxy-etcd", version = "1.0.0" }
+osproxy-engine = { path = "crates/osproxy-engine", version = "1.0.0" }
+osproxy-config = { path = "crates/osproxy-config", version = "1.0.0" }
+osproxy-capture = { path = "crates/osproxy-capture", version = "1.0.0" }
+osproxy-kafka = { path = "crates/osproxy-kafka", version = "1.0.0" }
 # default-features off so the binary picks the crypto provider feature
 # (`non-fips`/`fips`) per build; never force-union the default `non-fips`.
-osproxy-kafka-krafka = { path = "crates/osproxy-kafka-krafka", default-features = false }
-osproxy-kafka-wal = { path = "crates/osproxy-kafka-wal" }
+osproxy-kafka-krafka = { path = "crates/osproxy-kafka-krafka", version = "1.0.0", default-features = false }
+osproxy-kafka-wal = { path = "crates/osproxy-kafka-wal", version = "1.0.0" }
 osproxy-bench = { path = "crates/osproxy-bench" }
 
 # Third-party (pinned conservatively; add as milestones need them).

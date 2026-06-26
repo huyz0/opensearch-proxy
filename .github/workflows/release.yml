@@ -1,0 +1,117 @@
+name: Release
+
+# Cut a release by pushing a semver tag, e.g. `git tag v1.0.0 && git push origin v1.0.0`.
+# The tag drives three things: it must match the workspace version, it publishes the
+# workspace to crates.io, and it builds the `osproxy` binary (default + FIPS) and
+# attaches it to an auto-created GitHub Release.
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*" # pre-releases, e.g. v1.0.0-rc.1
+
+permissions:
+  contents: write # create the GitHub Release and upload binary assets
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Fail fast if the pushed tag does not match the version in Cargo.toml, so a
+  # mistagged push can never publish the wrong version to crates.io.
+  guard:
+    name: Tag matches workspace version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.94.1
+      - name: Compare tag to crate version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name=="osproxy-core") | .version')"
+          echo "tag=$tag crate=$ver"
+          test "$tag" = "$ver" || { echo "::error::tag $tag != workspace version $ver"; exit 1; }
+
+  # Publish every publishable workspace crate to crates.io. `--workspace` resolves
+  # the dependency order and waits for index propagation between crates itself
+  # (stable since Rust 1.90); `publish = false` crates (osproxy-bench, xtask) are
+  # skipped automatically. Requires a CRATES_IO_TOKEN repository secret.
+  crates-io:
+    name: Publish to crates.io
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: Swatinem/rust-cache@v2
+      # The gRPC ingress build (osproxy-transport build.rs) compiles the proto, so
+      # the verify-build cargo runs before each upload needs protoc on the host.
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: cargo publish --workspace
+        run: cargo publish --workspace --locked --token "${{ secrets.CRATES_IO_TOKEN }}"
+
+  # Build the shipped binary in both flavors and attach them to the Release.
+  # Independent of crates.io so a registry hiccup never blocks the binaries.
+  binaries:
+    name: Build ${{ matrix.flavor }} binary
+    needs: guard
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: default
+            features: ""
+            suffix: ""
+            # Default (ring) build runs on the standard image.
+            os: ubuntu-latest
+          - flavor: fips
+            features: "--no-default-features --features fips"
+            suffix: "-fips"
+            # PINNED for the FIPS build, exactly like the CI fips job: AWS-LC-FIPS's
+            # delocate only parses assembly from supported compiler versions, so the
+            # image is a compliance-relevant constant, never `ubuntu-latest`.
+            os: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: Swatinem/rust-cache@v2
+      # protoc for the gRPC ingress build; cmake for the FIPS flavor's AWS-LC-FIPS
+      # native build (a no-op cost on the default flavor, kept uniform for clarity).
+      - name: Install build toolchain
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake
+      - name: Build osproxy (${{ matrix.flavor }})
+        run: cargo build -p osproxy-server --bin osproxy --release --locked ${{ matrix.features }}
+      # Name the asset by version + target + flavor, and emit a checksum beside it.
+      - name: Stage release asset
+        run: |
+          name="osproxy-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu${{ matrix.suffix }}"
+          mkdir -p dist
+          cp target/release/osproxy "dist/$name"
+          sha256sum "dist/$name" > "dist/$name.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: osproxy-${{ matrix.flavor }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create / update the Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # GitHub renders auto-generated notes from the commits since the last tag.
+          generate_release_notes: true
+          # A tag with a pre-release suffix (rc/beta/alpha) is marked pre-release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: dist/*
+          fail_on_unmatched_files: true

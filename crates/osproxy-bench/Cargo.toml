@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+# Internal NFR-P test scaffolding (only a dev-dependency of osproxy-server); not a
+# public artifact, so it is excluded from the crates.io workspace publish.
+publish = false
 
 [dependencies]
 serde = { workspace = true }
