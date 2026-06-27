@@ -10,9 +10,10 @@ repository.workspace = true
 
 [dependencies]
 osproxy-kafka.workspace = true
-# Runtime handle + Notify for the background drainer, time for retry backoff. The
-# WAL stores opaque bytes, so it needs no broker client or crypto provider.
-tokio = { workspace = true, features = ["rt", "time", "sync"] }
+# Runtime handle + Notify for the background drainer, time for retry backoff, and
+# `macros` for the drainer's `tokio::select!`. The WAL stores opaque bytes, so it
+# needs no broker client or crypto provider.
+tokio = { workspace = true, features = ["rt", "time", "sync", "macros"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "time", "sync", "macros"] }

@@ -20,8 +20,8 @@ krafka = { version = "0.12", default-features = false }
 # krafka provider feature below so exactly one provider is linked.
 rustls = { version = "0.23", default-features = false, features = ["std"] }
 # `time` backs the retry backoff; `rt` supplies the runtime handle the
-# fire-and-forget produce spawns onto.
-tokio = { workspace = true, features = ["rt", "time"] }
+# fire-and-forget produce spawns onto; `sync` provides the producer's channels.
+tokio = { workspace = true, features = ["rt", "time", "sync"] }
 
 [dev-dependencies]
 # Paused-time async tests for the delivery retry/backoff and saturation logic

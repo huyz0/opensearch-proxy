@@ -25,7 +25,7 @@ hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["server", "server-auto", "service", "tokio"] }
 http-body-util.workspace = true
 bytes.workspace = true
-tokio = { workspace = true, features = ["rt", "net", "sync", "time"] }
+tokio = { workspace = true, features = ["rt", "net", "sync", "time", "macros"] }
 tokio-rustls.workspace = true
 ring = { workspace = true, optional = true }
 aws-lc-rs = { workspace = true, optional = true }
