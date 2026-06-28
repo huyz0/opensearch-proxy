@@ -33,24 +33,58 @@ jobs:
           echo "tag=$tag crate=$ver"
           test "$tag" = "$ver" || { echo "::error::tag $tag != workspace version $ver"; exit 1; }
 
-  # Publish every publishable workspace crate to crates.io. `--workspace` resolves
-  # the dependency order and waits for index propagation between crates itself
-  # (stable since Rust 1.90); `publish = false` crates (osproxy-bench, xtask) are
-  # skipped automatically. Requires a CRATES_IO_TOKEN repository secret.
+  # Publish every publishable crate to crates.io, one at a time in dependency
+  # order. We deliberately do NOT use `cargo publish --workspace`: it is not
+  # idempotent — if any member is already on the registry (e.g. a prior run
+  # published a prefix before hitting the new-crate rate limit) it aborts at the
+  # first "already exists" and never reaches the rest. The per-crate loop skips
+  # already-published crates and stops cleanly on a 429 so a re-run resumes where
+  # it left off. `publish = false` crates (osproxy-bench, xtask) are omitted.
+  # Requires a CRATES_IO_TOKEN repository secret.
   crates-io:
     name: Publish to crates.io
     needs: guard
     runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.94.1
       - uses: Swatinem/rust-cache@v2
       # The gRPC ingress build (osproxy-transport build.rs) compiles the proto, so
-      # the verify-build cargo runs before each upload needs protoc on the host.
+      # each crate's verify-build needs protoc on the host.
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: cargo publish --workspace
-        run: cargo publish --workspace --locked --token "${{ secrets.CRATES_IO_TOKEN }}"
+      - name: Publish crates in dependency order (idempotent)
+        run: |
+          set -u
+          ver="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name=="osproxy-core") | .version')"
+          # Dependency order: a crate appears after everything it depends on.
+          order="osproxy-core osproxy-config osproxy-spi osproxy-observe \
+            osproxy-rewrite osproxy-capture osproxy-otlp osproxy-etcd osproxy-sink \
+            osproxy-transport osproxy-tenancy osproxy-kafka osproxy-kafka-wal \
+            osproxy-kafka-krafka osproxy-control osproxy-engine osproxy-server"
+          for c in $order; do
+            # Already on the registry at this version? Skip (idempotent re-run).
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/$c/$ver")
+            if [ "$code" = "200" ]; then echo "✓ $c@$ver already published — skip"; continue; fi
+            echo "→ publishing $c@$ver"
+            if out=$(cargo publish -p "$c" --locked 2>&1); then
+              echo "$out" | tail -2
+            else
+              echo "$out" | tail -8
+              if echo "$out" | grep -qi 'already exists'; then
+                echo "✓ $c already exists — skip"; continue
+              fi
+              if echo "$out" | grep -qiE '429|too many requests|rate limit'; then
+                echo "::warning::new-crate rate limit hit at $c; re-run this job after the reset to resume"
+                exit 2
+              fi
+              echo "::error::publish failed for $c"; exit 1
+            fi
+          done
+          echo "all publishable crates are live at $ver"
 
   # Build the shipped binary in both flavors and attach them to the Release.
   # Independent of crates.io so a registry hiccup never blocks the binaries.
