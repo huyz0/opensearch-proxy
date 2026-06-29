@@ -28,7 +28,9 @@ pub(crate) fn build_request(
         .method(method)
         .uri(uri)
         .header("content-type", "application/json")
-        .body(buffered(Bytes::from(body)))
+        // `body` is a `Bytes`: cloning it out of the borrowed `doc` above (so the
+        // op survives a retry) is a refcount bump, not a copy of the document.
+        .body(buffered(body))
         .map_err(|_| SinkError::Transport {
             kind: "building upstream request",
         })?;
@@ -38,7 +40,7 @@ pub(crate) fn build_request(
 /// Selects the `(method, uri, body, fallback_id)` for a document op. `create`
 /// targets `_create` (fail-if-exists), `update` targets `_update`; `index`/
 /// `delete` use `_doc`.
-fn request_parts(base: &str, index: &IndexName, doc: &DocOp) -> (Method, String, Vec<u8>, String) {
+fn request_parts(base: &str, index: &IndexName, doc: &DocOp) -> (Method, String, Bytes, String) {
     match doc {
         DocOp::Index {
             id: Some(id),
@@ -89,7 +91,7 @@ fn request_parts(base: &str, index: &IndexName, doc: &DocOp) -> (Method, String,
         DocOp::Delete { id, routing } => (
             Method::DELETE,
             doc_uri(base, index, Some(id), routing.as_deref()),
-            Vec::new(),
+            Bytes::new(),
             id.clone(),
         ),
     }

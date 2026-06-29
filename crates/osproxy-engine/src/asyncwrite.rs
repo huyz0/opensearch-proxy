@@ -314,7 +314,7 @@ mod tests {
             DocOp::Index {
                 id: Some("p:1".to_owned()),
                 routing: None,
-                body: b"{}".to_vec(),
+                body: bytes::Bytes::from_static(b"{}"),
             },
             Epoch::new(1),
         )

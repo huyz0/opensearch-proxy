@@ -105,7 +105,7 @@ impl MemorySink {
             let index = op.target.index.as_str().to_owned();
             match &op.doc {
                 DocOp::Index { body, .. } | DocOp::Create { body, .. } => {
-                    docs.insert((index, result.id.clone()), body.clone());
+                    docs.insert((index, result.id.clone()), body.to_vec());
                 }
                 DocOp::Update { id, body, .. } => {
                     let key = (index, id.clone());
@@ -269,7 +269,7 @@ mod tests {
             DocOp::Index {
                 id: id.map(str::to_owned),
                 routing: None,
-                body: b"{}".to_vec(),
+                body: bytes::Bytes::from_static(b"{}"),
             },
             Epoch::new(1),
         )
@@ -308,7 +308,7 @@ mod tests {
             DocOp::Index {
                 id: Some("acme:7".to_owned()),
                 routing: Some("acme".to_owned()),
-                body: br#"{"msg":"hi"}"#.to_vec(),
+                body: bytes::Bytes::from_static(br#"{"msg":"hi"}"#),
             },
             Epoch::new(1),
         );
@@ -345,7 +345,7 @@ mod tests {
             DocOp::Index {
                 id: Some("acme:7".to_owned()),
                 routing: None,
-                body: br#"{"_tenant":"acme","msg":"hi"}"#.to_vec(),
+                body: bytes::Bytes::from_static(br#"{"_tenant":"acme","msg":"hi"}"#),
             },
             Epoch::new(1),
         )))
@@ -375,7 +375,7 @@ mod tests {
                 DocOp::Index {
                     id: Some(id.to_owned()),
                     routing: None,
-                    body: b"{}".to_vec(),
+                    body: bytes::Bytes::from_static(b"{}"),
                 },
                 Epoch::new(1),
             )))
@@ -398,7 +398,7 @@ mod tests {
             DocOp::Index {
                 id: Some("acme:7".to_owned()),
                 routing: None,
-                body: b"{}".to_vec(),
+                body: bytes::Bytes::from_static(b"{}"),
             },
             Epoch::new(1),
         )))

@@ -266,7 +266,7 @@ mod tests {
         let w = write(DocOp::Index {
             id: Some("acme:7".to_owned()),
             routing: Some("acme".to_owned()),
-            body: json.to_vec(),
+            body: bytes::Bytes::from_static(json),
         });
 
         let env = envelope(&w, &w.batch.ops()[0], BodyEncoding::Cbor).unwrap();
@@ -296,7 +296,7 @@ mod tests {
         let w = write(DocOp::Index {
             id: None,
             routing: None,
-            body: json.to_vec(),
+            body: bytes::Bytes::from_static(json),
         });
         let env = envelope(&w, &w.batch.ops()[0], BodyEncoding::Json).unwrap();
         assert_eq!(env.content_type, "application/json");

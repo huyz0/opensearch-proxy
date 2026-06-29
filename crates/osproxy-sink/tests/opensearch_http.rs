@@ -149,7 +149,7 @@ async fn the_trace_context_is_propagated_to_the_upstream() {
         DocOp::Index {
             id: Some("acme:1".to_owned()),
             routing: Some("acme".to_owned()),
-            body: br#"{"_tenant":"acme"}"#.to_vec(),
+            body: bytes::Bytes::from_static(br#"{"_tenant":"acme"}"#),
         },
         Epoch::new(1),
     )
@@ -338,7 +338,7 @@ async fn index_with_id_and_routing_is_sent_and_parsed() {
         DocOp::Index {
             id: Some("acme:1001".to_owned()),
             routing: Some("acme".to_owned()),
-            body: br#"{"_tenant":"acme","msg":"hi"}"#.to_vec(),
+            body: bytes::Bytes::from_static(br#"{"_tenant":"acme","msg":"hi"}"#),
         },
         Epoch::new(4),
     );
@@ -366,7 +366,7 @@ async fn an_http2_op_is_dispatched_over_http2() {
         DocOp::Index {
             id: Some("acme:1".to_owned()),
             routing: None,
-            body: b"{}".to_vec(),
+            body: bytes::Bytes::from_static(b"{}"),
         },
         Epoch::new(1),
     )
@@ -420,7 +420,7 @@ async fn each_cluster_routes_to_its_own_sharded_pool() {
             DocOp::Index {
                 id: Some("1".to_owned()),
                 routing: None,
-                body: b"{}".to_vec(),
+                body: bytes::Bytes::from_static(b"{}"),
             },
             Epoch::new(1),
         )
@@ -479,7 +479,7 @@ async fn a_failing_cluster_is_evicted_then_retried_after_cooldown() {
             DocOp::Index {
                 id: Some("x".to_owned()),
                 routing: None,
-                body: b"{}".to_vec(),
+                body: bytes::Bytes::from_static(b"{}"),
             },
             Epoch::new(1),
         )))
@@ -536,7 +536,7 @@ async fn a_stuck_upstream_times_out_and_is_retryable() {
         DocOp::Index {
             id: Some("x".to_owned()),
             routing: None,
-            body: b"{}".to_vec(),
+            body: bytes::Bytes::from_static(b"{}"),
         },
         Epoch::new(1),
     );
@@ -562,7 +562,7 @@ async fn server_error_surfaces_as_retryable_upstream() {
         DocOp::Index {
             id: Some("x".to_owned()),
             routing: None,
-            body: b"{}".to_vec(),
+            body: bytes::Bytes::from_static(b"{}"),
         },
         Epoch::new(1),
     );
@@ -581,7 +581,7 @@ async fn unconfigured_cluster_is_a_transport_error() {
         DocOp::Index {
             id: Some("x".to_owned()),
             routing: None,
-            body: b"{}".to_vec(),
+            body: bytes::Bytes::from_static(b"{}"),
         },
         Epoch::new(1),
     );
@@ -604,7 +604,7 @@ async fn repeated_writes_reuse_one_pooled_connection() {
             DocOp::Index {
                 id: Some("1".to_owned()),
                 routing: None,
-                body: b"{}".to_vec(),
+                body: bytes::Bytes::from_static(b"{}"),
             },
             Epoch::new(1),
         );

@@ -6,6 +6,7 @@
 //! the epoch-stamped batch the [`Sink`](osproxy_sink::Sink) will deliver
 //! (`docs/04`). Pure and synchronous, no network, fully testable.
 
+use bytes::Bytes;
 use osproxy_core::FieldName;
 use osproxy_rewrite::{construct_id_bytes, inject_fields_bytes, validate_json};
 use osproxy_sink::{DocOp, WriteBatch, WriteOp};
@@ -54,23 +55,27 @@ fn apply_transform(
     body: &[u8],
     transform: &BodyTransform,
     partition: &str,
-) -> Result<(Option<String>, Vec<u8>), RequestError> {
+) -> Result<(Option<String>, Bytes), RequestError> {
     match transform {
         // Verbatim: forward unchanged, but still reject a malformed body.
         BodyTransform::None => {
             validate_json(body).map_err(RequestError::from)?;
-            Ok((None, body.to_vec()))
+            Ok((None, Bytes::copy_from_slice(body)))
         }
-        BodyTransform::Inject(fields) => Ok((None, inject(body, fields, partition)?)),
+        BodyTransform::Inject(fields) => Ok((None, Bytes::from(inject(body, fields, partition)?))),
         // The id reads client fields from the bytes; the body passes through.
         BodyTransform::ConstructId(rule) => {
             validate_json(body).map_err(RequestError::from)?;
-            Ok((Some(build_id(rule, body, partition)?), body.to_vec()))
+            Ok((
+                Some(build_id(rule, body, partition)?),
+                Bytes::copy_from_slice(body),
+            ))
         }
         // Splice the injected fields (which validates the object), then read the
         // id from the original client bytes (id templates reference client fields).
         BodyTransform::Both { inject: fields, id } => {
-            let out = inject(body, fields, partition)?;
+            // `inject` owns the spliced buffer; `Bytes::from` takes it without copy.
+            let out = Bytes::from(inject(body, fields, partition)?);
             Ok((Some(build_id(id, body, partition)?), out))
         }
     }

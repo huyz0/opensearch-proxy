@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use bytes::Bytes;
 use osproxy_core::PartitionId;
 use osproxy_rewrite::{
     construct_id_bytes, inject_fields_bytes, inject_update, map_logical_to_physical,
@@ -144,8 +145,12 @@ fn build_op(
                 .ok_or_else(|| bad("missing_source"))?;
             // Splice the tenancy fields straight into the source bytes and read
             // the id from the original bytes, no `Value` tree (ADR-014).
-            let body = inject_fields_bytes(source, &inject)
-                .map_err(|_| bad("reserved_field_collision"))?;
+            // `inject_fields_bytes` owns the spliced buffer; `Bytes::from` takes it
+            // without copying, and the op then rides upstream copy-free on retry.
+            let body = Bytes::from(
+                inject_fields_bytes(source, &inject)
+                    .map_err(|_| bad("reserved_field_collision"))?,
+            );
             let (id, logical) =
                 index_id(rule, partition, item, source).ok_or_else(|| bad("id_construction"))?;
             let routing = id.as_ref().and_then(|_| routing_for(rule, partition));
@@ -195,7 +200,7 @@ fn build_update<F: Fn(&'static str) -> ItemFailure>(
         .ok_or_else(|| bad("missing_source"))?;
     let mut update: Value = serde_json::from_slice(source).map_err(|_| bad("invalid_json"))?;
     inject_update(&mut update, inject).map_err(|_| bad("reserved_field_collision"))?;
-    let body = serde_json::to_vec(&update).map_err(|_| bad("serialize"))?;
+    let body = Bytes::from(serde_json::to_vec(&update).map_err(|_| bad("serialize"))?);
     Ok((
         DocOp::Update {
             id,

@@ -79,7 +79,7 @@ pub enum DocOp {
         /// The `_routing` value (the partition id), if routing is enabled.
         routing: Option<String>,
         /// The transformed document body (injected fields applied).
-        body: Vec<u8>,
+        body: bytes::Bytes,
     },
     /// Create a document, failing with a conflict if the id already exists
     /// (`op_type=create`). Distinct from [`DocOp::Index`] so the sink can target
@@ -90,7 +90,7 @@ pub enum DocOp {
         /// The `_routing` value (the partition id), if routing is enabled.
         routing: Option<String>,
         /// The transformed document body (injected fields applied).
-        body: Vec<u8>,
+        body: bytes::Bytes,
     },
     /// Partial-update a document by id (`_update`): the body carries the
     /// already-transformed `doc`/`upsert`/`script` (`docs/04` §3).
@@ -100,7 +100,7 @@ pub enum DocOp {
         /// The `_routing` value, if routing is enabled.
         routing: Option<String>,
         /// The transformed update body (injected into `doc`/`upsert`).
-        body: Vec<u8>,
+        body: bytes::Bytes,
     },
     /// Delete a document by id.
     Delete {
@@ -192,7 +192,7 @@ mod tests {
             DocOp::Index {
                 id: Some(id.to_owned()),
                 routing: Some("p".to_owned()),
-                body: b"{}".to_vec(),
+                body: bytes::Bytes::from_static(b"{}"),
             },
             Epoch::new(1),
         )

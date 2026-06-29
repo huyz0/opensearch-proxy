@@ -27,7 +27,7 @@ use crate::error::SinkError;
 /// let sink = MemorySink::new();
 /// let op = WriteOp::new(
 ///     Target::new(ClusterId::from("c"), IndexName::from("i")),
-///     DocOp::Index { id: Some("p:1".into()), routing: Some("p".into()), body: b"{}".to_vec() },
+///     DocOp::Index { id: Some("p:1".into()), routing: Some("p".into()), body: bytes::Bytes::from_static(b"{}") },
 ///     Epoch::new(1),
 /// );
 /// let ack = sink.write(WriteBatch::single(op)).await.unwrap();
@@ -63,7 +63,7 @@ mod tests {
             DocOp::Index {
                 id: Some("p:1".to_owned()),
                 routing: Some("p".to_owned()),
-                body: b"{}".to_vec(),
+                body: bytes::Bytes::from_static(b"{}"),
             },
             Epoch::new(3),
         );
