@@ -53,7 +53,7 @@ async fn op_envelope_round_trips_through_a_real_broker() {
             DocOp::Index {
                 id: Some("acme:7".to_owned()),
                 routing: Some("acme".to_owned()),
-                body: br#"{"_tenant":"acme","id":7,"msg":"hi"}"#.to_vec(),
+                body: bytes::Bytes::from_static(br#"{"_tenant":"acme","id":7,"msg":"hi"}"#),
             },
             Epoch::new(4),
         )),
@@ -110,7 +110,7 @@ async fn multi_op_partition_round_trips_in_order() {
         DocOp::Index {
             id: Some("acme:7".to_owned()),
             routing: Some("acme".to_owned()),
-            body: br#"{"_tenant":"acme","id":7}"#.to_vec(),
+            body: bytes::Bytes::from_static(br#"{"_tenant":"acme","id":7}"#),
         },
     );
     let delete = single(
