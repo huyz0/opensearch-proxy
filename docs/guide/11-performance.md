@@ -64,9 +64,11 @@ rewrite + enqueue, returning `202` without an upstream round-trip. Local box;
 
 What it shows:
 
-- **Payload dominates throughput.** ~15–42k rps at 256 B and 4 KB, dropping to
+- **Payload dominates throughput.** ~14–42k rps at 256 B and 4 KB, dropping to
   ~9–12k at 64 KB. Large bodies are bound by socket I/O and memory bandwidth (most of
-  it the co-located generator + upstream), not the routing logic.
+  it the co-located generator + upstream), not the routing logic. (The lone low
+  256 B/256 cell is a concurrency-saturation dip, not a payload effect — the
+  co-located generator floods the box at 256 connections regardless of size.)
 - **Async fan-out is consistently faster** (higher rps, lower latency) than sync,
   because it skips the upstream round-trip, e.g. 256 B/64: 107k vs 36k rps. This is
   the cost of synchronous durability vs. accepting a `202` and applying downstream.
