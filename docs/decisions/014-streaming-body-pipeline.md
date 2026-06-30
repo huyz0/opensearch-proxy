@@ -163,8 +163,9 @@ raw-byte accessor; INV-MEM dhat gate + serde-oracle + spoof property tests.
 single-doc write streaming deliberately not done (unsound).** Staged:
 
 1. **Sink streaming-capable body**, DONE (green, behavior-preserving): the
-   upstream pooled clients carry a boxed body (`UpstreamBody = BoxBody<Bytes, _>`)
-   instead of `Full<Bytes>`, with a `buffered()` helper; `inject_trace` is generic
+   upstream pooled clients carry a boxed body (`ByteBody = UnsyncBoxBody<Bytes,
+   BodyError>`) instead of `Full<Bytes>`, with a `buffered()` helper; `inject_trace`
+   is generic
    over the body. A request body may now be a buffered head, a stream, or a head +
    stream tail. No path streams yet; this is the type foundation.
 2. **Streaming verbatim forward**, DONE: a tenant-agnostic passthrough request
