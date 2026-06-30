@@ -25,11 +25,11 @@ use std::collections::HashMap;
 use bytes::{Buf as _, BytesMut};
 use futures_util::stream::StreamExt as _;
 use http_body_util::BodyExt as _;
-use osproxy_core::{PartitionId, Target};
+use osproxy_core::Target;
 use osproxy_rewrite::{parse_bulk, parse_bulk_action, BulkAction, BulkItem, RewriteError};
 use osproxy_sink::{ByteBody, DocOp, OpResult, Sink, SinkError, WriteAck, WriteBatch, WriteOp};
 use osproxy_spi::RequestCtx;
-use osproxy_tenancy::{Resolved, Router};
+use osproxy_tenancy::Router;
 use serde_json::{json, Value};
 
 use crate::asyncwrite::{
@@ -79,7 +79,7 @@ pub(crate) async fn ingest_bulk<R: Router, S: Sink>(
     let mut lines: Vec<Value> = vec![Value::Null; n];
     let mut buffers: HashMap<Target, Entries> = HashMap::new();
     let mut sizes: HashMap<Target, usize> = HashMap::new();
-    let mut cache: HashMap<(PartitionId, String), Resolved> = HashMap::new();
+    let mut cache = crate::bulkprep::ResolutionCache::new();
 
     for (ordinal, item) in items.into_iter().enumerate() {
         match prepare(router, ctx, &mut cache, item, retry, up_trace.as_ref()).await {
@@ -141,7 +141,7 @@ pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
     let mut lines: Vec<Value> = Vec::new();
     let mut buffers: HashMap<Target, Entries> = HashMap::new();
     let mut sizes: HashMap<Target, usize> = HashMap::new();
-    let mut cache: HashMap<(PartitionId, String), Resolved> = HashMap::new();
+    let mut cache = crate::bulkprep::ResolutionCache::new();
 
     let mut ordinal = 0usize;
     while let Some(item) = reader.next_op().await? {
@@ -302,7 +302,7 @@ pub(crate) async fn ingest_bulk_async<R: Router>(
     let items = parse_bulk(ctx.body())?;
     let batch_id = op_id_for(ctx, ctx.request_id());
     let mut lines: Vec<Value> = vec![Value::Null; items.len()];
-    let mut cache: HashMap<(PartitionId, String), Resolved> = HashMap::new();
+    let mut cache = crate::bulkprep::ResolutionCache::new();
 
     for (ordinal, item) in items.into_iter().enumerate() {
         // A scripted/partial `_update` has no single current document to merge

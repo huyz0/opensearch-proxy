@@ -1734,6 +1734,7 @@ name = "osproxy-engine"
 version = "1.0.0"
 dependencies = [
  "bytes",
+ "dhat",
  "divan",
  "futures-util",
  "http-body",

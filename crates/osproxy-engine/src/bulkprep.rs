@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use bytes::Bytes;
-use osproxy_core::PartitionId;
+use osproxy_core::{FieldName, PartitionId};
 use osproxy_rewrite::{
     construct_id_bytes, inject_fields_bytes, inject_update, map_logical_to_physical,
     map_physical_to_logical, BulkAction, BulkItem,
@@ -19,6 +19,21 @@ use osproxy_sink::{DocOp, WriteOp};
 use osproxy_spi::{BodyDoc, BodyTransform, InjectedField, InjectedValue, RequestCtx};
 use osproxy_tenancy::{Resolved, Router};
 use serde_json::Value;
+
+/// A resolved placement cached for the duration of one bulk request, alongside
+/// the inject pairs derived from its body transform. Both are computed once per
+/// `(partition, index)` and shared by reference with every item that resolves
+/// there, so the per-item path re-clones neither the placement nor the inject
+/// vector (the bulk hot path, `docs/04` §3).
+pub(crate) struct CachedResolution {
+    resolved: Resolved,
+    inject: Vec<(FieldName, Value)>,
+}
+
+/// The per-request placement cache the bulk demux threads through [`prepare`],
+/// keyed by `(partition, logical index)`, so a multi-document bulk resolves each
+/// distinct placement (and derives its inject pairs) at most once.
+pub(crate) type ResolutionCache = HashMap<(PartitionId, String), CachedResolution>;
 
 /// A prepared operation: the write op plus what the response line needs and the
 /// partition it resolved for (so the migration write gate can be re-checked at
@@ -57,7 +72,7 @@ impl ItemFailure {
 pub(crate) async fn prepare<R: Router>(
     router: &R,
     ctx: &RequestCtx<'_>,
-    cache: &mut HashMap<(PartitionId, String), Resolved>,
+    cache: &mut ResolutionCache,
     item: BulkItem,
     retry: crate::RetryPolicy,
     up_trace: Option<&osproxy_core::TraceContext>,
@@ -83,11 +98,13 @@ pub(crate) async fn prepare<R: Router>(
             )
         })?;
 
+    // Resolve the placement once per (partition, index) and cache it with the
+    // inject pairs derived from its body transform. Every later item that resolves
+    // here borrows the cached entry, so neither the placement nor the inject
+    // vector is re-cloned/re-derived per document (the bulk hot path).
     let key = (partition.clone(), logical_index.clone());
-    let resolved = if let Some(r) = cache.get(&key) {
-        r.clone()
-    } else {
-        let r = crate::retry::with_retry(retry, || {
+    if !cache.contains_key(&key) {
+        let resolved = crate::retry::with_retry(retry, || {
             router.resolve_placement(ctx, partition.clone(), &logical_index)
         })
         .await
@@ -100,11 +117,25 @@ pub(crate) async fn prepare<R: Router>(
                 "placement_missing",
             )
         })?;
-        cache.insert(key, r.clone());
-        r
+        let inject = inject_pairs(
+            &resolved.decision.body_transform,
+            resolved.partition.as_str(),
+        );
+        cache.insert(key.clone(), CachedResolution { resolved, inject });
+    }
+    // The entry is present (just inserted or already cached); the `else` is
+    // unreachable but fails closed rather than panicking (NFR-R1).
+    let Some(entry) = cache.get(&key) else {
+        return Err(fail(
+            action,
+            &logical_index,
+            item.id.clone(),
+            404,
+            "placement_missing",
+        ));
     };
 
-    let mut prepared = build_op(&resolved, &item, action, logical_index)?;
+    let mut prepared = build_op(&entry.resolved, &entry.inject, &item, action, logical_index)?;
     prepared.op = prepared
         .op
         .with_trace(up_trace.cloned())
@@ -113,14 +144,17 @@ pub(crate) async fn prepare<R: Router>(
 }
 
 /// Builds the write op for a resolved bulk item (index/create, update, delete).
+/// `inject` is the placement's inject pairs, precomputed once and shared by every
+/// item that resolved here (see [`ResolutionCache`]).
 fn build_op(
     resolved: &Resolved,
+    inject: &[(FieldName, Value)],
     item: &BulkItem,
     action: &'static str,
     logical_index: String,
 ) -> Result<Prepared, ItemFailure> {
     let partition = resolved.partition.as_str();
-    let (inject, id_rule) = transform_parts(&resolved.decision.body_transform, partition);
+    let id_rule = id_rule_of(&resolved.decision.body_transform);
     let rule = id_rule.as_ref();
     let bad = |code| fail(action, &logical_index, item.id.clone(), 400, code);
 
@@ -137,7 +171,7 @@ fn build_op(
                 logical,
             )
         }
-        BulkAction::Update => build_update(item, &inject, rule, partition, bad)?,
+        BulkAction::Update => build_update(item, inject, rule, partition, bad)?,
         BulkAction::Index | BulkAction::Create => {
             let source = item
                 .source
@@ -148,8 +182,7 @@ fn build_op(
             // `inject_fields_bytes` owns the spliced buffer; `Bytes::from` takes it
             // without copying, and the op then rides upstream copy-free on retry.
             let body = Bytes::from(
-                inject_fields_bytes(source, &inject)
-                    .map_err(|_| bad("reserved_field_collision"))?,
+                inject_fields_bytes(source, inject).map_err(|_| bad("reserved_field_collision"))?,
             );
             let (id, logical) =
                 index_id(rule, partition, item, source).ok_or_else(|| bad("id_construction"))?;
@@ -260,26 +293,33 @@ struct IdRule<'a> {
     set_routing: bool,
 }
 
-/// Splits a body transform into the resolved inject pairs and the id rule.
-fn transform_parts<'a>(
-    transform: &'a BodyTransform,
-    partition: &str,
-) -> (Vec<(osproxy_core::FieldName, Value)>, Option<IdRule<'a>>) {
-    let (fields, rule): (&[InjectedField], Option<&osproxy_spi::DocIdRule>) = match transform {
-        BodyTransform::None => (&[], None),
-        BodyTransform::Inject(f) => (f, None),
-        BodyTransform::ConstructId(r) => (&[], Some(r)),
-        BodyTransform::Both { inject, id } => (inject, Some(id)),
+/// The inject pairs (field name → concrete value) for a body transform, resolved
+/// against `partition`. Computed **once per placement** and cached in
+/// [`ResolutionCache`]: it is identical for every item that resolves to the same
+/// `(partition, index)`, so the `.collect()` and the per-field value clones run
+/// once per placement, not once per document.
+fn inject_pairs(transform: &BodyTransform, partition: &str) -> Vec<(FieldName, Value)> {
+    let fields: &[InjectedField] = match transform {
+        BodyTransform::Inject(f) | BodyTransform::Both { inject: f, .. } => f,
+        BodyTransform::None | BodyTransform::ConstructId(_) => &[],
     };
-    let inject = fields
+    fields
         .iter()
         .map(|f| (f.name.clone(), constant(&f.value, partition)))
-        .collect();
-    let id_rule = rule.map(|r| IdRule {
+        .collect()
+}
+
+/// The id rule for a body transform: a borrow of the transform's template, so it
+/// allocates nothing and is derived per item (cheap), unlike [`inject_pairs`].
+fn id_rule_of(transform: &BodyTransform) -> Option<IdRule<'_>> {
+    let rule: Option<&osproxy_spi::DocIdRule> = match transform {
+        BodyTransform::ConstructId(r) | BodyTransform::Both { id: r, .. } => Some(r),
+        BodyTransform::None | BodyTransform::Inject(_) => None,
+    };
+    rule.map(|r| IdRule {
         template: r.template.as_str(),
         set_routing: r.set_routing,
-    });
-    (inject, id_rule)
+    })
 }
 
 /// The concrete value of an injected field. The adapter resolves these to
