@@ -43,29 +43,38 @@ returns its result; **async** is the fan-out write mode (ADR-010), resolve +
 rewrite + enqueue, returning `202` without an upstream round-trip. Local box;
 `rps` is steady-state, `p50/p99` in milliseconds.
 
+> **This table is *absolute* latency, not proxy overhead.** The generator, the
+> proxy, and the mock upstream all share this one box, so these figures include the
+> harness, and the tall p99s at 256 connections are **queueing at the box's
+> throughput ceiling** (Little's law), not the proxy's cost. The proxy's *own* added
+> latency — generator and upstream subtracted out — is ~0.3 ms at 64 KB; see
+> [Proxy overhead, isolated](#proxy-overhead-isolated-differential) just below.
+
 | payload | conns | sync rps | sync p50 | sync p99 | async rps | async p50 | async p99 |
 |---------|------:|---------:|---------:|---------:|----------:|----------:|----------:|
-| 256 B | 16 | 9,982 | 1.09 | 1.59 | 26,280 | 0.55 | 0.88 |
-| 256 B | 64 | 17,781 | 2.90 | 4.35 | 38,032 | 1.55 | 2.47 |
-| 256 B | 256 | 11,257 | 6.43 | 12.91 | 34,454 | 6.70 | 14.62 |
-| 4 KB | 16 | 11,355 | 1.31 | 1.85 | 19,887 | 0.72 | 1.18 |
-| 4 KB | 64 | 14,880 | 4.11 | 5.80 | 23,864 | 2.54 | 4.20 |
-| 4 KB | 256 | 14,344 | 16.96 | 27.64 | 23,443 | 9.89 | 20.20 |
-| 64 KB | 16 | 2,833 | 5.11 | 7.55 | 3,689 | 3.88 | 6.81 |
-| 64 KB | 64 | 2,799 | 21.81 | 33.83 | 3,638 | 16.72 | 28.82 |
-| 64 KB | 256 | 2,677 | 85.44 | 158.78 | 3,705 | 61.43 | 149.55 |
+| 256 B | 16 | 15,592 | 0.53 | 1.05 | 46,181 | 0.31 | 0.51 |
+| 256 B | 64 | 36,450 | 0.85 | 1.56 | 106,948 | 0.50 | 1.06 |
+| 256 B | 256 | 13,627 | 4.35 | 7.22 | 142,940 | 1.47 | 3.27 |
+| 4 KB | 16 | 23,649 | 0.62 | 0.94 | 45,322 | 0.31 | 0.53 |
+| 4 KB | 64 | 41,515 | 1.40 | 2.44 | 87,423 | 0.61 | 1.31 |
+| 4 KB | 256 | 41,773 | 5.56 | 10.49 | 61,512 | 2.22 | 4.97 |
+| 64 KB | 16 | 9,347 | 1.54 | 2.37 | 24,468 | 0.56 | 0.98 |
+| 64 KB | 64 | 12,464 | 4.52 | 6.68 | 40,291 | 1.37 | 2.49 |
+| 64 KB | 256 | 12,325 | 19.32 | 31.14 | 43,655 | 5.17 | 10.79 |
 
 What it shows:
 
-- **Payload dominates throughput.** ~10–18k rps at 256 B and 4 KB, dropping to
-  ~2.7–3.7k at 64 KB. Large bodies are bound by parse/copy/upstream-write, not the
-  routing logic.
+- **Payload dominates throughput.** ~15–42k rps at 256 B and 4 KB, dropping to
+  ~9–12k at 64 KB. Large bodies are bound by socket I/O and memory bandwidth (most of
+  it the co-located generator + upstream), not the routing logic.
 - **Async fan-out is consistently faster** (higher rps, lower latency) than sync,
-  because it skips the upstream round-trip, e.g. 256 B/16: 26k vs 10k rps; 64 KB/256:
-  3,705 vs 2,677 rps. This is the cost of synchronous durability vs. accepting a
-  `202` and applying downstream.
-- **Latency grows with payload × concurrency**, as expected; p50 stays low at modest
-  concurrency and the tail widens under 256 connections of large bodies.
+  because it skips the upstream round-trip, e.g. 256 B/64: 107k vs 36k rps. This is
+  the cost of synchronous durability vs. accepting a `202` and applying downstream.
+- **The p99 tail at 256 connections is queueing, not proxy cost.** Throughput
+  plateaus past ~64 connections (64 KB: flat ~12k rps), so extra connections only add
+  queue depth and the tail rises — `latency ≈ concurrency / throughput`. Proven by
+  ablation in [the queueing section](#why-the-tail-grows-with-connections--queueing-not-the-proxy);
+  more cores and a lock-free breaker both leave it unchanged.
 
 Reproduce: `cargo test -p osproxy-server --test load_matrix -- --ignored --nocapture`.
 
