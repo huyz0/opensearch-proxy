@@ -143,10 +143,10 @@ Rewrite transform timing (`cargo bench -p osproxy-rewrite`, divan, median):
 
 | transform | median | transform | median |
 |-----------|--------|-----------|--------|
-| `strip_fields` | 31 ns | `construct_id` | 87 ns |
-| `inject_fields` | 41 ns | `parse_mget` | 204 ns |
-| `map_physical→logical` | 58 ns | `wrap_query` | 284 ns |
-| `map_logical→physical` | 87 ns | `parse_bulk` | 335 ns |
+| `strip_fields` | 30 ns | `construct_id` | 87 ns |
+| `inject_fields` | 35 ns | `parse_mget` | 212 ns |
+| `map_physical→logical` | 63 ns | `wrap_query` | 288 ns |
+| `map_logical→physical` | 77 ns | `parse_bulk` | 334 ns |
 
 Every transform is sub-microsecond, <0.1% of a request. Allocations are budgeted
 (dhat, `crates/osproxy-rewrite/tests/memory.rs`): `strip_fields` allocates 0, and
