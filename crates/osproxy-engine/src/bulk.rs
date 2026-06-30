@@ -26,9 +26,7 @@ use bytes::{Buf as _, BytesMut};
 use futures_util::stream::StreamExt as _;
 use http_body_util::BodyExt as _;
 use osproxy_core::{PartitionId, Target};
-use osproxy_rewrite::{
-    parse_bulk, parse_bulk_action, parse_bulk_op, BulkAction, BulkItem, RewriteError,
-};
+use osproxy_rewrite::{parse_bulk, parse_bulk_action, BulkAction, BulkItem, RewriteError};
 use osproxy_sink::{ByteBody, DocOp, OpResult, Sink, SinkError, WriteAck, WriteBatch, WriteOp};
 use osproxy_spi::RequestCtx;
 use osproxy_tenancy::{Resolved, Router};
@@ -206,8 +204,11 @@ impl NdjsonReader {
         let Some(action_line) = self.next_line().await? else {
             return Ok(None);
         };
-        let action = parse_bulk_action(&action_line).map_err(RequestError::from)?;
-        let source = if action.has_source() {
+        // Parse the action line exactly once: `ParsedAction` carries the verb and
+        // metadata, so finalizing the op below re-uses it rather than re-parsing
+        // the action line's JSON (ADR-014 stage 4).
+        let parsed = parse_bulk_action(&action_line).map_err(RequestError::from)?;
+        let source = if parsed.has_source() {
             Some(
                 self.next_line()
                     .await?
@@ -216,7 +217,8 @@ impl NdjsonReader {
         } else {
             None
         };
-        parse_bulk_op(&action_line, source.as_deref())
+        parsed
+            .into_item(source.as_deref())
             .map(Some)
             .map_err(RequestError::from)
     }

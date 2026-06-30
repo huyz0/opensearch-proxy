@@ -117,51 +117,76 @@ pub fn parse_bulk(body: &[u8]) -> Result<Vec<BulkItem>, RewriteError> {
     Ok(items)
 }
 
-/// Parses just the **action** of a bulk action line, the verb, so a streaming
-/// reader can decide whether a source line follows ([`BulkAction::has_source`])
-/// before it frames the next line (ADR-014 stage 4). Validates the single-key
-/// `{verb: {…}}` shape like [`parse_bulk`].
+/// A bulk action line parsed **once**: its verb plus the `_index`/`_id`/`routing`
+/// metadata. The streaming demux parses each action line a single time into this,
+/// uses [`ParsedAction::has_source`] to decide whether a source line follows
+/// before framing the next line, then [`ParsedAction::into_item`] to finalize the
+/// op — so the action line's JSON is never parsed twice (ADR-014 stage 4). The
+/// buffered [`parse_bulk`] already parses each line once.
+#[derive(Debug)]
+pub struct ParsedAction {
+    action: BulkAction,
+    meta: ActionMeta,
+}
+
+impl ParsedAction {
+    /// The parsed verb.
+    #[must_use]
+    pub fn action(&self) -> BulkAction {
+        self.action
+    }
+
+    /// Whether a source line follows this action (index/create/update do, delete
+    /// does not), so the streaming reader knows to frame one before finalizing.
+    #[must_use]
+    pub fn has_source(&self) -> bool {
+        self.action.has_source()
+    }
+
+    /// Finalizes the op from the already-parsed action plus, for source-bearing
+    /// verbs, its source line. The source is kept as raw bytes, validated but not
+    /// materialized, exactly as [`parse_bulk`] does.
+    ///
+    /// # Errors
+    ///
+    /// [`RewriteError::MalformedBulkAction`] if a source-bearing action has no
+    /// source line, [`RewriteError::InvalidJson`] if the source line is not valid
+    /// JSON.
+    pub fn into_item(self, source_line: Option<&[u8]>) -> Result<BulkItem, RewriteError> {
+        let source = if self.action.has_source() {
+            let line = source_line.ok_or(RewriteError::MalformedBulkAction)?;
+            json::validate(line).map_err(|_| RewriteError::InvalidJson)?;
+            Some(line.to_vec())
+        } else {
+            None
+        };
+        Ok(BulkItem {
+            action: self.action,
+            index: self.meta.index,
+            id: self.meta.id,
+            routing: self.meta.routing,
+            concurrency_control: self.meta.concurrency_control,
+            source,
+        })
+    }
+}
+
+/// Parses one bulk **action line** into a [`ParsedAction`] — its verb and
+/// metadata — without consuming the source line, the per-op entry point for the
+/// streaming demux (ADR-014 stage 4). Validates the single-key `{verb: {…}}`
+/// shape like [`parse_bulk`].
 ///
 /// # Errors
 ///
 /// [`RewriteError::InvalidJson`] if the line is not JSON, or
 /// [`RewriteError::MalformedBulkAction`] if it is not a single-key action object.
-pub fn parse_bulk_action(line: &[u8]) -> Result<BulkAction, RewriteError> {
-    parse_action_line(line).map(|(action, _)| action)
-}
-
-/// Parses one bulk operation from its already-framed action line and (for
-/// source-bearing verbs) source line, the per-op entry point for the streaming
-/// demux (ADR-014 stage 4). The source line is kept as raw bytes, validated but
-/// not materialized, exactly as [`parse_bulk`] does.
-///
-/// # Errors
-///
-/// [`RewriteError::MalformedBulkAction`] if a source-bearing action has no source
-/// line, [`RewriteError::InvalidJson`] if a line is not valid JSON.
-pub fn parse_bulk_op(
-    action_line: &[u8],
-    source_line: Option<&[u8]>,
-) -> Result<BulkItem, RewriteError> {
-    let (action, meta) = parse_action_line(action_line)?;
-    let source = if action.has_source() {
-        let line = source_line.ok_or(RewriteError::MalformedBulkAction)?;
-        json::validate(line).map_err(|_| RewriteError::InvalidJson)?;
-        Some(line.to_vec())
-    } else {
-        None
-    };
-    Ok(BulkItem {
-        action,
-        index: meta.index,
-        id: meta.id,
-        routing: meta.routing,
-        concurrency_control: meta.concurrency_control,
-        source,
-    })
+pub fn parse_bulk_action(line: &[u8]) -> Result<ParsedAction, RewriteError> {
+    let (action, meta) = parse_action_line(line)?;
+    Ok(ParsedAction { action, meta })
 }
 
 /// The `_index`/`_id`/`routing` pulled from an action line's metadata object.
+#[derive(Debug)]
 struct ActionMeta {
     index: Option<String>,
     id: Option<String>,
@@ -302,16 +327,20 @@ mod tests {
         // same lines: an index (with source) and a delete (no source).
         let action = br#"{"index":{"_index":"a","_id":"1"}}"#;
         let source = br#"{"msg":"hi"}"#;
-        assert!(parse_bulk_action(action).unwrap() == BulkAction::Index);
-        let op = parse_bulk_op(action, Some(source)).unwrap();
+        let parsed = parse_bulk_action(action).unwrap();
+        assert_eq!(parsed.action(), BulkAction::Index);
+        assert!(parsed.has_source());
+        let op = parsed.into_item(Some(source)).unwrap();
         assert_eq!(op.action, BulkAction::Index);
         assert_eq!(op.index.as_deref(), Some("a"));
         assert_eq!(op.id.as_deref(), Some("1"));
         assert_eq!(op.source.as_deref(), Some(&source[..]));
 
         let del = br#"{"delete":{"_id":"2"}}"#;
-        assert_eq!(parse_bulk_action(del).unwrap(), BulkAction::Delete);
-        let op = parse_bulk_op(del, None).unwrap();
+        let parsed = parse_bulk_action(del).unwrap();
+        assert_eq!(parsed.action(), BulkAction::Delete);
+        assert!(!parsed.has_source());
+        let op = parsed.into_item(None).unwrap();
         assert_eq!(op.action, BulkAction::Delete);
         assert!(op.source.is_none());
     }
@@ -320,11 +349,17 @@ mod tests {
     fn streaming_parse_op_rejects_missing_source_and_bad_json() {
         let action = br#"{"index":{"_id":"1"}}"#;
         assert_eq!(
-            parse_bulk_op(action, None).unwrap_err(),
+            parse_bulk_action(action)
+                .unwrap()
+                .into_item(None)
+                .unwrap_err(),
             RewriteError::MalformedBulkAction
         );
         assert_eq!(
-            parse_bulk_op(action, Some(b"not json")).unwrap_err(),
+            parse_bulk_action(action)
+                .unwrap()
+                .into_item(Some(b"not json"))
+                .unwrap_err(),
             RewriteError::InvalidJson
         );
     }

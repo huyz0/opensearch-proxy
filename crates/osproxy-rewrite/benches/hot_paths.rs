@@ -13,7 +13,7 @@
 use osproxy_core::FieldName;
 use osproxy_rewrite::{
     construct_id, inject_fields, map_logical_to_physical, map_physical_to_logical, parse_bulk,
-    parse_mget, parse_msearch, strip_fields, wrap_query,
+    parse_bulk_action, parse_mget, parse_msearch, strip_fields, wrap_query,
 };
 use serde_json::{json, Value};
 
@@ -82,6 +82,40 @@ fn bench_map_physical_to_logical(bencher: divan::Bencher) {
 fn bench_parse_bulk(bencher: divan::Bencher) {
     let body = b"{\"index\":{\"_id\":\"1\"}}\n{\"msg\":\"hi\"}\n{\"delete\":{\"_id\":\"2\"}}\n";
     bencher.bench_local(|| parse_bulk(divan::black_box(body)));
+}
+
+/// The streaming demux's per-op parse as it is **now**: parse the action line
+/// once into a [`osproxy_rewrite::ParsedAction`] (which decides whether a source
+/// line follows), then finalize the op from it. The action line's JSON is parsed
+/// a single time.
+#[divan::bench]
+fn bench_stream_op_single_parse(bencher: divan::Bencher) {
+    let action = br#"{"index":{"_index":"a","_id":"1"}}"#;
+    let source = br#"{"msg":"hi"}"#;
+    bencher.bench_local(|| {
+        let parsed = parse_bulk_action(divan::black_box(action)).unwrap();
+        let _ = parsed.has_source();
+        parsed.into_item(Some(divan::black_box(source)))
+    });
+}
+
+/// The streaming demux's per-op parse as it **was** (the regression this change
+/// removes): the old two-call shape parsed the action line once to learn the verb
+/// (`parse_bulk_action`) and a second time to build the op (`parse_bulk_op`). The
+/// double `serde_json::from_slice::<Value>` of the same action line is reproduced
+/// here so the delta against [`bench_stream_op_single_parse`] is exactly the
+/// saved parse, not noise.
+#[divan::bench]
+fn bench_stream_op_double_parse(bencher: divan::Bencher) {
+    let action = br#"{"index":{"_index":"a","_id":"1"}}"#;
+    let source = br#"{"msg":"hi"}"#;
+    bencher.bench_local(|| {
+        // First parse: the old `parse_bulk_action` (verb only), result discarded.
+        let _ = parse_bulk_action(divan::black_box(action)).unwrap();
+        // Second parse: the old `parse_bulk_op` re-parsed the same action line.
+        let parsed = parse_bulk_action(divan::black_box(action)).unwrap();
+        parsed.into_item(Some(divan::black_box(source)))
+    });
 }
 
 /// A `{"id":7,"data":"x…"}` document padded to ~`size` bytes.

@@ -19,7 +19,8 @@ use dhat::{HeapStats, Profiler};
 use osproxy_core::FieldName;
 use osproxy_rewrite::{
     construct_id, construct_id_bytes, inject_fields, inject_fields_bytes, map_logical_to_physical,
-    map_physical_to_logical, parse_bulk, parse_mget, parse_msearch, strip_fields, wrap_query,
+    map_physical_to_logical, parse_bulk, parse_bulk_action, parse_mget, parse_msearch,
+    strip_fields, wrap_query,
 };
 use serde_json::{json, Value};
 
@@ -206,6 +207,24 @@ fn bulk_path_budgets() {
         "map_physical_to_logical allocation budget: {p2l} > 6"
     );
     assert!(bulk <= 20, "parse_bulk allocation budget: {bulk} > 20");
+
+    // The streaming demux's per-op parse (`parse_bulk_action` → `into_item`):
+    // parse the action line **once** into a `ParsedAction`, then finalize the op.
+    // This guards a real regression, the path used to parse the same action line
+    // twice (a `parse_bulk_action` to learn the verb, then a `parse_bulk_op` that
+    // re-parsed it), which measured ~19 allocations here; parsing once measures
+    // ~10. The bound sits between the two so the double-parse cannot creep back.
+    let action = br#"{"index":{"_index":"a","_id":"1"}}"#;
+    let source = br#"{"msg":"hi"}"#;
+    let stream_op = allocs(|| {
+        let parsed = parse_bulk_action(std::hint::black_box(action)).unwrap();
+        let _ = std::hint::black_box(parsed.into_item(Some(source)));
+    });
+    assert!(
+        stream_op <= 13,
+        "streaming bulk op parse allocation budget: {stream_op} > 13 \
+         (a double-parse of the action line would cost ~19)"
+    );
 }
 
 /// The other two demux parses, completing the `_bulk`/`_mget`/`_msearch` family.

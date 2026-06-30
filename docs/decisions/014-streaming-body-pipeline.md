@@ -262,7 +262,9 @@ single-doc write streaming deliberately not done (unsound).** Staged:
    the response lines). Each op's object is still fully scanned (spoof check
    intact), one at a time. Sync write mode only (the transport decides from the
    endpoint + write-mode header; async fan-out and capture keep the buffered
-   path). rewrite gained `parse_bulk_action`/`parse_bulk_op`; the engine gained
+   path). rewrite gained `parse_bulk_action` (returning a `ParsedAction` whose
+   `into_item` finalizes the op, so the streaming reader parses each action line
+   exactly once); the engine gained
    `ingest_bulk_streamed` + `Pipeline::handle_bulk_streamed`/`is_sync_write`; the
    transport gained `wants_bulk_stream` + `handle_bulk_stream`. A per-op size cap
    bounds one giant line. Verified: streamed response == buffered response
