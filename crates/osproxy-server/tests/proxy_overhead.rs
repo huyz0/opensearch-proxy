@@ -133,8 +133,12 @@ async fn run_cell(target: SocketAddr, path: &str, body: Bytes, conns: usize) -> 
         );
         workers.push(tokio::spawn(async move {
             let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
+            // Pre-build the URI once (a `hyper::Uri` clone is a refcount bump on its
+            // Bytes-backed parts), so the timed loop allocates no request string —
+            // only the request struct hyper inherently needs per call.
+            let uri: hyper::Uri = format!("http://{target}{path}").parse().unwrap();
             let send = |b: Bytes| {
-                let (c, uri) = (client.clone(), format!("http://{target}{path}"));
+                let (c, uri) = (client.clone(), uri.clone());
                 async move {
                     let req = Request::builder()
                         .method(Method::POST)
