@@ -109,6 +109,14 @@ impl TenancySpi for MyTenancy {
 }
 ```
 
+`placement_for` returns any of the three `Placement` kinds, and the choice is the
+isolation model: `SharedIndex` (isolate by an injected field + a partition-scoped
+id — the only kind that rewrites the body), `DedicatedIndex` (isolate by a
+per-partition physical index), or `DedicatedCluster` (isolate by cluster). The
+shipped `ReferenceTenancy` demonstrates all three — `with_placement_mode(...)`
+switches between them — and the [mode-overhead numbers](11-performance.md#choosing-a-mode-routing-vs-body-rewrite-cost)
+show the choice is about isolation, not latency (all three add ~0.1–0.3 ms).
+
 ### Invariants you must uphold
 
 - `resolve_partition` must yield a partition id for every routable request, or it
