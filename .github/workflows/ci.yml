@@ -97,7 +97,7 @@ jobs:
       # `tests/memory.rs` are dhat allocation-budget tests; they self-skip under
       # instrumentation (the counts are meaningless there) so their bodies don't
       # count toward the line percentage — exclude them from attribution too.
-      - run: cargo llvm-cov --workspace --lib --tests --fail-under-lines 90 --ignore-filename-regex 'xtask|osproxy-server/src/main\.rs|osproxy-etcd/src/watch\.rs|tests/(testcontainer|perf_harness|soak|memory|etcd_live)\.rs'
+      - run: cargo llvm-cov --workspace --lib --tests --fail-under-lines 90 --ignore-filename-regex 'xtask|osproxy-server/src/main\.rs|osproxy-etcd/src/watch\.rs|tests/(testcontainer|perf_harness|soak|memory|etcd_live|proxy_overhead|mode_overhead|isolation_scaling|profile_64k|common/mod)\.rs'
 
   perf:
     name: Deterministic perf (iai-callgrind)

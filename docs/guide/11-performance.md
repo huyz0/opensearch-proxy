@@ -22,6 +22,12 @@ Two harness styles produce the numbers below:
   upstream and the load generator share the process with the proxy, so absolute
   figures are inflated by co-located CPU contention. Good for *relative* comparisons
   (payload, mode, before/after).
+- **No-Docker, differential** (proxy overhead, mode overhead): the same harness, but
+  each cell is measured twice — direct client→upstream and proxied
+  client→proxy→upstream — and only the **difference** is reported, at low concurrency.
+  The generator, loopback, and upstream are in both legs and cancel, so what remains
+  is the proxy's own per-request cost. This is how to read proxy overhead, not the
+  inflated absolute numbers.
 - **Docker, real OpenSearch** (NFR-P harness): the authoritative end-to-end numbers,
   run in CI and rendered into the run's job summary.
 
@@ -62,6 +68,63 @@ What it shows:
   concurrency and the tail widens under 256 connections of large bodies.
 
 Reproduce: `cargo test -p osproxy-server --test load_matrix -- --ignored --nocapture`.
+
+## Proxy overhead, isolated (differential)
+
+The load matrix above is *absolute* latency in a co-located harness, so it measures
+the generator and upstream as much as the proxy. The differential bench isolates the
+**proxy's own** added cost (direct vs. proxied, low concurrency, harness cancels):
+
+| payload | proxy added p50 | of which |
+|---------|----------------:|----------|
+| 256 B | ~0.15 ms | fixed cost (parse, route, rewrite logic, dispatch) |
+| 4 KB | ~0.21 ms | + body handling |
+| 64 KB | ~0.29 ms | ~0.15 ms fixed + ~0.13 ms body-size-dependent |
+
+The proxy adds **~0.15 ms fixed plus ~0.13 ms that scales with body size**. Of that
+body cost at 64 KB, the avoidable *userspace* copy (the inject splice) is ~1 µs —
+**under 1%** (cross-checked against the rewrite micro-bench: a 64 KB verbatim copy is
+~1 µs). The rest is **kernel socket I/O** (reading the body in, writing it out),
+inherent to any proxy that touches the body. There is no cheap copy left to remove.
+
+Reproduce: `cargo test -p osproxy-server --test proxy_overhead -- --ignored --nocapture`.
+
+### Why the tail grows with connections — queueing, not the proxy
+
+The load matrix p99 climbs steeply at 256 connections (64 KB: ~159 ms). That tail is
+**not** proxy cost — it is queueing at a throughput ceiling (Little's law:
+`latency ≈ concurrency / throughput`). Two ablations
+(`--test isolation_scaling`, plus a circuit-breaker lock-free A/B) prove it:
+
+- Giving the proxy its **own** runtime (separate cores from the generator) halves the
+  tail at 16–64 connections but **changes nothing at 256** — more cores don't help,
+  so it is not core contention.
+- Making the one per-request lock (the circuit breaker) lock-free **changed nothing**
+  — so it is not lock contention.
+
+Past the throughput knee, every extra connection just deepens the queue. The lever is
+**horizontal scale** (cap connections per instance near the knee, add instances), not
+a per-request micro-optimization.
+
+## Choosing a mode: routing vs. body-rewrite cost
+
+The four [proxy modes](10-choosing-a-mode.md) differ in whether they touch the body.
+Their proxy-added latency (differential, p50, low concurrency):
+
+| payload | passthrough (stream, no rewrite) | dedicated cluster / index (route, no rewrite) | shared (route + body rewrite) |
+|---------|---------------------------------:|----------------------------------------------:|------------------------------:|
+| 256 B | ~0.08 ms | ~0.08 ms | ~0.09 ms |
+| 64 KB | ~0.29 ms | ~0.29 ms | ~0.30 ms |
+
+**Mode choice is not a latency decision.** All four modes add ~0.1–0.3 ms and sit
+within run-to-run noise of each other; the body rewrite (shared) costs ~nothing
+measurable over no-rewrite routing (the inject splice is ~1 µs, swamped by socket
+I/O). Streaming passthrough ≈ buffered dedicated *on latency* — its real advantage is
+**memory footprint and time-to-first-byte** for large/streaming bodies, not p50.
+Pick a mode for its **isolation model** (see [Choosing a Mode](10-choosing-a-mode.md)),
+then scale horizontally for throughput.
+
+Reproduce: `cargo test -p osproxy-server --test mode_overhead -- --ignored --nocapture`.
 
 ## Per-request hot path (CPU, single-thread)
 
@@ -135,7 +198,10 @@ renders briefs to the job summary. Representative figures:
 ## Reproduce everything
 
 ```sh
-cargo test  -p osproxy-server --test load_matrix      -- --ignored --nocapture
+cargo test  -p osproxy-server --test load_matrix      -- --ignored --nocapture  # absolute end-to-end
+cargo test  -p osproxy-server --test proxy_overhead   -- --ignored --nocapture  # proxy overhead (differential)
+cargo test  -p osproxy-server --test mode_overhead    -- --ignored --nocapture  # routing vs body-rewrite by mode
+cargo test  -p osproxy-server --test isolation_scaling -- --ignored --nocapture # co-located vs isolated (the tail is queueing)
 cargo test  -p osproxy-observe --test contention      -- --ignored --nocapture --test-threads=1
 cargo test  -p osproxy-server --test connection_load                          # capacity (gated)
 cargo test  -p osproxy-server --test connection_load single_connection_request_latency_microbench -- --ignored --nocapture
@@ -143,3 +209,8 @@ cargo bench -p osproxy-rewrite                                                 #
 cargo test  -p osproxy-rewrite --test memory                                   # allocation budgets
 cargo test  -p osproxy-server --test perf_harness     -- --ignored --nocapture --test-threads=1  # needs Docker
 ```
+
+To profile the per-request CPU breakdown with an external profiler (no kernel
+support needed), the `profile_64k` test exposes 64 KB and 256 B single-connection
+loops as callgrind targets; see that file's module docs for the `valgrind
+--tool=callgrind` invocation.
