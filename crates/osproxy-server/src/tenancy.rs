@@ -19,26 +19,57 @@ const TENANT_FIELD: &str = "_tenant";
 /// The header carrying the partition on by-id reads (which have no body).
 const TENANT_HEADER: &str = "x-tenant";
 
-/// A single-shared-index tenancy: all partitions share one physical index,
-/// isolated by an injected `_tenant` field.
+/// Which placement kind the reference tenancy resolves every partition to. The
+/// binary defaults to [`PlacementMode::SharedIndex`] (the body-rewrite mode); the
+/// other two let one reference impl demonstrate the **no-body-rewrite** routing
+/// modes, where isolation is by cluster or by index and the document is forwarded
+/// unchanged (`docs/guide/10-choosing-a-mode`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PlacementMode {
+    /// Many partitions share one index; isolation by an injected field and a
+    /// partition-scoped `_id` — the document body is rewritten on ingest.
+    #[default]
+    SharedIndex,
+    /// Each partition owns a physical index on the shared cluster; isolation is by
+    /// index name, so the body is forwarded unchanged (no rewrite).
+    DedicatedIndex,
+    /// Each partition owns a whole cluster; isolation is by cluster, so the body is
+    /// forwarded unchanged (no rewrite).
+    DedicatedCluster,
+}
+
+/// A reference tenancy: every partition resolves to a placement of the configured
+/// [`PlacementMode`]. The default `SharedIndex` mode isolates by an injected
+/// `_tenant` field; the dedicated modes isolate by index/cluster with no body
+/// rewrite.
 #[derive(Debug)]
 pub struct ReferenceTenancy {
     cluster: ClusterId,
     index: IndexName,
     endpoint: String,
+    mode: PlacementMode,
 }
 
 impl ReferenceTenancy {
     /// Builds the reference tenancy over one cluster and shared index, served at
     /// `endpoint` (the cluster's base URL, reported as part of the placement
-    /// result so the sink can pool it).
+    /// result so the sink can pool it). Defaults to [`PlacementMode::SharedIndex`].
     #[must_use]
     pub fn new(cluster: ClusterId, index: IndexName, endpoint: impl Into<String>) -> Self {
         Self {
             cluster,
             index,
             endpoint: endpoint.into(),
+            mode: PlacementMode::SharedIndex,
         }
+    }
+
+    /// Sets the placement mode (builder). `SharedIndex` rewrites the body;
+    /// `DedicatedIndex`/`DedicatedCluster` route without touching it.
+    #[must_use]
+    pub fn with_placement_mode(mut self, mode: PlacementMode) -> Self {
+        self.mode = mode;
+        self
     }
 }
 
@@ -58,14 +89,26 @@ impl TenancySpi for ReferenceTenancy {
     }
 
     fn doc_id_rule(&self) -> Option<DocIdRule> {
-        Some(DocIdRule::new(IdTemplate::new("{partition}:{body.id}")).with_routing(true))
+        // Only the shared index needs a partition-scoped id; the dedicated modes
+        // isolate by cluster/index and leave the id (and the body) untouched.
+        match self.mode {
+            PlacementMode::SharedIndex => {
+                Some(DocIdRule::new(IdTemplate::new("{partition}:{body.id}")).with_routing(true))
+            }
+            PlacementMode::DedicatedIndex | PlacementMode::DedicatedCluster => None,
+        }
     }
 
     fn injected_fields(&self) -> Vec<InjectedField> {
-        vec![InjectedField::new(
-            FieldName::from(TENANT_FIELD),
-            InjectedValue::PartitionId,
-        )]
+        // The injected isolation field exists only in the shared index; the
+        // dedicated modes inject nothing (no body rewrite).
+        match self.mode {
+            PlacementMode::SharedIndex => vec![InjectedField::new(
+                FieldName::from(TENANT_FIELD),
+                InjectedValue::PartitionId,
+            )],
+            PlacementMode::DedicatedIndex | PlacementMode::DedicatedCluster => Vec::new(),
+        }
     }
 
     // `sensitive_fields` is left at the deny-by-default `all_sensitive`: this
@@ -79,17 +122,23 @@ impl TenancySpi for ReferenceTenancy {
     }
 
     async fn placement_for(&self, _partition: &PartitionId) -> Result<PlacementAt, SpiError> {
-        // Every partition resolves to the same shared index. A constant epoch:
-        // this reference tenancy has no migration (the epoch story is exercised
-        // by the PlacementTable-backed implementations).
-        Ok(PlacementAt::new(
-            Placement::SharedIndex {
+        // Every partition resolves to a placement of the configured mode. A
+        // constant epoch: this reference tenancy has no migration (the epoch story
+        // is exercised by the PlacementTable-backed implementations).
+        let placement = match self.mode {
+            PlacementMode::SharedIndex => Placement::SharedIndex {
                 cluster: self.cluster.clone(),
                 index: self.index.clone(),
                 inject: self.injected_fields(),
             },
-            Epoch::new(1),
-        )
-        .with_endpoint(self.endpoint.clone()))
+            PlacementMode::DedicatedIndex => Placement::DedicatedIndex {
+                cluster: self.cluster.clone(),
+                index: self.index.clone(),
+            },
+            PlacementMode::DedicatedCluster => Placement::DedicatedCluster {
+                cluster: self.cluster.clone(),
+            },
+        };
+        Ok(PlacementAt::new(placement, Epoch::new(1)).with_endpoint(self.endpoint.clone()))
     }
 }
