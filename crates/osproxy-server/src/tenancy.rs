@@ -121,20 +121,28 @@ impl TenancySpi for ReferenceTenancy {
         (cluster == &self.cluster).then(|| self.endpoint.clone())
     }
 
-    async fn placement_for(&self, _partition: &PartitionId) -> Result<PlacementAt, SpiError> {
+    async fn placement_for(&self, partition: &PartitionId) -> Result<PlacementAt, SpiError> {
         // Every partition resolves to a placement of the configured mode. A
         // constant epoch: this reference tenancy has no migration (the epoch story
         // is exercised by the PlacementTable-backed implementations).
         let placement = match self.mode {
+            // Shared: isolation is by the injected field + scoped id, so every
+            // partition can share the one physical index.
             PlacementMode::SharedIndex => Placement::SharedIndex {
                 cluster: self.cluster.clone(),
                 index: self.index.clone(),
                 inject: self.injected_fields(),
             },
+            // Dedicated index: isolation IS the index, so each partition must get a
+            // distinct physical index (`{index}-{partition}`) — a shared index here
+            // would put two tenants in one index with no isolation field.
             PlacementMode::DedicatedIndex => Placement::DedicatedIndex {
                 cluster: self.cluster.clone(),
-                index: self.index.clone(),
+                index: IndexName::from(format!("{}-{}", self.index.as_str(), partition.as_str())),
             },
+            // Dedicated cluster: isolation is the cluster. This reference has a
+            // single cluster/endpoint, so every partition maps to it; a real
+            // multi-cluster tenancy would resolve `partition` to its own cluster.
             PlacementMode::DedicatedCluster => Placement::DedicatedCluster {
                 cluster: self.cluster.clone(),
             },

@@ -1,16 +1,16 @@
-//! A minimal, single-connection 64 KB write loop, sized for an external profiler
+//! A minimal, single-connection write loop, sized for an external profiler
 //! (valgrind/callgrind) to read the **per-request CPU breakdown** of the proxy's
-//! large-payload write path: ingress read → byte-splice rewrite → upstream
-//! dispatch → response. One connection, sequential requests, so there is no
-//! concurrency noise — callgrind ranks functions by instruction count, which is
-//! what sets the throughput ceiling the connection-scaling tail queues behind
+//! write path: ingress read → byte-splice rewrite → upstream dispatch → response.
+//! One connection, sequential requests, so there is no concurrency noise —
+//! callgrind ranks functions by instruction count, which is what sets the
+//! throughput ceiling the connection-scaling tail queues behind
 //! (`docs/guide/11-performance`).
 //!
-//! Two targets — a 64 KB and a 256 B single-connection loop — so a profiler can
-//! **diff** them: the 256 B run is the fixed per-request cost (hyper parse, the
-//! byte-splice rewrite, tokio, loopback syscalls); the 64 KB run adds the
-//! body-size-dependent cost (`memcpy` of the document) on top. The difference
-//! isolates how much of the large-payload work is just moving bytes.
+//! Two targets — a 64 KB and a 256 B loop — so a profiler can **diff** them: the
+//! 256 B run is the fixed per-request cost (hyper parse, the byte-splice rewrite,
+//! tokio, loopback syscalls); the 64 KB run adds the body-size-dependent cost
+//! (`memcpy` of the document) on top. The difference isolates how much of the
+//! large-payload work is just moving bytes.
 //!
 //! Not a timing benchmark and not asserted; `#[ignore]`. Profile with, e.g.:
 //!
@@ -26,93 +26,34 @@
 //! ```
 #![allow(clippy::unwrap_used)]
 
-use std::sync::Arc;
+mod common;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
-use hyper::service::service_fn;
-use hyper::{Method, Request, Response};
+use hyper::{Method, Request};
 use hyper_util::client::legacy::Client;
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use osproxy_core::{ClusterId, IndexName};
-use osproxy_engine::Pipeline;
-use osproxy_server::auth::ReferenceAuthenticator;
-use osproxy_server::handler::AppHandler;
-use osproxy_server::tenancy::ReferenceTenancy;
-use osproxy_sink::OpenSearchSink;
-use osproxy_tenancy::TenancyRouter;
-use tokio::net::TcpListener;
+use hyper_util::rt::TokioExecutor;
+
+use common::{build_handler, payload, serve, start_upstream};
+use osproxy_server::tenancy::PlacementMode;
 
 /// Requests in the profiled loop. Enough samples for callgrind, few enough that a
 /// ~30× valgrind slowdown stays quick.
 const REQUESTS: usize = 200;
 
-async fn start_upstream() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        while let Ok((stream, _)) = listener.accept().await {
-            tokio::spawn(async move {
-                let io = TokioIo::new(stream);
-                let svc = service_fn(|_req: Request<Incoming>| async move {
-                    Ok::<_, std::convert::Infallible>(
-                        Response::builder()
-                            .status(201)
-                            .body(Full::new(Bytes::from(
-                                r#"{"_id":"acme:1","result":"created"}"#,
-                            )))
-                            .unwrap(),
-                    )
-                });
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(io, svc)
-                    .await;
-            });
-        }
-    });
-    format!("http://{addr}")
-}
-
-async fn spawn_proxy(upstream: String) -> std::net::SocketAddr {
-    let tenancy = ReferenceTenancy::new(
-        ClusterId::from("default"),
-        IndexName::from("osproxy-shared"),
-        upstream,
-    );
-    let pipeline = Pipeline::new(TenancyRouter::new(tenancy), OpenSearchSink::new());
-    let handler = Arc::new(
-        AppHandler::new(pipeline, ReferenceAuthenticator::dev())
-            .with_require_tls_for_mutation(false),
-    );
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        let _ = osproxy_transport::serve(listener, handler).await;
-    });
-    addr
-}
-
-fn payload(size: usize) -> Bytes {
-    let fixed = r#"{"tenant_id":"acme","id":1,"data":""}"#.len();
-    let pad = size.saturating_sub(fixed).max(1);
-    Bytes::from(format!(
-        r#"{{"tenant_id":"acme","id":1,"data":"{}"}}"#,
-        "x".repeat(pad)
-    ))
-}
-
-/// Drives `REQUESTS` sequential POSTs of a `size`-byte body over one connection.
+/// Drives `REQUESTS` sequential POSTs of a `size`-byte body over one connection
+/// through a `SharedIndex` (body-rewrite) proxy.
 async fn drive(size: usize) {
     let upstream = start_upstream().await;
-    let proxy = spawn_proxy(upstream).await;
+    let proxy = serve(build_handler(&upstream, Some(PlacementMode::SharedIndex))).await;
     let body = payload(size);
     let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
+    let uri: hyper::Uri = format!("http://{proxy}/orders/_doc").parse().unwrap();
 
     for _ in 0..REQUESTS {
         let req = Request::builder()
             .method(Method::POST)
-            .uri(format!("http://{proxy}/orders/_doc"))
+            .uri(uri.clone())
             .header("content-type", "application/json")
             .body(Full::new(body.clone()))
             .unwrap();
