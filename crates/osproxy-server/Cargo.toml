@@ -56,6 +56,8 @@ osproxy-kafka-wal = { workspace = true, optional = true }
 serde_json.workspace = true
 prost.workspace = true
 ciborium.workspace = true
+# The binary's global allocator (see the workspace dependency note). Binary-only.
+mimalloc.workspace = true
 ring = { workspace = true, optional = true }
 aws-lc-rs = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "time"] }

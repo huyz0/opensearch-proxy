@@ -46,6 +46,14 @@ use directive_wiring::{directive_store, with_directive_admin};
 // queue into the pipeline from config.
 mod fanout;
 
+/// The process global allocator. `mimalloc`'s per-thread sharded heaps cut the
+/// cross-thread malloc/free contention this allocation-heavy request path incurs
+/// under many worker threads, and bound the working set better under sustained
+/// load. Orthogonal to the crypto provider, so it is engaged for default and FIPS
+/// builds alike; only the binary links it (`docs/08`).
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Entry point. Returns a process exit code rather than panicking, consistent
 /// with the no-panic reliability requirement (NFR-R1).
 #[tokio::main]

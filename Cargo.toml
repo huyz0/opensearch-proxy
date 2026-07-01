@@ -85,6 +85,11 @@ tower-service = { version = "0.3", default-features = false }
 http-body-util = "0.1"
 http-body = "1"
 bytes = "1"
+# The `osproxy` binary's global allocator. A modern sharded/arena allocator cuts
+# malloc/free contention across worker threads on this allocation-heavy request
+# path; it is orthogonal to the crypto provider, so it applies to default and FIPS
+# builds alike. Linked only by the binary (osproxy-server), never the libraries.
+mimalloc = { version = "0.1", default-features = false }
 # etcd v3 client for the reference distributed `DirectiveStore` (osproxy-etcd).
 # default-features off keeps its TLS feature out, so this control-plane adapter
 # pulls no second crypto provider into a FIPS build (TLS-to-etcd is a documented
