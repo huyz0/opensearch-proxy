@@ -42,7 +42,7 @@ binary (a default build and a FIPS build) to its
 toolchain required:
 
 ```sh
-curl -L https://github.com/huyz0/opensearch-proxy/releases/latest/download/osproxy-v1.0.0-x86_64-unknown-linux-gnu -o osproxy
+curl -L https://github.com/huyz0/opensearch-proxy/releases/latest/download/osproxy-v1.0.1-x86_64-unknown-linux-gnu -o osproxy
 chmod +x osproxy && ./osproxy --help
 ```
 
@@ -69,12 +69,14 @@ osproxy-engine = "1.0"
 |------|-----|------------|
 | Rust (stable, see `rust-toolchain`) | builds the workspace | always |
 | `protoc` (Protocol Buffers compiler) | gRPC ingress codegen (`tonic-prost-build`) | always |
-| `cmake` + a C compiler (`cc`/`gcc`/`clang`) + `go` | builds AWS-LC-FIPS (the validated crypto module) | **FIPS builds only** |
+| a C compiler (`cc`/`gcc`/`clang`) | builds the `mimalloc` allocator (and `ring`, the default crypto) | always |
+| `cmake` + `go` | builds AWS-LC-FIPS (the validated crypto module) | **FIPS builds only** |
 | Docker | the `--ignored` testcontainer suite (real OpenSearch) | optional |
 
-The **default (non-FIPS) build needs no native toolchain** beyond `protoc` — the
-crypto provider is pure-Rust `ring`. `cmake`/C/Go are required *only* for a FIPS
-build, because the FIPS crypto module compiles AWS-LC from C.
+The default (non-FIPS) build needs `protoc` and a **C compiler** — the binary's
+`mimalloc` global allocator compiles a small C library (as does the default `ring`
+crypto). `cmake` and `go` are required *additionally* only for a FIPS build,
+because the FIPS crypto module compiles AWS-LC from C.
 
 ### Install (Debian / Ubuntu)
 
@@ -82,11 +84,11 @@ build, because the FIPS crypto module compiles AWS-LC from C.
 # Rust (if not already installed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Always-required: protobuf compiler
-sudo apt-get update && sudo apt-get install -y protobuf-compiler
+# Always-required: protobuf compiler + a C compiler (mimalloc / ring compile C)
+sudo apt-get update && sudo apt-get install -y protobuf-compiler build-essential
 
-# FIPS builds only: cmake + C toolchain + Go
-sudo apt-get install -y cmake build-essential golang-go
+# FIPS builds only: cmake + Go
+sudo apt-get install -y cmake golang-go
 ```
 
 ### Install (macOS, Homebrew)
@@ -95,11 +97,11 @@ sudo apt-get install -y cmake build-essential golang-go
 # Rust (if not already installed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Always-required: protobuf compiler
+# Always-required: protobuf compiler + a C compiler (Xcode CLT, for mimalloc / ring)
 brew install protobuf
-
-# FIPS builds only: cmake + Go (Xcode CLT provides the C compiler)
 xcode-select --install   # if you don't already have the C toolchain
+
+# FIPS builds only: cmake + Go
 brew install cmake go
 ```
 

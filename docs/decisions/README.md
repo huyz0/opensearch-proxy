@@ -21,3 +21,4 @@ intent can be re-derived, not guessed (docs/10 §5).
 | [012](012-modes-dynamism-by-blast-radius.md) | Proxy modes: dynamism rationed by blast radius; tenant isolation is a fail-closed per-request routing decision, never a global switch |
 | [013](013-etcd-directive-store.md) | Reference distributed `DirectiveStore` over etcd (watch-and-cache); directive plane only, migration-over-etcd deferred to an async/fallible seam |
 | [014](014-streaming-body-pipeline.md) | Streaming body pipeline: always stream (route-before-forward is the only buffer), never materialize a `Value` (event scan + byte splice), SPI declares needs & composes shared utils, never raw bytes; INV-MEM dhat-gated |
+| [015](015-mimalloc-global-allocator.md) | mimalloc as the binary's global allocator: the multi-core lever is the allocator (per-request state is allocation-bound, not lock-bound), ~25% peak throughput at high fan-in, orthogonal to the crypto provider |

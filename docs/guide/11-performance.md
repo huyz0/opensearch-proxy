@@ -179,6 +179,20 @@ The mutex scaled **negatively** (contention cliff); `ArcSwap` scales **positivel
 Building the explain JSON for *every* request cost ~12 µs of CPU for a document
 almost never read; retaining the trace and serializing lazily is ~52× faster.
 
+### The global allocator (mimalloc)
+
+Both operations above plateau under contention because the remaining cost is the
+per-request **clone** (the trace, the directive snapshot) — *allocation*, not the
+lock. Measured confirmation: sharding `ExplainStore` matched a single mutex, and the
+placement-table `RwLock` read shows no reader contention at 16 threads (`admit_write`
+is flat ~19 ns from 8→16 threads). So the fleet-wide lever is the allocator, not lock
+restructuring. The `osproxy` binary sets **mimalloc** as its `#[global_allocator]`;
+its per-thread sharded heaps cut the cross-thread `malloc`/`free` contention this
+allocation-heavy path incurs. Local A/B against a real OpenSearch (20-core): peak
+throughput at 64 connections rose ~25% (≈2,600 → ≈3,300 rps), with no change at low
+concurrency (nothing to relieve) and single-request latency unchanged
+(upstream-dominated). It is engaged for default and FIPS builds alike.
+
 ## Connection handling
 
 `cargo test -p osproxy-server --test connection_load` (no Docker):
@@ -204,7 +218,9 @@ renders briefs to the job summary. Representative figures:
 - **Pool reuse** ≈ 1.0 under steady load (NFR-P4).
 - **Scalability**: throughput scales ~44× (52 → 2,310 rps as concurrency 1 → 64) with
   p50 flat (~18 → 24 ms), scales by pool reuse, not latency inflation (NFR-P2).
-- **Footprint**: idle ≈ 11 MiB RSS; bounded growth under a 50k-request soak (NFR-P6).
+- **Footprint**: idle ≈ 12 MiB RSS (the `mimalloc` allocator reserves ~1 MiB of
+  per-thread arenas over the ~11 MiB system-allocator baseline); bounded growth under
+  a 50k-request soak (NFR-P6).
 
 ## Reproduce everything
 
