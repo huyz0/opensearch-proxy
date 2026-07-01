@@ -1,5 +1,7 @@
 //! The high-level tenancy contract, what most implementers provide.
 
+use std::future::Future;
+
 use osproxy_core::{ClusterId, Epoch, PartitionId};
 
 use crate::error::SpiError;
@@ -64,11 +66,6 @@ use crate::rules::{DocIdRule, InjectedField, SensitivitySpec};
 ///     }
 /// }
 /// ```
-#[allow(
-    async_fn_in_trait,
-    reason = "consumed through generics in osproxy-tenancy's adapter; Send is \
-              checked at the engine's spawn site (docs/02 §2)"
-)]
 pub trait TenancySpi: Send + Sync + 'static {
     /// Resolves the partition id for a request.
     ///
@@ -134,7 +131,10 @@ pub trait TenancySpi: Send + Sync + 'static {
     /// Returns [`SpiError::PlacementMissing`] when the partition has no
     /// placement, or [`SpiError::PlacementBackend`] when the lookup backend is
     /// unavailable.
-    async fn placement_for(&self, partition: &PartitionId) -> Result<PlacementAt, SpiError>;
+    fn placement_for(
+        &self,
+        partition: &PartitionId,
+    ) -> impl Future<Output = Result<PlacementAt, SpiError>> + Send;
 
     /// The migration write gate (`docs/06` §2): may a write that resolved at
     /// `epoch` for `partition` still commit? Re-checked at dispatch, after the
@@ -144,8 +144,12 @@ pub trait TenancySpi: Send + Sync + 'static {
     ///
     /// Defaults to always-admit: an implementation without live migration (a
     /// constant placement) never needs to hold a write.
-    async fn admit_write(&self, _partition: &PartitionId, _epoch: Epoch) -> bool {
-        true
+    fn admit_write(
+        &self,
+        _partition: &PartitionId,
+        _epoch: Epoch,
+    ) -> impl Future<Output = bool> + Send {
+        async { true }
     }
 
     /// The base URL of a cluster, by id. The data plane carries each cluster's

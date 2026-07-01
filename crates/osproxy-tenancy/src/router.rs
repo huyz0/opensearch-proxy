@@ -6,6 +6,8 @@
 //! to constants, so downstream stages stay pure). The `SharedIndex`
 //! partition-in-id invariant (`docs/03`) is enforced here.
 
+use std::future::Future;
+
 use osproxy_core::{ClusterId, Epoch, IndexName, PartitionId, Target};
 use osproxy_spi::{
     BodyDoc, BodyTransform, InjectedField, InjectedValue, MigrationPhase, Placement, RequestCtx,
@@ -181,11 +183,6 @@ impl<T: TenancySpi> RoutingSpi for TenancyRouter<T> {
 /// placement per partition. This trait captures exactly that contract, so the
 /// pipeline is generic over *any* router that can provide it, not nailed to the
 /// concrete [`TenancyRouter`]. [`TenancyRouter`] is the in-tree implementation.
-#[allow(
-    async_fn_in_trait,
-    reason = "consumed through generics in the engine, where Send is verified at \
-              the spawn site, mirroring TenancySpi/RoutingSpi (docs/02 §2)"
-)]
 pub trait Router: Send + Sync + 'static {
     /// Resolves the full routing plan for a single-document request.
     ///
@@ -193,7 +190,10 @@ pub trait Router: Send + Sync + 'static {
     ///
     /// Returns [`SpiError`] if the endpoint is not tenancy-aware, the partition
     /// cannot be resolved, no placement exists, or the transforms are invalid.
-    async fn resolve(&self, ctx: &RequestCtx<'_>) -> Result<Resolved, SpiError>;
+    fn resolve(
+        &self,
+        ctx: &RequestCtx<'_>,
+    ) -> impl Future<Output = Result<Resolved, SpiError>> + Send;
 
     /// Resolves just the partition id for a request and document (the bulk demux
     /// entry point).
@@ -212,16 +212,20 @@ pub trait Router: Send + Sync + 'static {
     /// # Errors
     ///
     /// Returns [`SpiError`] if no placement exists or the transforms are invalid.
-    async fn resolve_placement(
+    fn resolve_placement(
         &self,
         ctx: &RequestCtx<'_>,
         partition: PartitionId,
         logical_index: &str,
-    ) -> Result<Resolved, SpiError>;
+    ) -> impl Future<Output = Result<Resolved, SpiError>> + Send;
 
     /// The migration write gate: may a write that resolved at `epoch` for
     /// `partition` still commit? `false` ⇒ reject as a retryable stale-epoch error.
-    async fn admit_write(&self, partition: &PartitionId, epoch: Epoch) -> bool;
+    fn admit_write(
+        &self,
+        partition: &PartitionId,
+        epoch: Epoch,
+    ) -> impl Future<Output = bool> + Send;
 
     /// The base URL of a cluster by id, for the cursor-affinity and admin paths
     /// that route by cluster without a placement. Default `None`.
