@@ -110,6 +110,13 @@ fn error_json(err: &ErrorContext) -> Value {
 /// every request was pure waste (~12µs/req of allocation + serialization). The doc
 /// is built lazily in [`ExplainStore::get`] instead; `record` only clones the
 /// (small, owned) trace and pushes it under the lock.
+///
+/// A single lock (not sharded): `record`'s per-request contention was measured to
+/// be dominated by the trace *clone*, not the lock — even one uncontended mutex
+/// under 16 threads matched a 16-way sharded one, because the allocation is the
+/// cost. Cloning the trace *before* taking the lock (below) keeps the critical
+/// section to an O(1) deque op, and a fast concurrent allocator (the binary's
+/// mimalloc) is what actually relieves the clone's cost.
 #[derive(Debug)]
 pub struct ExplainStore {
     capacity: usize,
@@ -129,6 +136,10 @@ impl ExplainStore {
     /// Records the trace for `request_id`, evicting the oldest if full. Retains the
     /// trace as-is, the explain document is assembled lazily on [`Self::get`].
     pub fn record(&self, request_id: RequestId, trace: &RequestTrace) {
+        // Clone the trace *before* taking the lock: the copy is the bulk of the
+        // work, so doing it outside keeps the critical section to the O(1) deque
+        // push/pop (the lock is held for pointer moves, not a copy).
+        let entry = (request_id, trace.clone());
         let mut entries = self
             .entries
             .lock()
@@ -136,7 +147,7 @@ impl ExplainStore {
         if entries.len() >= self.capacity {
             entries.pop_front();
         }
-        entries.push_back((request_id, trace.clone()));
+        entries.push_back(entry);
     }
 
     /// Looks up `request_id` and assembles its explanation document, if retained.
