@@ -26,12 +26,20 @@ pub(crate) fn matches(headers: &[(String, String)], expected: &str) -> bool {
 /// The header list with any `Authorization` header removed (case-insensitive),
 /// so the credential consumed at the ingress never travels into the pipeline,
 /// observability, or logs.
+///
+/// This returns an owned copy rather than stripping the request's headers in
+/// place: the capture path (`AppHandler::tee_capture`) still passes the *original*
+/// headers through (redaction is composed separately via `RedactingCapture`), so
+/// the raw and pipeline-facing views must coexist. The output is pre-sized to the
+/// input length so the filter-collect never reallocates.
 pub(crate) fn without_authorization(headers: &[(String, String)]) -> Vec<(String, String)> {
-    headers
-        .iter()
-        .filter(|(name, _)| !name.eq_ignore_ascii_case("authorization"))
-        .cloned()
-        .collect()
+    let mut safe = Vec::with_capacity(headers.len());
+    for (name, value) in headers {
+        if !name.eq_ignore_ascii_case("authorization") {
+            safe.push((name.clone(), value.clone()));
+        }
+    }
+    safe
 }
 
 /// Constant-time comparison **for equal-length inputs** (no early return on the
