@@ -1709,7 +1709,7 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "osproxy-bench"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1717,18 +1717,18 @@ dependencies = [
 
 [[package]]
 name = "osproxy-capture"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "osproxy-spi",
 ]
 
 [[package]]
 name = "osproxy-config"
-version = "1.0.0"
+version = "1.0.1"
 
 [[package]]
 name = "osproxy-control"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "osproxy-core",
  "osproxy-spi",
@@ -1739,7 +1739,7 @@ dependencies = [
 
 [[package]]
 name = "osproxy-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "dhat",
  "iai-callgrind",
@@ -1749,7 +1749,7 @@ dependencies = [
 
 [[package]]
 name = "osproxy-engine"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "bytes",
  "dhat",
@@ -1773,7 +1773,7 @@ dependencies = [
 
 [[package]]
 name = "osproxy-etcd"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "arc-swap",
  "etcd-client",
@@ -1786,7 +1786,7 @@ dependencies = [
 
 [[package]]
 name = "osproxy-kafka"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "osproxy-capture",
  "serde",
@@ -1795,7 +1795,7 @@ dependencies = [
 
 [[package]]
 name = "osproxy-kafka-krafka"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "krafka",
  "osproxy-kafka",
@@ -1805,7 +1805,7 @@ dependencies = [
 
 [[package]]
 name = "osproxy-kafka-wal"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "osproxy-kafka",
  "tokio",
@@ -1813,7 +1813,7 @@ dependencies = [
 
 [[package]]
 name = "osproxy-observe"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "arc-swap",
  "dhat",
@@ -1825,7 +1825,7 @@ dependencies = [
 
 [[package]]
 name = "osproxy-otlp"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "bytes",
  "http-body-util",
@@ -1838,7 +1838,7 @@ dependencies = [
 
 [[package]]
 name = "osproxy-rewrite"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "dhat",
  "divan",
@@ -1850,7 +1850,7 @@ dependencies = [
 
 [[package]]
 name = "osproxy-server"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "aws-lc-rs",
  "bytes",
@@ -1886,7 +1886,7 @@ dependencies = [
 
 [[package]]
 name = "osproxy-sink"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "bytes",
  "http-body-util",
@@ -1902,7 +1902,7 @@ dependencies = [
 
 [[package]]
 name = "osproxy-spi"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "osproxy-core",
  "serde_json",
@@ -1911,7 +1911,7 @@ dependencies = [
 
 [[package]]
 name = "osproxy-tenancy"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "osproxy-core",
  "osproxy-rewrite",
@@ -1923,7 +1923,7 @@ dependencies = [
 
 [[package]]
 name = "osproxy-transport"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "aws-lc-rs",
  "bytes",
@@ -3664,7 +3664,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "1.0.0"
+version = "1.0.1"
 
 [[package]]
 name = "yasna"
