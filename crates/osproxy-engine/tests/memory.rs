@@ -156,15 +156,17 @@ fn bulk_demux_marginal_allocation_budget() {
     let marginal = a41.saturating_sub(a1) / 40;
     eprintln!("BULK_ALLOC a1={a1} a41={a41} marginal_per_doc={marginal}");
 
-    // Measured ~68 allocations per added document with the resolution cached once.
-    // Before the cache it was ~77: each extra document also re-cloned the resolved
-    // placement (partition + decision + body-transform strings) and re-collected
-    // its inject vector. The bound sits between the two so that regression fails
-    // here while the genuine per-item work (id map, body splice, response line,
-    // write op) stays within budget.
+    // Measured ~50 allocations per added document. History on this path: ~77 when
+    // every item re-cloned the resolved placement and re-collected its inject
+    // vector; ~68 once the resolution was cached once per (partition, index); ~50
+    // once the response line was serialized straight to bytes instead of built as
+    // a `serde_json::Value` tree. The bound sits above the current cost but below
+    // the ~68 the `Value`-tree line cost, so either regression (a per-item
+    // placement clone, or a re-materialized response line) fails here while the
+    // genuine per-item work (id map, body splice, write op) stays within budget.
     assert!(
-        marginal <= 72,
-        "bulk per-document allocation budget: {marginal} > 72 \
-         (a per-item placement re-clone would push it back to ~77)"
+        marginal <= 56,
+        "bulk per-document allocation budget: {marginal} > 56 \
+         (a per-item placement clone or a Value-tree response line would exceed it)"
     );
 }

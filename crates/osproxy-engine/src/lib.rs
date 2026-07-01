@@ -17,6 +17,7 @@
 mod admin;
 mod asyncwrite;
 mod bulk;
+mod bulkline;
 mod bulkprep;
 mod cursor;
 mod dbq;

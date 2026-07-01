@@ -30,12 +30,12 @@ use osproxy_rewrite::{parse_bulk, parse_bulk_action, BulkAction, BulkItem, Rewri
 use osproxy_sink::{ByteBody, DocOp, OpResult, Sink, SinkError, WriteAck, WriteBatch, WriteOp};
 use osproxy_spi::RequestCtx;
 use osproxy_tenancy::Router;
-use serde_json::{json, Value};
 
 use crate::asyncwrite::{
     op_id_for, unavailable_response, unsupported_async, unsupported_response, QueuedWrite,
     WriteQueue,
 };
+use crate::bulkline::{BulkBody, Line};
 use crate::bulkprep::{prepare, Prepared};
 use crate::error::RequestError;
 use crate::pipeline::PipelineResponse;
@@ -76,7 +76,8 @@ pub(crate) async fn ingest_bulk<R: Router, S: Sink>(
     // Per-item response line (filled now for failures, on flush for the rest) and
     // the per-target demux buffers. A target flushes once it reaches
     // FLUSH_THRESHOLD, so the transformed working set stays bounded (NFR-P7).
-    let mut lines: Vec<Value> = vec![Value::Null; n];
+    let mut lines: Vec<Option<Line>> = Vec::new();
+    lines.resize_with(n, || None);
     let mut buffers: HashMap<Target, Entries> = HashMap::new();
     let mut sizes: HashMap<Target, usize> = HashMap::new();
     let mut cache = crate::bulkprep::ResolutionCache::new();
@@ -95,19 +96,31 @@ pub(crate) async fn ingest_bulk<R: Router, S: Sink>(
                 )
                 .await;
             }
-            Err(fail) => lines[ordinal] = fail.into_line(),
+            Err(fail) => lines[ordinal] = Some(fail.into_line()),
         }
     }
 
     flush_remaining(router, sink, buffers, &mut lines).await;
+    render(&lines)
+}
 
-    let errors = lines.iter().any(is_error_line);
-    let body = json!({ "took": 0, "errors": errors, "items": lines });
+/// Serializes the positional response lines into the bulk body
+/// `{"took":0,"errors":_,"items":[…]}`, straight to bytes with no `Value` tree.
+/// `errors` is derived from the lines (any per-item error). Shared by the buffered,
+/// streamed, and async fan-out paths.
+fn render(lines: &[Option<Line>]) -> Result<PipelineResponse, RequestError> {
+    let errors = lines.iter().flatten().any(Line::is_error);
+    let body = serde_json::to_vec(&BulkBody {
+        took: 0,
+        errors,
+        items: lines,
+    })
+    .map_err(|_| RequestError::Internal {
+        reason: "serializing bulk response",
+    })?;
     Ok(PipelineResponse {
         status: 200,
-        body: serde_json::to_vec(&body).map_err(|_| RequestError::Internal {
-            reason: "serializing bulk response",
-        })?,
+        body,
         content_type: None,
     })
 }
@@ -138,7 +151,7 @@ pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
     up_trace: Option<osproxy_core::TraceContext>,
 ) -> Result<PipelineResponse, RequestError> {
     let mut reader = NdjsonReader::new(body);
-    let mut lines: Vec<Value> = Vec::new();
+    let mut lines: Vec<Option<Line>> = Vec::new();
     let mut buffers: HashMap<Target, Entries> = HashMap::new();
     let mut sizes: HashMap<Target, usize> = HashMap::new();
     let mut cache = crate::bulkprep::ResolutionCache::new();
@@ -147,7 +160,7 @@ pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
     while let Some(item) = reader.next_op().await? {
         let ord = ordinal;
         ordinal += 1;
-        lines.push(Value::Null);
+        lines.push(None);
         match prepare(router, ctx, &mut cache, item, retry, up_trace.as_ref()).await {
             // Flush a target mid-stream once it reaches the count or byte threshold,
             // so the transformed working set stays bounded (NFR-P7), the same
@@ -155,20 +168,11 @@ pub(crate) async fn ingest_bulk_streamed<R: Router, S: Sink>(
             Ok(p) => {
                 buffer_and_flush(router, sink, &mut buffers, &mut sizes, &mut lines, ord, p).await;
             }
-            Err(fail) => lines[ord] = fail.into_line(),
+            Err(fail) => lines[ord] = Some(fail.into_line()),
         }
     }
     flush_remaining(router, sink, buffers, &mut lines).await;
-
-    let errors = lines.iter().any(is_error_line);
-    let body = json!({ "took": 0, "errors": errors, "items": lines });
-    Ok(PipelineResponse {
-        status: 200,
-        body: serde_json::to_vec(&body).map_err(|_| RequestError::Internal {
-            reason: "serializing bulk response",
-        })?,
-        content_type: None,
-    })
+    render(&lines)
 }
 
 /// An incremental NDJSON reader over a streamed body: pulls frames on demand and
@@ -301,7 +305,8 @@ pub(crate) async fn ingest_bulk_async<R: Router>(
 
     let items = parse_bulk(ctx.body())?;
     let batch_id = op_id_for(ctx, ctx.request_id());
-    let mut lines: Vec<Value> = vec![Value::Null; items.len()];
+    let mut lines: Vec<Option<Line>> = Vec::new();
+    lines.resize_with(items.len(), || None);
     let mut cache = crate::bulkprep::ResolutionCache::new();
 
     for (ordinal, item) in items.into_iter().enumerate() {
@@ -311,12 +316,14 @@ pub(crate) async fn ingest_bulk_async<R: Router>(
         // does not exist at enqueue time, reject either in place rather than
         // silently dropping the precondition.
         if matches!(item.action, BulkAction::Update) || item.concurrency_control {
-            lines[ordinal] = json!({ item.action.keyword(): {
-                "_index": item.index.clone().unwrap_or_else(|| index.to_owned()),
-                "_id": item.id,
-                "status": 400,
-                "error": { "type": "unsupported_async" },
-            }});
+            let logical_index = item.index.clone().unwrap_or_else(|| index.to_owned());
+            lines[ordinal] = Some(Line::error(
+                item.action.keyword(),
+                logical_index,
+                item.id.clone(),
+                400,
+                "unsupported_async",
+            ));
             continue;
         }
         match prepare(router, ctx, &mut cache, item, retry, up_trace.as_ref()).await {
@@ -327,47 +334,34 @@ pub(crate) async fn ingest_bulk_async<R: Router>(
                     partition_key: p.partition.as_str().to_owned(),
                     batch: WriteBatch::single(p.op.clone()),
                 };
-                lines[ordinal] = match queue.enqueue(write).await {
-                    Ok(()) => queued_line(&p, &op_id),
+                lines[ordinal] = Some(match queue.enqueue(write).await {
+                    Ok(()) => queued_line(&p, op_id),
                     Err(_) => enqueue_failed_line(&p),
-                };
+                });
             }
-            Err(fail) => lines[ordinal] = fail.into_line(),
+            Err(fail) => lines[ordinal] = Some(fail.into_line()),
         }
     }
 
-    let errors = lines.iter().any(is_error_line);
-    let body = json!({ "took": 0, "errors": errors, "items": lines });
-    Ok(PipelineResponse {
-        status: 200,
-        body: serde_json::to_vec(&body).map_err(|_| RequestError::Internal {
-            reason: "serializing bulk response",
-        })?,
-        content_type: None,
-    })
+    render(&lines)
 }
 
 /// The positioned `202 queued` line for an enqueued async op, carrying the
 /// per-item `op_id` the client correlates a downstream outcome against.
-fn queued_line(p: &Prepared, op_id: &str) -> Value {
-    json!({ p.action: {
-        "_index": p.logical_index,
-        "_id": p.logical_id,
-        "op_id": op_id,
-        "status": 202,
-        "result": "queued",
-    }})
+fn queued_line(p: &Prepared, op_id: String) -> Line {
+    Line::queued(
+        p.action,
+        p.logical_index.clone(),
+        Some(p.logical_id.clone()),
+        202,
+        op_id,
+    )
 }
 
 /// The positioned `503` line for an op the queue refused (retryable; the same
 /// `op_id` makes a retry idempotent downstream).
-fn enqueue_failed_line(p: &Prepared) -> Value {
-    json!({ p.action: {
-        "_index": p.logical_index,
-        "_id": p.logical_id,
-        "status": 503,
-        "error": { "type": "enqueue_failed" },
-    }})
+fn enqueue_failed_line(p: &Prepared) -> Line {
+    error_line(p, 503, "enqueue_failed")
 }
 
 /// Buffers a prepared op into its target's demux buffer and flushes that target
@@ -379,7 +373,7 @@ async fn buffer_and_flush<R: Router, S: Sink>(
     sink: &S,
     buffers: &mut HashMap<Target, Entries>,
     sizes: &mut HashMap<Target, usize>,
-    lines: &mut [Value],
+    lines: &mut [Option<Line>],
     ordinal: usize,
     prepared: Prepared,
 ) {
@@ -412,10 +406,15 @@ fn op_body_len(op: &WriteOp) -> usize {
 /// per item, dispatch the admitted ops, and apply each result to `lines` by its
 /// original ordinal. Awaited inline, so the transformed bytes are freed before
 /// parsing resumes (the mid-stream backpressure that bounds memory).
-async fn flush<R: Router, S: Sink>(router: &R, sink: &S, entries: Entries, lines: &mut [Value]) {
+async fn flush<R: Router, S: Sink>(
+    router: &R,
+    sink: &S,
+    entries: Entries,
+    lines: &mut [Option<Line>],
+) {
     let (admitted, rejected) = gate(router, entries).await;
     for (ordinal, p) in &rejected {
-        lines[*ordinal] = stale_epoch_line(p);
+        lines[*ordinal] = Some(stale_epoch_line(p));
     }
     apply_results(&admitted, sink.write(build_batch(&admitted)).await, lines);
 }
@@ -428,7 +427,7 @@ async fn flush_remaining<R: Router, S: Sink>(
     router: &R,
     sink: &S,
     buffers: HashMap<Target, Entries>,
-    lines: &mut [Value],
+    lines: &mut [Option<Line>],
 ) {
     type Flushed = (Entries, Entries, Result<WriteAck, SinkError>);
     let pending = buffers.into_values().filter(|v| !v.is_empty());
@@ -444,7 +443,7 @@ async fn flush_remaining<R: Router, S: Sink>(
 
     for (admitted, rejected, ack) in results {
         for (ordinal, p) in &rejected {
-            lines[*ordinal] = stale_epoch_line(p);
+            lines[*ordinal] = Some(stale_epoch_line(p));
         }
         apply_results(&admitted, ack, lines);
     }
@@ -469,13 +468,20 @@ async fn gate<R: Router>(router: &R, entries: Entries) -> (Entries, Entries) {
 
 /// The response line for an item held by the migration write gate: a positioned,
 /// retryable `409` so the client re-resolves and retries just that item.
-fn stale_epoch_line(p: &Prepared) -> Value {
-    json!({ p.action: {
-        "_index": p.logical_index,
-        "_id": p.logical_id,
-        "status": 409,
-        "error": { "type": "stale_epoch" },
-    }})
+fn stale_epoch_line(p: &Prepared) -> Line {
+    error_line(p, 409, "stale_epoch")
+}
+
+/// An error line built from a prepared op, echoing its logical index/id (never the
+/// physical view). The shared shape behind the gate/upstream/enqueue failures.
+fn error_line(p: &Prepared, status: u16, error: &'static str) -> Line {
+    Line::error(
+        p.action,
+        p.logical_index.clone(),
+        Some(p.logical_id.clone()),
+        status,
+        error,
+    )
 }
 
 /// Builds the [`WriteBatch`] for a target's buffered entries.
@@ -489,17 +495,17 @@ fn build_batch(entries: &[(usize, Prepared)]) -> WriteBatch {
 fn apply_results(
     entries: &[(usize, Prepared)],
     result: Result<WriteAck, SinkError>,
-    lines: &mut [Value],
+    lines: &mut [Option<Line>],
 ) {
     match result {
         Ok(ack) => {
             for ((ordinal, p), op_result) in entries.iter().zip(ack.results()) {
-                lines[*ordinal] = success_line(p, op_result);
+                lines[*ordinal] = Some(success_line(p, op_result));
             }
         }
         Err(_) => {
             for (ordinal, p) in entries {
-                lines[*ordinal] = upstream_failure_line(p);
+                lines[*ordinal] = Some(upstream_failure_line(p));
             }
         }
     }
@@ -508,22 +514,18 @@ fn apply_results(
 /// The response line for a dispatched op. A 2xx/3xx is a positional success
 /// (logical id/index); a 4xx upstream rejection (e.g. a `create` id conflict) is
 /// surfaced as a positioned, value-free error so the bulk reports `errors:true`.
-fn success_line(p: &Prepared, result: &OpResult) -> Value {
+fn success_line(p: &Prepared, result: &OpResult) -> Line {
     if result.status >= 400 {
-        return json!({ p.action: {
-            "_index": p.logical_index,
-            "_id": p.logical_id,
-            "status": result.status,
-            "error": { "type": error_type_for(result.status) },
-        }});
+        return error_line(p, result.status, error_type_for(result.status));
     }
     let outcome = if result.created { "created" } else { "updated" };
-    json!({ p.action: {
-        "_index": p.logical_index,
-        "_id": p.logical_id,
-        "status": result.status,
-        "result": outcome,
-    }})
+    Line::result(
+        p.action,
+        p.logical_index.clone(),
+        Some(p.logical_id.clone()),
+        result.status,
+        outcome,
+    )
 }
 
 /// A value-free error type for a 4xx upstream item status.
@@ -536,19 +538,6 @@ fn error_type_for(status: u16) -> &'static str {
 }
 
 /// The response line for an op whose target failed upstream.
-fn upstream_failure_line(p: &Prepared) -> Value {
-    json!({ p.action: {
-        "_index": p.logical_index,
-        "_id": p.logical_id,
-        "status": 502,
-        "error": { "type": "upstream_failed" },
-    }})
-}
-
-/// Whether a response line carries a per-item error.
-fn is_error_line(line: &Value) -> bool {
-    line.as_object()
-        .and_then(|o| o.values().next())
-        .and_then(|v| v.get("error"))
-        .is_some()
+fn upstream_failure_line(p: &Prepared) -> Line {
+    error_line(p, 502, "upstream_failed")
 }

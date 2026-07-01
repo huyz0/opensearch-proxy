@@ -57,13 +57,14 @@ pub(crate) struct ItemFailure {
 
 impl ItemFailure {
     /// The positioned `{action: {…, error}}` response line for this failure.
-    pub(crate) fn into_line(self) -> Value {
-        serde_json::json!({ self.action: {
-            "_index": self.logical_index,
-            "_id": self.logical_id,
-            "status": self.status,
-            "error": { "type": self.error },
-        }})
+    pub(crate) fn into_line(self) -> crate::bulkline::Line {
+        crate::bulkline::Line::error(
+            self.action,
+            self.logical_index,
+            self.logical_id,
+            self.status,
+            self.error,
+        )
     }
 }
 

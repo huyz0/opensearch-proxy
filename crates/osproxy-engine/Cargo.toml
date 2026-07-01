@@ -17,6 +17,7 @@ osproxy-sink.workspace = true
 osproxy-control.workspace = true
 osproxy-observe.workspace = true
 thiserror.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 futures-util.workspace = true
 http-body-util.workspace = true
