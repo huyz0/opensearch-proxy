@@ -316,6 +316,70 @@ mod tests {
         assert!(env.body.is_empty());
         assert_eq!(env.content_type, "");
     }
+
+    #[test]
+    fn create_and_update_envelopes_carry_the_body_and_op_type() {
+        let json = br#"{"id":9}"#;
+        let create = write(DocOp::Create {
+            id: Some("acme:9".to_owned()),
+            routing: Some("acme".to_owned()),
+            body: bytes::Bytes::from_static(json),
+        });
+        let env = envelope(&create, &create.batch.ops()[0], BodyEncoding::Json).unwrap();
+        assert_eq!(env.op_type, OpType::Create as i32);
+        assert_eq!(env.id, "acme:9");
+        assert_eq!(env.body, json.to_vec());
+
+        let update = write(DocOp::Update {
+            id: "acme:9".to_owned(),
+            routing: Some("acme".to_owned()),
+            body: bytes::Bytes::from_static(json),
+        });
+        let env = envelope(&update, &update.batch.ops()[0], BodyEncoding::Json).unwrap();
+        assert_eq!(env.op_type, OpType::Update as i32);
+        assert_eq!(env.id, "acme:9");
+    }
+
+    #[test]
+    fn cbor_encoding_rejects_a_body_that_is_not_valid_json() {
+        let err = encode_body(b"not json{", BodyEncoding::Cbor).unwrap_err();
+        assert_eq!(err.reason, "fan-out body is not valid JSON");
+    }
+
+    fn test_pipeline() -> osproxy_engine::Pipeline<
+        osproxy_tenancy::TenancyRouter<osproxy_server::tenancy::ReferenceTenancy>,
+        osproxy_sink::MemorySink,
+    > {
+        let tenancy = osproxy_server::tenancy::ReferenceTenancy::new(
+            ClusterId::from("eu-1"),
+            IndexName::from("shared"),
+            "http://localhost:9200",
+        );
+        osproxy_engine::Pipeline::new(
+            osproxy_tenancy::TenancyRouter::new(tenancy),
+            osproxy_sink::MemorySink::new(),
+        )
+    }
+
+    #[tokio::test]
+    async fn attach_without_the_fanout_feature_is_a_noop_when_unconfigured() {
+        let cfg = osproxy_config::Config::resolve_for_test(&[]).unwrap();
+        assert!(cfg.fanout.is_none());
+        let result = attach(test_pipeline(), &cfg).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn attach_without_the_fanout_feature_errors_loudly_when_configured() {
+        let cfg = osproxy_config::Config::resolve_for_test(&[
+            ("fanout_kafka_brokers", "localhost:9092"),
+            ("fanout_topic", "osproxy-writes"),
+        ])
+        .unwrap();
+        assert!(cfg.fanout.is_some());
+        let err = attach(test_pipeline(), &cfg).await.unwrap_err();
+        assert!(err.contains("fanout"), "error mentions the feature: {err}");
+    }
 }
 
 /// Live round-trip against a real broker (`docs/04` §9), see the module file.

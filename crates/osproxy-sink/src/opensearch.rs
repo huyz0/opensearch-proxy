@@ -680,3 +680,72 @@ fn reject_5xx(status: u16) -> Result<(), SinkError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hyper_method_maps_every_spi_method_and_defaults_to_post() {
+        assert_eq!(hyper_method(HttpMethod::Get), Method::GET);
+        assert_eq!(hyper_method(HttpMethod::Put), Method::PUT);
+        assert_eq!(hyper_method(HttpMethod::Delete), Method::DELETE);
+        assert_eq!(hyper_method(HttpMethod::Head), Method::HEAD);
+        assert_eq!(hyper_method(HttpMethod::Post), Method::POST);
+    }
+
+    #[test]
+    fn apply_forward_headers_inserts_valid_headers_and_skips_invalid_ones() {
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("http://h/")
+            .body(())
+            .unwrap();
+        apply_forward_headers(
+            &mut req,
+            &[
+                ("x-tenant".to_owned(), "acme".to_owned()),
+                // An invalid header name is skipped rather than failing the whole
+                // forward (best-effort relay).
+                ("bad header".to_owned(), "v".to_owned()),
+            ],
+        );
+        assert_eq!(req.headers().get("x-tenant").unwrap(), "acme");
+        assert_eq!(req.headers().len(), 1);
+    }
+
+    #[test]
+    fn apply_forward_headers_overrides_an_existing_header() {
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("http://h/")
+            .header("content-type", "application/json")
+            .body(())
+            .unwrap();
+        apply_forward_headers(
+            &mut req,
+            &[("content-type".to_owned(), "text/plain".to_owned())],
+        );
+        assert_eq!(req.headers().get("content-type").unwrap(), "text/plain");
+    }
+
+    #[test]
+    fn reject_5xx_passes_through_client_errors_and_success() {
+        assert!(reject_5xx(200).is_ok());
+        assert!(reject_5xx(404).is_ok());
+    }
+
+    #[test]
+    fn reject_5xx_marks_502_to_504_as_retryable_and_others_not() {
+        let SinkError::Upstream { status, retryable } = reject_5xx(503).unwrap_err() else {
+            unreachable!("reject_5xx always returns SinkError::Upstream");
+        };
+        assert_eq!(status, 503);
+        assert!(retryable);
+
+        let SinkError::Upstream { retryable, .. } = reject_5xx(500).unwrap_err() else {
+            unreachable!("reject_5xx always returns SinkError::Upstream");
+        };
+        assert!(!retryable);
+    }
+}

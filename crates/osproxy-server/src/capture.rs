@@ -106,3 +106,45 @@ pub(crate) async fn attach<A: Authenticator>(
     }
     Ok(handler)
 }
+
+#[cfg(all(test, not(feature = "capture")))]
+mod tests {
+    use super::*;
+    use osproxy_core::{ClusterId, IndexName};
+    use osproxy_engine::Pipeline;
+    use osproxy_server::auth::ReferenceAuthenticator;
+    use osproxy_server::tenancy::ReferenceTenancy;
+    use osproxy_tenancy::TenancyRouter;
+
+    fn handler() -> AppHandler<ReferenceAuthenticator> {
+        let tenancy = ReferenceTenancy::new(
+            ClusterId::from("eu-1"),
+            IndexName::from("shared"),
+            "http://localhost:9200",
+        );
+        let pipeline = Pipeline::new(
+            TenancyRouter::new(tenancy),
+            osproxy_sink::OpenSearchSink::new(),
+        );
+        AppHandler::new(pipeline, ReferenceAuthenticator::dev())
+    }
+
+    #[tokio::test]
+    async fn attach_without_the_capture_feature_is_a_noop_when_unconfigured() {
+        let cfg = Config::resolve_for_test(&[]).unwrap();
+        assert!(cfg.capture.is_none());
+        assert!(attach(handler(), &cfg).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn attach_without_the_capture_feature_errors_loudly_when_configured() {
+        let cfg = Config::resolve_for_test(&[
+            ("capture_kafka_brokers", "localhost:9092"),
+            ("capture_topic", "osproxy-capture"),
+        ])
+        .unwrap();
+        assert!(cfg.capture.is_some());
+        let err = attach(handler(), &cfg).await.unwrap_err();
+        assert!(err.contains("capture"), "error mentions the feature: {err}");
+    }
+}

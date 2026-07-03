@@ -143,3 +143,69 @@ impl IngressResponse {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http_body_util::BodyExt;
+
+    #[tokio::test]
+    async fn streaming_response_stream_carries_the_given_body_verbatim() {
+        let resp = StreamingResponse::stream(200, buffered_response(b"hello".to_vec()));
+        assert_eq!(resp.status, 200);
+        assert!(resp.headers.is_empty());
+        let bytes = resp.body.collect().await.unwrap().to_bytes();
+        assert_eq!(&bytes[..], b"hello");
+    }
+
+    #[tokio::test]
+    async fn streaming_response_buffered_boxes_the_given_bytes() {
+        let resp = StreamingResponse::buffered(500, b"oops".to_vec());
+        assert_eq!(resp.status, 500);
+        let bytes = resp.body.collect().await.unwrap().to_bytes();
+        assert_eq!(&bytes[..], b"oops");
+    }
+
+    #[test]
+    fn streaming_response_with_header_appends_in_order() {
+        let resp = StreamingResponse::buffered(200, Vec::new())
+            .with_header("content-type", "text/plain")
+            .with_header("x-request-id", "req-1");
+        assert_eq!(
+            resp.headers,
+            vec![
+                ("content-type".to_owned(), "text/plain".to_owned()),
+                ("x-request-id".to_owned(), "req-1".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn streaming_response_debug_does_not_panic_and_shows_status() {
+        let resp = StreamingResponse::buffered(404, Vec::new());
+        let debug = format!("{resp:?}");
+        assert!(debug.contains("404"), "debug output: {debug}");
+    }
+
+    #[test]
+    fn ingress_response_json_has_no_headers_by_default() {
+        let resp = IngressResponse::json(200, b"{}".to_vec());
+        assert_eq!(resp.status, 200);
+        assert!(resp.headers.is_empty());
+        assert_eq!(resp.body, b"{}".to_vec());
+    }
+
+    #[test]
+    fn ingress_response_with_header_appends_in_order() {
+        let resp = IngressResponse::json(201, Vec::new())
+            .with_header("location", "/doc/1")
+            .with_header("x-request-id", "req-2");
+        assert_eq!(
+            resp.headers,
+            vec![
+                ("location".to_owned(), "/doc/1".to_owned()),
+                ("x-request-id".to_owned(), "req-2".to_owned()),
+            ]
+        );
+    }
+}

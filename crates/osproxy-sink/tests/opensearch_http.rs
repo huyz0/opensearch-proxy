@@ -406,6 +406,82 @@ async fn get_by_id_sends_request_and_returns_the_found_document() {
     assert!(got.body.is_empty());
 }
 
+/// A one-shot mock that answers with a fixed HTTP status (unlike `start_mock`,
+/// which always answers `200`), needed to exercise the sink's not-found path:
+/// OpenSearch signals a missing document via a `404` status, not a body field.
+async fn start_mock_with_status(status: u16, response: &'static str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let io = TokioIo::new(stream);
+        let service = service_fn(move |req: Request<Incoming>| async move {
+            let _ = req.into_body().collect().await;
+            Ok::<_, std::convert::Infallible>(
+                Response::builder()
+                    .status(status)
+                    .body(Full::new(Bytes::from(response)))
+                    .unwrap(),
+            )
+        });
+        let _ = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+            .serve_connection(io, service)
+            .await;
+    });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn get_by_id_reports_not_found_for_a_missing_document() {
+    // OpenSearch reports a missing document with a `404` status; the sink keys
+    // `found` off the HTTP status, not a body field (`docs/03`).
+    let base = start_mock_with_status(404, r#"{"found":false}"#).await;
+    let sink = OpenSearchSink::new();
+
+    let outcome = sink
+        .get(ReadOp::new(
+            target("eu-1", "orders-shared", &base),
+            "acme:missing",
+            Some("acme".to_owned()),
+        ))
+        .await
+        .unwrap();
+
+    assert!(!outcome.found);
+    assert_eq!(outcome.status, 404);
+}
+
+#[tokio::test]
+async fn count_parses_the_count_field_from_the_response() {
+    let (base, captured) = start_mock(r#"{"count":42,"_shards":{}}"#).await;
+    let sink = OpenSearchSink::new();
+
+    let op = SearchOp::new(
+        target("eu-1", "orders-shared", &base),
+        br#"{"query":{"match_all":{}}}"#.to_vec(),
+    );
+    let outcome = sink.count(op).await.unwrap();
+
+    assert_eq!(outcome.count, 42);
+    let got = captured.lock().unwrap().clone();
+    assert_eq!(got.method, "POST");
+    assert_eq!(got.uri, "/orders-shared/_count");
+}
+
+#[tokio::test]
+async fn count_defaults_to_zero_when_the_response_has_no_count_field() {
+    let (base, _captured) = start_mock(r#"{"not_a_count_response":true}"#).await;
+    let sink = OpenSearchSink::new();
+
+    let op = SearchOp::new(
+        target("eu-1", "orders-shared", &base),
+        br#"{"query":{"match_all":{}}}"#.to_vec(),
+    );
+    let outcome = sink.count(op).await.unwrap();
+
+    assert_eq!(outcome.count, 0);
+}
+
 #[tokio::test]
 async fn each_cluster_routes_to_its_own_sharded_pool() {
     // Two clusters, two upstreams: each op must reach the endpoint of its own

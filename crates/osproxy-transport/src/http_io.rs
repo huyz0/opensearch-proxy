@@ -225,3 +225,99 @@ fn has_content_type(headers: &[(String, String)]) -> bool {
 fn error_body(message: &str) -> Vec<u8> {
     format!(r#"{{"error":"{message}"}}"#).into_bytes()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http_body_util::BodyExt;
+
+    #[test]
+    fn map_method_covers_every_supported_verb_and_rejects_others() {
+        assert_eq!(map_method(&Method::GET), Some(HttpMethod::Get));
+        assert_eq!(map_method(&Method::PUT), Some(HttpMethod::Put));
+        assert_eq!(map_method(&Method::POST), Some(HttpMethod::Post));
+        assert_eq!(map_method(&Method::DELETE), Some(HttpMethod::Delete));
+        assert_eq!(map_method(&Method::HEAD), Some(HttpMethod::Head));
+        assert_eq!(map_method(&Method::PATCH), None);
+        assert_eq!(map_method(&Method::OPTIONS), None);
+    }
+
+    #[test]
+    fn map_protocol_distinguishes_http2_from_everything_else() {
+        assert_eq!(map_protocol(hyper::Version::HTTP_2), Protocol::Http2);
+        assert_eq!(map_protocol(hyper::Version::HTTP_11), Protocol::Http1);
+        assert_eq!(map_protocol(hyper::Version::HTTP_10), Protocol::Http1);
+    }
+
+    #[test]
+    fn content_length_parses_the_header_case_insensitively() {
+        let headers = vec![("Content-Length".to_owned(), "42".to_owned())];
+        assert_eq!(content_length(&headers), Some(42));
+    }
+
+    #[test]
+    fn content_length_is_none_when_absent_or_unparsable() {
+        assert_eq!(content_length(&[]), None);
+        let bad = vec![("content-length".to_owned(), "not-a-number".to_owned())];
+        assert_eq!(content_length(&bad), None);
+    }
+
+    #[test]
+    fn overloaded_response_is_a_429_with_retry_after() {
+        let resp = overloaded_response();
+        assert_eq!(resp.status, 429);
+        assert!(resp
+            .headers
+            .iter()
+            .any(|(k, v)| k == "retry-after" && v == "1"));
+    }
+
+    #[test]
+    fn has_content_type_is_case_insensitive() {
+        assert!(has_content_type(&[(
+            "Content-Type".to_owned(),
+            "text/plain".to_owned()
+        )]));
+        assert!(!has_content_type(&[(
+            "x-tenant".to_owned(),
+            "acme".to_owned()
+        )]));
+    }
+
+    #[tokio::test]
+    async fn render_defaults_to_json_content_type_when_the_handler_did_not_set_one() {
+        let resp = render(IngressResponse::json(200, b"{}".to_vec()));
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "application/json"
+        );
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&body[..], b"{}");
+    }
+
+    #[tokio::test]
+    async fn render_preserves_a_handler_set_content_type() {
+        let out =
+            IngressResponse::json(200, b"plain".to_vec()).with_header("content-type", "text/plain");
+        let resp = render(out);
+        assert_eq!(resp.headers().get("content-type").unwrap(), "text/plain");
+    }
+
+    #[tokio::test]
+    async fn render_forward_pipes_the_streaming_body_through() {
+        let out = StreamingResponse::stream(200, buffered_response(b"upstream".to_vec()));
+        let resp = render_forward(out);
+        assert_eq!(resp.status(), 200);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&body[..], b"upstream");
+    }
+
+    #[test]
+    fn error_body_is_value_free_json() {
+        assert_eq!(
+            error_body("too large"),
+            br#"{"error":"too large"}"#.to_vec()
+        );
+    }
+}

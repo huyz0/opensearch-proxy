@@ -76,3 +76,91 @@ pub(crate) async fn directive_store(
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use osproxy_core::EndpointKind;
+    use osproxy_core::{ClusterId, IndexName};
+    use osproxy_server::auth::ReferenceAuthenticator;
+    use osproxy_server::tenancy::ReferenceTenancy;
+    use osproxy_spi::HttpMethod;
+    use osproxy_tenancy::TenancyRouter;
+    use osproxy_transport::{IngressHandler as _, IngressRequest};
+
+    fn handler() -> AppHandler<ReferenceAuthenticator> {
+        let tenancy = ReferenceTenancy::new(
+            ClusterId::from("eu-1"),
+            IndexName::from("shared"),
+            "http://localhost:9200",
+        );
+        let pipeline = osproxy_engine::Pipeline::new(
+            TenancyRouter::new(tenancy),
+            osproxy_sink::OpenSearchSink::new(),
+        );
+        AppHandler::new(pipeline, ReferenceAuthenticator::dev())
+    }
+
+    /// A `POST /admin/directives` request; `bearer` sets (or omits) the
+    /// `authorization` header so tests can drive the real token-gate branch.
+    fn publish_request(bearer: Option<&str>) -> IngressRequest {
+        IngressRequest {
+            method: HttpMethod::Post,
+            protocol: osproxy_spi::Protocol::Http1,
+            path: "/admin/directives".to_owned(),
+            endpoint: EndpointKind::IngestDoc,
+            logical_index: String::new(),
+            doc_id: None,
+            headers: bearer
+                .map(|t| vec![("authorization".to_owned(), format!("Bearer {t}"))])
+                .unwrap_or_default(),
+            body: br#"{"directives":[]}"#.to_vec(),
+            query: None,
+            client_cert_subject: None,
+            secure: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn without_a_store_and_token_the_admin_channel_stays_disabled() {
+        // Neither present: the real endpoint reports not_enabled, not a 404 route
+        // miss, distinguishing "turned off" from "no such route".
+        let h = with_directive_admin(handler(), None, None);
+        let resp = h.handle(publish_request(Some("whatever"))).await;
+        assert_eq!(resp.status, 404);
+        assert!(String::from_utf8_lossy(&resp.body).contains("not_enabled"));
+    }
+
+    #[tokio::test]
+    async fn a_store_without_a_token_leaves_the_channel_disabled() {
+        let store = Arc::new(InMemoryDirectiveStore::new());
+        let h = with_directive_admin(handler(), Some(store), None);
+        let resp = h.handle(publish_request(Some("whatever"))).await;
+        assert_eq!(resp.status, 404);
+        assert!(String::from_utf8_lossy(&resp.body).contains("not_enabled"));
+    }
+
+    #[tokio::test]
+    async fn a_store_and_token_enable_the_admin_channel() {
+        let store = Arc::new(InMemoryDirectiveStore::new());
+        let h = with_directive_admin(handler(), Some(store), Some("s3cret"));
+        // Wrong token: channel is enabled (not not_enabled) but unauthorized.
+        let unauthorized = h.handle(publish_request(Some("nope"))).await;
+        assert_eq!(unauthorized.status, 401);
+        // Right token: publish succeeds.
+        let published = h.handle(publish_request(Some("s3cret"))).await;
+        assert_eq!(published.status, 200);
+        assert!(String::from_utf8_lossy(&published.body).contains("published"));
+    }
+
+    #[tokio::test]
+    async fn directive_store_defaults_to_an_in_memory_store_without_etcd_config() {
+        let cfg = Config::resolve_for_test(&[]).unwrap();
+        assert!(cfg.etcd.is_none());
+        let (_read, admin) = directive_store(&cfg).await.unwrap();
+        assert!(
+            admin.is_some(),
+            "in-memory store doubles as the admin store"
+        );
+    }
+}

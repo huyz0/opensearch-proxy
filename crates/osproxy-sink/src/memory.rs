@@ -420,4 +420,61 @@ mod tests {
             .unwrap();
         assert!(!miss.found);
     }
+
+    #[test]
+    fn apply_update_with_no_existing_doc_uses_upsert_when_present() {
+        let patch = br#"{"upsert":{"msg":"seed"}}"#;
+        let result = apply_update(None, patch).expect("upsert applies");
+        assert_eq!(result, serde_json::json!({"msg":"seed"}));
+    }
+
+    #[test]
+    fn apply_update_with_no_existing_doc_and_no_upsert_is_none() {
+        let patch = br#"{"doc":{"msg":"never lands"}}"#;
+        assert!(apply_update(None, patch).is_none(), "no upsert configured");
+    }
+
+    #[test]
+    fn apply_update_with_doc_as_upsert_falls_back_to_the_doc_field() {
+        let patch = br#"{"doc_as_upsert":true,"doc":{"msg":"seed via doc"}}"#;
+        let result = apply_update(None, patch).expect("doc_as_upsert applies the doc");
+        assert_eq!(result, serde_json::json!({"msg":"seed via doc"}));
+    }
+
+    #[test]
+    fn apply_update_merges_the_doc_patch_into_the_existing_source() {
+        let existing = serde_json::json!({"msg":"old","kept":1});
+        let patch = br#"{"doc":{"msg":"new"}}"#;
+        let result = apply_update(Some(existing), patch).expect("merges");
+        assert_eq!(result, serde_json::json!({"msg":"new","kept":1}));
+    }
+
+    #[tokio::test]
+    async fn cursor_passthrough_is_unsupported_by_the_in_memory_sink() {
+        // `MemorySink` does not override the `Reader::cursor` default; a sink
+        // that cannot passthrough (this in-memory test double, or a write-only
+        // queue) must reject it rather than silently no-op.
+        let sink = MemorySink::new();
+        let op = crate::read::CursorOp::new(
+            ClusterId::from("c"),
+            osproxy_spi::HttpMethod::Post,
+            "/_search/scroll",
+            b"{}".to_vec(),
+        );
+        let err = sink.cursor(op).await.unwrap_err();
+        assert!(matches!(err, SinkError::Transport { .. }));
+    }
+
+    #[tokio::test]
+    async fn forward_stream_is_unsupported_by_the_in_memory_sink() {
+        let sink = MemorySink::new();
+        let op = crate::read::ForwardOp::new(
+            ClusterId::from("c"),
+            osproxy_spi::HttpMethod::Get,
+            "/_cat",
+        );
+        let body = crate::opensearch::buffered(bytes::Bytes::new());
+        let err = sink.forward_stream(op, body).await.unwrap_err();
+        assert!(matches!(err, SinkError::Transport { .. }));
+    }
 }

@@ -212,3 +212,189 @@ fn resolve_inject_errors_when_a_required_header_is_absent() {
     let err = resolve_inject(&fields, &PartitionId::from("acme"), &ctx).unwrap_err();
     assert!(matches!(err, SpiError::HeaderMissing { header } if header == "x-region"));
 }
+
+#[test]
+fn resolve_inject_resolves_or_errors_on_a_principal_attribute() {
+    let fields = vec![InjectedField::new(
+        FieldName::from("_region"),
+        InjectedValue::FromPrincipal("region".to_owned()),
+    )];
+    let rid = RequestId::from("r1");
+    let headers: Vec<(String, String)> = vec![];
+
+    // Present: resolves to a constant.
+    let with_attr = Principal::new(PrincipalId::from("svc"))
+        .with_attr(osproxy_spi::PrincipalAttr::new("region", "eu"));
+    let ctx = RequestCtx::new(
+        &with_attr,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::IngestDoc,
+        Protocol::Http1,
+        "logical",
+        HeaderView::new(&headers),
+        b"{}",
+    );
+    let resolved = resolve_inject(&fields, &PartitionId::from("acme"), &ctx).expect("resolves");
+    assert_eq!(
+        resolved[0].value,
+        InjectedValue::Constant(serde_json::Value::from("eu"))
+    );
+
+    // Absent: a config/identity mismatch, surfaced as a routing failure.
+    let without_attr = Principal::new(PrincipalId::from("svc"));
+    let ctx = RequestCtx::new(
+        &without_attr,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::IngestDoc,
+        Protocol::Http1,
+        "logical",
+        HeaderView::new(&headers),
+        b"{}",
+    );
+    let err = resolve_inject(&fields, &PartitionId::from("acme"), &ctx).unwrap_err();
+    assert!(matches!(err, SpiError::PrincipalAttrMissing { attr } if attr == "region"));
+}
+
+#[tokio::test]
+async fn resolve_rejects_a_tenancy_unaware_endpoint() {
+    let router = TenancyRouter::new(SharedTenancy { id_rule: None });
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r1");
+    let headers: Vec<(String, String)> = vec![];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Get,
+        EndpointKind::Admin,
+        Protocol::Http1,
+        "logical",
+        HeaderView::new(&headers),
+        b"",
+    );
+    let err = router.resolve(&ctx).await.unwrap_err();
+    assert!(matches!(err, SpiError::UnsupportedEndpoint { .. }));
+}
+
+#[tokio::test]
+async fn dedicated_cluster_target_keeps_the_logical_index_name_unchanged() {
+    let router = TenancyRouter::new(EncodedHeaderTenancy);
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r1");
+    let headers = vec![("x-tenant-token".to_owned(), "acme.sig".to_owned())];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Get,
+        EndpointKind::GetById,
+        Protocol::Http1,
+        "my-logical-index",
+        HeaderView::new(&headers),
+        b"",
+    );
+    let resolved = router
+        .resolve_placement(&ctx, PartitionId::from("acme"), "my-logical-index")
+        .await
+        .expect("resolves");
+    assert_eq!(resolved.decision.target.index.as_str(), "my-logical-index");
+}
+
+#[tokio::test]
+async fn admit_write_delegates_to_the_tenancy_spi() {
+    let router = TenancyRouter::new(SharedTenancy { id_rule: None });
+    // The reference `SharedTenancy` in this test module has no custom
+    // `admit_write`, so the `TenancySpi` default (always admit) applies.
+    assert!(
+        router
+            .admit_write(&PartitionId::from("acme"), Epoch::new(1))
+            .await
+    );
+}
+
+/// Calls `cluster_endpoint` through the `Router` trait bound (not the inherent
+/// `TenancyRouter` method), so both call paths are covered by one helper.
+fn cluster_endpoint_via_trait<R: Router>(router: &R, cluster: &ClusterId) -> Option<String> {
+    router.cluster_endpoint(cluster)
+}
+
+#[test]
+fn cluster_endpoint_defaults_to_none_when_the_tenancy_does_not_override_it() {
+    let router = TenancyRouter::new(SharedTenancy { id_rule: None });
+    let c = ClusterId::from("c");
+    assert_eq!(router.cluster_endpoint(&c), None);
+    assert_eq!(cluster_endpoint_via_trait(&router, &c), None);
+}
+
+#[test]
+fn spi_accessor_returns_the_wrapped_tenancy() {
+    let router = TenancyRouter::new(SharedTenancy { id_rule: None });
+    // Just needs to compile and return something usable; `SharedTenancy` has no
+    // public state to assert on, so call a trait method through it.
+    assert_eq!(router.spi().injected_fields().len(), 1);
+}
+
+/// A `DedicatedIndex` tenancy that also injects a decorative field, a legal
+/// but unusual `TenancySpi` combination, to prove `build_transform` still
+/// applies no inject/id-rule outside `SharedIndex`.
+struct DedicatedIndexWithInject;
+
+impl TenancySpi for DedicatedIndexWithInject {
+    fn resolve_partition(
+        &self,
+        ctx: &RequestCtx<'_>,
+        body: BodyDoc<'_>,
+    ) -> Result<PartitionId, SpiError> {
+        crate::resolve_partition_spec(&PartitionKeySpec::Header("x-tenant".to_owned()), ctx, body)
+    }
+    fn doc_id_rule(&self) -> Option<DocIdRule> {
+        None
+    }
+    fn injected_fields(&self) -> Vec<InjectedField> {
+        vec![InjectedField::new(
+            FieldName::from("_region"),
+            InjectedValue::Constant(serde_json::Value::from("eu")),
+        )]
+    }
+    fn sensitive_fields(&self) -> SensitivitySpec {
+        SensitivitySpec::none()
+    }
+    async fn placement_for(&self, partition: &PartitionId) -> Result<PlacementAt, SpiError> {
+        Ok(PlacementAt::new(
+            Placement::DedicatedIndex {
+                cluster: ClusterId::from("c"),
+                index: IndexName::from(format!("idx-{}", partition.as_str())),
+            },
+            Epoch::new(1),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn dedicated_index_target_pins_the_placements_physical_index() {
+    let router = TenancyRouter::new(DedicatedIndexWithInject);
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r1");
+    let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Get,
+        EndpointKind::GetById,
+        Protocol::Http1,
+        "logical",
+        HeaderView::new(&headers),
+        b"",
+    );
+    let resolved = router
+        .resolve_placement(&ctx, PartitionId::from("acme"), "logical")
+        .await
+        .expect("DedicatedIndex needs no id rule");
+    assert_eq!(resolved.decision.target.index.as_str(), "idx-acme");
+    // Dedicated modes never rewrite the body: `build_transform` applies inject
+    // only to `SharedIndex`, even when `injected_fields()` reports one.
+    assert!(matches!(
+        resolved.decision.body_transform,
+        BodyTransform::None
+    ));
+}

@@ -150,3 +150,7 @@ impl TenancySpi for ReferenceTenancy {
         Ok(PlacementAt::new(placement, Epoch::new(1)).with_endpoint(self.endpoint.clone()))
     }
 }
+
+#[cfg(test)]
+#[path = "tenancy_tests.rs"]
+mod tests;

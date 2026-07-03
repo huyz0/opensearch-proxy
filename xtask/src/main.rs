@@ -12,6 +12,8 @@
 //!   arch      Static crate dependency-direction / acyclicity check.
 //!   bench     Deterministic instruction-count microbenchmarks (needs valgrind).
 //!   check-fips Build + test the FIPS feature (needs cmake/C/Go; else skips).
+//!   coverage  Line-coverage gate via cargo-llvm-cov (>=90%). Opt-in, not part
+//!             of `ci`: an instrumented rebuild takes minutes.
 //!
 //! See docs/08-engineering-standards.md, docs/10-review-process.md, docs/12.
 
@@ -33,6 +35,7 @@ fn main() -> ExitCode {
         "bench" => bench(),
         "bench-local" => bench_local(),
         "check-fips" => check_fips(),
+        "coverage" => coverage(),
         other => Err(format!("unknown command: {other}\n{USAGE}")),
     };
     match result {
@@ -45,7 +48,7 @@ fn main() -> ExitCode {
 }
 
 const USAGE: &str = "usage: cargo xtask \
-     <ci|fmt|clippy|test|doc|budgets|skills|spawn|arch|bench|bench-local|check-fips>";
+     <ci|fmt|clippy|test|doc|budgets|skills|spawn|arch|bench|bench-local|check-fips|coverage>";
 
 fn run_ci() -> Result<(), String> {
     fmt()?;
@@ -269,6 +272,33 @@ fn check_fips() -> Result<(), String> {
             "--no-default-features",
             "--features",
             "fips",
+        ],
+        &[],
+    )
+}
+
+/// Line-coverage gate via `cargo-llvm-cov` (docs/10 §semantic coverage): fails
+/// under 90% workspace line coverage, excluding `xtask` (build tooling, not
+/// product code) by filename. A separate opt-in command, not part of `run_ci`:
+/// the instrumented rebuild `cargo-llvm-cov` needs takes minutes, too slow for
+/// the gate every commit runs locally before a hook fires.
+fn coverage() -> Result<(), String> {
+    if !tool_on_path("cargo-llvm-cov") {
+        return Err(
+            "cargo-llvm-cov is not installed; run `cargo install cargo-llvm-cov` \
+             (see https://github.com/taiki-e/cargo-llvm-cov)"
+                .to_owned(),
+        );
+    }
+    cargo(
+        &[
+            "llvm-cov",
+            "--workspace",
+            "--summary-only",
+            "--ignore-filename-regex",
+            "xtask/src",
+            "--fail-under-lines",
+            "90",
         ],
         &[],
     )

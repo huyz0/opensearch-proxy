@@ -92,3 +92,53 @@ pub trait IngressHandler: Send + Sync + 'static {
         async { IngressResponse::json(500, br#"{"error":"bulk_stream_not_implemented"}"#.to_vec()) }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::request::IngressRequest;
+
+    /// A handler that opts into nothing, exercising every default method's
+    /// stub behavior (the contract a minimal/incomplete implementer gets for
+    /// free before wiring the streamed fast paths).
+    struct Minimal;
+
+    impl IngressHandler for Minimal {
+        async fn handle(&self, _req: IngressRequest) -> IngressResponse {
+            IngressResponse::json(200, Vec::new())
+        }
+    }
+
+    #[test]
+    fn defaults_opt_out_of_every_streamed_fast_path() {
+        let h = Minimal;
+        assert!(!h.forward_plan("/idx", "idx"));
+        assert!(!h.wants_search_stream(EndpointKind::Search, None));
+        assert!(!h.wants_bulk_stream(EndpointKind::IngestBulk, &[]));
+    }
+
+    #[tokio::test]
+    async fn default_handle_search_stream_reports_not_implemented() {
+        let h = Minimal;
+        let req = IngressRequest {
+            method: osproxy_spi::HttpMethod::Get,
+            protocol: osproxy_spi::Protocol::Http1,
+            path: "/idx/_search".to_owned(),
+            endpoint: EndpointKind::Search,
+            logical_index: "idx".to_owned(),
+            doc_id: None,
+            headers: Vec::new(),
+            body: Vec::new(),
+            query: None,
+            client_cert_subject: None,
+            secure: true,
+        };
+        let resp = h.handle_search_stream(req).await;
+        assert_eq!(resp.status, 500);
+    }
+
+    // `handle_forward` and `handle_bulk_stream`'s defaults take a real hyper
+    // `body::Incoming`, which only hyper's connection machinery can construct,
+    // so they are not unit-testable in isolation; `handle_search_stream`'s
+    // default above exercises the identical "stub 500" shape without one.
+}

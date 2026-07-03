@@ -234,4 +234,131 @@ mod tests {
         assert_eq!(r.id, "del-id");
         assert!(!r.created);
     }
+
+    fn doc_body() -> Bytes {
+        Bytes::from_static(br#"{"a":1}"#)
+    }
+
+    #[test]
+    fn request_parts_for_index_with_id_puts_doc_with_routing() {
+        let idx = IndexName::from("orders");
+        let (method, uri, _body, fallback) = request_parts(
+            "http://h:9200",
+            &idx,
+            &DocOp::Index {
+                id: Some("acme:1".to_owned()),
+                routing: Some("acme".to_owned()),
+                body: doc_body(),
+            },
+        );
+        assert_eq!(method, Method::PUT);
+        assert_eq!(uri, "http://h:9200/orders/_doc/acme:1?routing=acme");
+        assert_eq!(fallback, "acme:1");
+    }
+
+    #[test]
+    fn request_parts_for_index_with_no_id_posts_doc() {
+        let idx = IndexName::from("orders");
+        let (method, uri, _body, fallback) = request_parts(
+            "http://h:9200",
+            &idx,
+            &DocOp::Index {
+                id: None,
+                routing: None,
+                body: doc_body(),
+            },
+        );
+        assert_eq!(method, Method::POST);
+        assert_eq!(uri, "http://h:9200/orders/_doc");
+        assert_eq!(fallback, "");
+    }
+
+    #[test]
+    fn request_parts_for_create_with_id_puts_create_fail_if_exists() {
+        let idx = IndexName::from("orders");
+        let (method, uri, _body, fallback) = request_parts(
+            "http://h:9200",
+            &idx,
+            &DocOp::Create {
+                id: Some("acme:2".to_owned()),
+                routing: None,
+                body: doc_body(),
+            },
+        );
+        assert_eq!(method, Method::PUT);
+        assert_eq!(uri, "http://h:9200/orders/_create/acme:2");
+        assert_eq!(fallback, "acme:2");
+    }
+
+    #[test]
+    fn request_parts_for_create_with_no_id_posts_op_type_create() {
+        let idx = IndexName::from("orders");
+        let (method, uri, _body, fallback) = request_parts(
+            "http://h:9200",
+            &idx,
+            &DocOp::Create {
+                id: None,
+                routing: Some("acme".to_owned()),
+                body: doc_body(),
+            },
+        );
+        assert_eq!(method, Method::POST);
+        assert_eq!(uri, "http://h:9200/orders/_doc?op_type=create&routing=acme");
+        assert_eq!(fallback, "");
+    }
+
+    #[test]
+    fn request_parts_for_update_posts_update() {
+        let idx = IndexName::from("orders");
+        let (method, uri, _body, fallback) = request_parts(
+            "http://h:9200",
+            &idx,
+            &DocOp::Update {
+                id: "acme:3".to_owned(),
+                routing: None,
+                body: doc_body(),
+            },
+        );
+        assert_eq!(method, Method::POST);
+        assert_eq!(uri, "http://h:9200/orders/_update/acme:3");
+        assert_eq!(fallback, "acme:3");
+    }
+
+    #[test]
+    fn request_parts_for_delete_sends_no_body() {
+        let idx = IndexName::from("orders");
+        let (method, uri, body, fallback) = request_parts(
+            "http://h:9200",
+            &idx,
+            &DocOp::Delete {
+                id: "acme:4".to_owned(),
+                routing: Some("acme".to_owned()),
+            },
+        );
+        assert_eq!(method, Method::DELETE);
+        assert_eq!(uri, "http://h:9200/orders/_doc/acme:4?routing=acme");
+        assert!(body.is_empty());
+        assert_eq!(fallback, "acme:4");
+    }
+
+    #[test]
+    fn build_request_carries_the_content_type_and_body() {
+        let idx = IndexName::from("orders");
+        let (req, fallback) = build_request(
+            "http://h:9200",
+            &idx,
+            &DocOp::Index {
+                id: Some("acme:1".to_owned()),
+                routing: None,
+                body: Bytes::from_static(br#"{"a":1}"#),
+            },
+        )
+        .unwrap();
+        assert_eq!(req.method(), Method::PUT);
+        assert_eq!(
+            req.headers().get("content-type").unwrap(),
+            "application/json"
+        );
+        assert_eq!(fallback, "acme:1");
+    }
 }
