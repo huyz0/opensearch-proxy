@@ -15,8 +15,15 @@ in [`docs/01-architecture.md`](../01-architecture.md) §5.
 - **Doc-id construction** and **partition-field injection** on ingest.
 - **Connection pooling**: downstream keep-alive + upstream per-cluster pools with
   TLS session reuse.
-- **Auth**: client authentication (mTLS + token) and upstream credential
-  management; optional post-auth authorization.
+- **Auth**: client authentication (mTLS + token). Upstream authentication is
+  either the client's own forwarded credential (pass-through) or an SPI-
+  supplied one (`TenancySpi::upstream_credentials`, resolved fresh per route,
+  overwrites a same-named forwarded header) — see
+  [The SPI](05-spi-guide.md). Upstream TLS/mTLS (`upstream_tls_ca`/`_cert`/
+  `_key`) is independent of ingress TLS and fails closed: an `https://`
+  cluster with no trust anchor configured is refused, never silently dialed
+  in cleartext or trusted via the public web PKI. Optional post-auth
+  authorization.
 - **Scroll/PIT affinity** pinning (opt-in).
 - **Epoch-gated partition migration**.
 - **Pluggable write sink** (OpenSearch now; the `Sink` trait makes Kafka-based
@@ -96,6 +103,7 @@ OpenSearch (see [Components](04-components.md)).
 | NFR-S3 | Header-delivered debug directives are HMAC-signed; clients cannot self-enable expensive tracing. |
 | NFR-S4 | Partition isolation enforced on the read path; a client-supplied query cannot bypass the partition filter. |
 | NFR-S5 | FIPS build negotiates only FIPS-approved TLS versions and cipher suites. |
+| NFR-S6 | An `https://` upstream cluster with no `upstream_tls_ca` configured is refused, never dialed in cleartext or trusted via an implicit CA store. |
 
 ### Maintainability / quality (NFR-Q)
 
