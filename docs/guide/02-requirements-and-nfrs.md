@@ -7,7 +7,21 @@ in [`docs/01-architecture.md`](../01-architecture.md) §5.
 ## Functional scope
 
 - **Ingress**: HTTP/1.1, HTTP/2, and gRPC; cleartext and TLS; optional FIPS build.
-- **Single-target routing** for **all** request types (read and write).
+- **Single-target routing** for **all** request types (read and write), resolved
+  by `TenancySpi` into one of three placement kinds — `SharedIndex` (many
+  partitions, one physical index, isolated by an injected field + a
+  partition-prefixed id), `DedicatedIndex` (one physical index per partition),
+  `DedicatedCluster` (one whole cluster per partition) — or, for routing that
+  isn't tenancy-shaped at all, the lower-level `RoutingSpi` escape hatch
+  (`route → RouteDecision` directly). `routing_hint` lets a `SharedIndex`
+  implementer override the `_routing` wire value independently of the
+  partition-prefixed id. See [The SPI](05-spi-guide.md).
+- **Tenant-agnostic passthrough** (opt-in, index-prefix scoped): requests
+  whose logical index matches skip tenancy entirely and forward verbatim to a
+  configured cluster, so one instance can mix tenanted and legacy traffic.
+- **Async write mode** (opt-in, per-request `X-Write-Mode: async`): honest
+  `202 Accepted` + an `op_id` handed to a pluggable queue producer; refuses
+  rather than silently downgrading to sync when no producer is configured.
 - **Ingest demux**: one mixed-partition `_bulk` body split into per-placement
   writes, response `items[]` re-interleaved in original order.
 - **Query rewrite** (mandatory partition filter) and **response field-stripping**
