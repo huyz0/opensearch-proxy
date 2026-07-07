@@ -29,6 +29,7 @@ impl PinRouter {
             partition: PartitionId::from("pinned"),
             decision: RouteDecision::passthrough(self.target.clone(), Protocol::Http1, Epoch::ZERO),
             migration: MigrationPhase::Settled,
+            routing_hint: None,
         }
     }
 }

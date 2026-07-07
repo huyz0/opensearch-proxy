@@ -77,11 +77,15 @@ pub(crate) fn build_delete_op(
 /// the placement's id rule. Epoch-stamped like any write.
 pub(crate) fn build_delete_op_physical(resolved: &Resolved, physical_id: String) -> WriteOp {
     let shape = read_shape(&resolved.decision.body_transform);
+    let routing_value = resolved
+        .routing_hint
+        .as_deref()
+        .unwrap_or_else(|| resolved.partition.as_str());
     let routing = shape
         .id_rule
         .as_ref()
         .filter(|r| r.set_routing)
-        .map(|_| resolved.partition.as_str().to_owned());
+        .map(|_| routing_value.to_owned());
     WriteOp::new(
         resolved.decision.target.clone(),
         DocOp::Delete {
@@ -107,11 +111,12 @@ fn physical_id_and_routing(
         // No id rule (e.g. a dedicated index): the client id is the physical id.
         None => logical_id.to_owned(),
     };
+    let routing_value = resolved.routing_hint.as_deref().unwrap_or(partition);
     let routing = shape
         .id_rule
         .as_ref()
         .filter(|r| r.set_routing)
-        .map(|_| partition.to_owned());
+        .map(|_| routing_value.to_owned());
     Ok((physical_id, routing))
 }
 

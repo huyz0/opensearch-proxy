@@ -164,4 +164,19 @@ pub trait TenancySpi: Send + Sync + 'static {
     fn cluster_endpoint(&self, _cluster: &ClusterId) -> Option<String> {
         None
     }
+
+    /// Overrides the OpenSearch `_routing` value for a `SharedIndex` placement,
+    /// when [`DocIdRule::set_routing`] is on. Only meaningful in `SharedIndex`
+    /// mode: `DedicatedCluster`/`DedicatedIndex` never construct a routing value,
+    /// so this is not consulted there.
+    ///
+    /// Default `None`: `_routing` is set to the partition id itself, unchanged
+    /// from the pre-existing behavior. An implementer with several logical
+    /// shards per partition (or that wants routing decoupled from the partition
+    /// value entirely) overrides this to return a different string; it never
+    /// affects `_id` construction or read isolation, both of which stay keyed on
+    /// the real partition id.
+    fn routing_hint(&self, _partition: &PartitionId) -> Option<String> {
+        None
+    }
 }

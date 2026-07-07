@@ -32,9 +32,10 @@ use crate::error::RequestError;
 pub fn build_write_batch(resolved: &Resolved, body: &[u8]) -> Result<WriteBatch, RequestError> {
     let decision = &resolved.decision;
     let partition = resolved.partition.as_str();
+    let routing_value = resolved.routing_hint.as_deref().unwrap_or(partition);
 
     let (id, out_body) = apply_transform(body, &decision.body_transform, partition)?;
-    let routing = routing_for(&decision.body_transform, partition);
+    let routing = routing_for(&decision.body_transform, routing_value);
 
     let op = WriteOp::new(
         decision.target.clone(),
@@ -148,6 +149,7 @@ mod tests {
                 epoch: Epoch::new(4),
             },
             migration: osproxy_spi::MigrationPhase::Settled,
+            routing_hint: None,
         }
     }
 

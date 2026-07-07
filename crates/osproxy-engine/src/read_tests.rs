@@ -14,6 +14,7 @@ fn resolved(transform: BodyTransform) -> Resolved {
             epoch: Epoch::new(4),
         },
         migration: osproxy_spi::MigrationPhase::Settled,
+        routing_hint: None,
     }
 }
 

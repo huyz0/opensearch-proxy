@@ -149,6 +149,12 @@ pub trait TenancySpi: Send + Sync + 'static {
     /// a placement to consult (cursor affinity, admin pass-through). `None` ⇒ the
     /// request fails closed rather than route blind. Default `None`.
     fn cluster_endpoint(&self, _cluster: &ClusterId) -> Option<String> { None }
+
+    /// Overrides the OpenSearch `_routing` value for a `SharedIndex` placement
+    /// when `DocIdRule::set_routing` is on. Default `None`: `_routing` stays the
+    /// partition id itself. Never affects `_id` construction or read isolation,
+    /// both of which stay keyed on the real partition id.
+    fn routing_hint(&self, _partition: &PartitionId) -> Option<String> { None }
 }
 
 pub struct PlacementAt { pub placement: Placement, pub epoch: PlacementEpoch }

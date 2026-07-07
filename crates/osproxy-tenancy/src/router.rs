@@ -29,6 +29,10 @@ pub struct Resolved {
     /// The partition's migration phase at resolve time (shape-only, for
     /// observability, `docs/06` §5).
     pub migration: MigrationPhase,
+    /// The `_routing` override, from [`TenancySpi::routing_hint`], when the
+    /// placement's id rule asks for routing. `None` means fall back to the
+    /// partition id itself, the pre-existing behavior.
+    pub routing_hint: Option<String>,
 }
 
 /// Turns a [`TenancySpi`] implementation into a [`RoutingSpi`].
@@ -122,10 +126,12 @@ impl<T: TenancySpi> TenancyRouter<T> {
             body_transform,
             epoch: at.epoch,
         };
+        let routing_hint = self.spi.routing_hint(&partition);
         Ok(Resolved {
             partition,
             decision,
             migration: at.phase,
+            routing_hint,
         })
     }
 

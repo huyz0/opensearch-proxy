@@ -155,6 +155,7 @@ fn build_op(
     logical_index: String,
 ) -> Result<Prepared, ItemFailure> {
     let partition = resolved.partition.as_str();
+    let routing_value = resolved.routing_hint.as_deref().unwrap_or(partition);
     let id_rule = id_rule_of(&resolved.decision.body_transform);
     let rule = id_rule.as_ref();
     let bad = |code| fail(action, &logical_index, item.id.clone(), 400, code);
@@ -167,12 +168,12 @@ fn build_op(
             (
                 DocOp::Delete {
                     id,
-                    routing: routing_for(rule, partition),
+                    routing: routing_for(rule, routing_value),
                 },
                 logical,
             )
         }
-        BulkAction::Update => build_update(item, inject, rule, partition, bad)?,
+        BulkAction::Update => build_update(item, inject, rule, partition, routing_value, bad)?,
         BulkAction::Index | BulkAction::Create => {
             let source = item
                 .source
@@ -187,7 +188,7 @@ fn build_op(
             );
             let (id, logical) =
                 index_id(rule, partition, item, source).ok_or_else(|| bad("id_construction"))?;
-            let routing = id.as_ref().and_then(|_| routing_for(rule, partition));
+            let routing = id.as_ref().and_then(|_| routing_for(rule, routing_value));
             // `create` fails-if-exists upstream (op_type=create); `index` replaces.
             let doc = if item.action == BulkAction::Create {
                 DocOp::Create { id, routing, body }
@@ -221,6 +222,7 @@ fn build_update<F: Fn(&'static str) -> ItemFailure>(
     inject: &[(osproxy_core::FieldName, Value)],
     rule: Option<&IdRule<'_>>,
     partition: &str,
+    routing_value: &str,
     bad: F,
 ) -> Result<(DocOp, String), ItemFailure> {
     let logical = item.id.clone().ok_or_else(|| bad("update_without_id"))?;
@@ -238,7 +240,7 @@ fn build_update<F: Fn(&'static str) -> ItemFailure>(
     Ok((
         DocOp::Update {
             id,
-            routing: routing_for(rule, partition),
+            routing: routing_for(rule, routing_value),
             body,
         },
         logical,
@@ -281,11 +283,13 @@ fn physical_id(id_rule: Option<&IdRule<'_>>, partition: &str, logical: &str) -> 
     }
 }
 
-/// The `_routing` value when the id rule sets routing.
-fn routing_for(id_rule: Option<&IdRule<'_>>, partition: &str) -> Option<String> {
+/// The `_routing` value when the id rule sets routing. `routing_value` is the
+/// partition id unless [`TenancySpi::routing_hint`](osproxy_spi::TenancySpi::routing_hint)
+/// overrides it.
+fn routing_for(id_rule: Option<&IdRule<'_>>, routing_value: &str) -> Option<String> {
     id_rule
         .filter(|r| r.set_routing)
-        .map(|_| partition.to_owned())
+        .map(|_| routing_value.to_owned())
 }
 
 /// The id template + routing flag extracted from a body transform.
