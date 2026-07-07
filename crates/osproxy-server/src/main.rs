@@ -20,7 +20,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use osproxy_config::{
-    AdminPassthroughConfig, Config, DiagBaseline, ObservabilityConfig, PassthroughConfig, TlsConfig,
+    AdminPassthroughConfig, Config, DiagBaseline, ObservabilityConfig, PassthroughConfig,
+    TlsConfig, UpstreamTlsConfig,
 };
 use osproxy_core::{ClusterId, IndexName, SystemClock};
 use osproxy_engine::{AdminPolicy, PassthroughPolicy, Pipeline};
@@ -84,7 +85,13 @@ async fn run() -> Result<(), String> {
 
     // The sink has no static endpoint catalog; the tenancy reports each cluster's
     // base URL as part of its placement result (here, the configured upstream).
-    let sink = OpenSearchSink::new();
+    // Upstream TLS is independent of ingress TLS (a proxy behind a cleartext LB
+    // may still need TLS to an external OpenSearch cluster), so this is built
+    // regardless of whether `cfg.tls` (ingress) is set.
+    let sink = match load_upstream_tls(cfg.upstream_tls.as_ref())? {
+        Some(tls) => OpenSearchSink::new().with_upstream_tls(tls),
+        None => OpenSearchSink::new(),
+    };
     let tenancy = ReferenceTenancy::new(
         cluster,
         IndexName::from(cfg.index.as_str()),
@@ -420,4 +427,36 @@ fn load_tls_provider(tls: Option<&TlsConfig>) -> Result<Option<DefaultCryptoProv
     }
     .map_err(|e| format!("building TLS config: {e}"))?;
     Ok(Some(provider))
+}
+
+/// Builds the upstream (sink → OpenSearch cluster) TLS config from
+/// `OSPROXY_UPSTREAM_TLS_CA`/`_CERT`/`_KEY` (PEM file paths). Returns `None`
+/// if unset (every `https://` cluster endpoint then fails closed rather than
+/// connecting in cleartext). Independent of `load_tls_provider` (ingress):
+/// uses `DefaultCryptoProvider::upstream_client_config`, the same feature-
+/// selected crypto module, without needing an ingress server identity.
+fn load_upstream_tls(
+    tls: Option<&UpstreamTlsConfig>,
+) -> Result<Option<Arc<tokio_rustls::rustls::ClientConfig>>, String> {
+    let Some(tls) = tls else {
+        return Ok(None);
+    };
+    let ca_pem =
+        std::fs::read(&tls.ca_path).map_err(|e| format!("reading {}: {e}", tls.ca_path))?;
+    let identity = match (&tls.cert_path, &tls.key_path) {
+        (Some(cert_path), Some(key_path)) => {
+            let cert_pem =
+                std::fs::read(cert_path).map_err(|e| format!("reading {cert_path}: {e}"))?;
+            let key_pem =
+                std::fs::read(key_path).map_err(|e| format!("reading {key_path}: {e}"))?;
+            Some((cert_pem, key_pem))
+        }
+        _ => None,
+    };
+    let identity_refs = identity
+        .as_ref()
+        .map(|(cert, key)| (cert.as_slice(), key.as_slice()));
+    let config = DefaultCryptoProvider::upstream_client_config(&ca_pem, identity_refs)
+        .map_err(|e| format!("building upstream TLS config: {e}"))?;
+    Ok(Some(config))
 }

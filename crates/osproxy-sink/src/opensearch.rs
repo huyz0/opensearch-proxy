@@ -29,6 +29,7 @@ use hyper_util::rt::TokioExecutor;
 use osproxy_core::{Clock, ClusterId, SystemClock, TraceContext, UpstreamCredentials};
 use osproxy_spi::{HttpMethod, Protocol};
 use serde_json::Value;
+use tokio_rustls::rustls::ClientConfig;
 
 use crate::ack::{OpResult, WriteAck};
 use crate::batch::{WriteBatch, WriteOp};
@@ -40,6 +41,7 @@ use crate::read::{
     SearchOutcome, StreamingForward, StreamingSearch,
 };
 use crate::sink::Sink;
+use crate::tls::MaybeTlsConnector;
 use crate::wire::{build_request, doc_uri, parse_result};
 
 /// The error type the upstream body may surface. A buffered body never errors
@@ -76,7 +78,7 @@ where
     body.map_err(Into::into).boxed_unsync()
 }
 
-type HttpClient = Client<CountingConnector<HttpConnector>, ByteBody>;
+type HttpClient = Client<CountingConnector<MaybeTlsConnector>, ByteBody>;
 
 /// One cluster's base URL plus its own pooled HTTP/1.1 and HTTP/2 clients.
 ///
@@ -100,8 +102,10 @@ struct ClusterPool {
 
 impl ClusterPool {
     /// Builds the per-cluster pools for a base URL, each wrapped in a counting
-    /// connector so the pool's connection reuse is observable (NFR-P).
-    fn new(base: String) -> Self {
+    /// connector so the pool's connection reuse is observable (NFR-P). `tls`
+    /// backs an `https://` base URL; a `None` here still builds pools that
+    /// dispatch `http://` fine, only an `https://` dispatch fails closed.
+    fn new(base: String, tls: Option<&Arc<ClientConfig>>) -> Self {
         let opened = Arc::new(AtomicU64::new(0));
         // Disable Nagle on upstream connections too: the proxy writes a complete
         // request and waits for the response, so Nagle+delayed-ACK only adds tail
@@ -109,7 +113,10 @@ impl ClusterPool {
         let connector = || {
             let mut http = HttpConnector::new();
             http.set_nodelay(true);
-            CountingConnector::new(http, Arc::clone(&opened))
+            CountingConnector::new(
+                MaybeTlsConnector::new(http, tls.cloned()),
+                Arc::clone(&opened),
+            )
         };
         Self {
             base,
@@ -182,6 +189,12 @@ pub struct OpenSearchSink {
     failure_threshold: u32,
     cooldown: Duration,
     clock: Arc<dyn Clock>,
+    /// The upstream TLS config for `https://` cluster endpoints, when set
+    /// (`osproxy_transport::CryptoProvider::client_config`, so the same
+    /// crypto module backs ingress and egress). `None`: every `https://`
+    /// dispatch fails closed rather than connecting in cleartext or trusting
+    /// nothing in particular.
+    upstream_tls: Option<Arc<ClientConfig>>,
 }
 
 impl std::fmt::Debug for OpenSearchSink {
@@ -215,7 +228,17 @@ impl OpenSearchSink {
             failure_threshold: DEFAULT_FAILURE_THRESHOLD,
             cooldown: DEFAULT_COOLDOWN,
             clock: Arc::new(SystemClock),
+            upstream_tls: None,
         }
+    }
+
+    /// Sets the upstream TLS config for `https://` cluster endpoints (builder
+    /// style). Applies to every cluster pool this sink builds afterward;
+    /// endpoints that stay `http://` are unaffected either way.
+    #[must_use]
+    pub fn with_upstream_tls(mut self, tls: Arc<ClientConfig>) -> Self {
+        self.upstream_tls = Some(tls);
+        self
     }
 
     /// Sets the per-request upstream timeout (builder style).
@@ -292,9 +315,12 @@ impl OpenSearchSink {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Another writer may have inserted between the read and the write lock.
-        let pool = clusters
-            .entry(cluster.clone())
-            .or_insert_with(|| Arc::new(ClusterPool::new(base.to_owned())));
+        let pool = clusters.entry(cluster.clone()).or_insert_with(|| {
+            Arc::new(ClusterPool::new(
+                base.to_owned(),
+                self.upstream_tls.as_ref(),
+            ))
+        });
         Ok(Arc::clone(pool))
     }
 

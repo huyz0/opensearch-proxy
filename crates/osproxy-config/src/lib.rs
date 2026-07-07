@@ -22,10 +22,12 @@
 
 mod raw;
 mod resolve;
+mod upstream_tls;
 
 use std::net::SocketAddr;
 
 use raw::Raw;
+pub use upstream_tls::UpstreamTlsConfig;
 
 /// The fully validated configuration the binary serves from. Every field is a
 /// ready-to-use value object; no further parsing or fallbacks happen downstream.
@@ -60,6 +62,8 @@ pub struct Config {
     /// request (the verbatim passthrough/admin/cursor paths). Pass-all by default
     /// (sidecar trust), minus the mandatory hop-by-hop/framing set.
     pub header_forwarding: HeaderForwardingConfig,
+    /// TLS-to-upstream settings, or `None` (fails closed on `https://`).
+    pub upstream_tls: Option<UpstreamTlsConfig>,
     /// Full-fidelity traffic capture to a Kafka topic, or `None` (off). Requires
     /// the binary be built with the `capture` feature; a configured capture
     /// on a binary without it is a loud startup error rather than a silent no-op.
@@ -80,8 +84,8 @@ pub struct Config {
     pub etcd: Option<EtcdConfig>,
 }
 
-/// etcd connection settings for the distributed directive store. Plain data (no
-/// etcd client types), so the config crate stays free of the etcd dependency.
+/// etcd connection settings for the distributed directive store (no etcd
+/// client types here, keeping this crate free of that dependency).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EtcdConfig {
     /// The etcd endpoints (`host:port` or full URLs), at least one.
@@ -90,9 +94,8 @@ pub struct EtcdConfig {
     pub directives_key: String,
 }
 
-/// Async fan-out write queue settings: where resolved write ops are enqueued for
-/// a downstream applier (`docs/04` §9, ADR-010). Plain data (no broker types), so
-/// the config crate stays free of any Kafka client.
+/// Async fan-out write queue settings: where resolved write ops are enqueued
+/// for a downstream applier (`docs/04` §9, ADR-010). Plain data, no broker types.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FanoutConfig {
     /// The Kafka bootstrap brokers (`host:port`), at least one.
@@ -123,9 +126,8 @@ pub enum FanoutBodyEncoding {
     Json,
 }
 
-/// Full-fidelity traffic capture settings: where to send the captured exchange
-/// stream. This is plain data (no broker types), so the config crate stays
-/// independent of any Kafka client; the binary builds the producer from it.
+/// Full-fidelity traffic capture settings: where to send the captured
+/// exchange stream. Plain data (no broker types); the binary builds the producer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureConfig {
     /// The Kafka bootstrap brokers (`host:port`), at least one.
@@ -155,9 +157,8 @@ pub struct CaptureConfig {
     pub wal_max_bytes: u64,
 }
 
-/// TLS settings for the capture broker connection: PEM file **paths** (the binary
-/// reads them). Presence of `ca_path` pins that CA; a client cert/key pair adds
-/// mTLS.
+/// TLS settings for the capture broker connection: PEM file **paths**.
+/// Presence of `ca_path` pins that CA; a client cert/key pair adds mTLS.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureTlsConfig {
     /// Path to the CA PEM the broker certificate must chain to (pinned trust).
@@ -168,9 +169,8 @@ pub struct CaptureTlsConfig {
     pub client_key_path: Option<String>,
 }
 
-/// TLS termination settings: PEM file **paths** (the binary reads them, config
-/// stays free of certificate material). mTLS is required when `client_ca_path`
-/// is set.
+/// TLS termination settings: PEM file **paths**. mTLS is required when
+/// `client_ca_path` is set.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TlsConfig {
     /// Path to the server certificate chain PEM.

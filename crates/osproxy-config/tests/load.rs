@@ -109,6 +109,53 @@ fn a_client_ca_without_cert_and_key_is_rejected() {
 }
 
 #[test]
+fn upstream_tls_defaults_to_none() {
+    let cfg = resolve(&[]).unwrap();
+    assert!(cfg.upstream_tls.is_none());
+}
+
+#[test]
+fn upstream_tls_ca_alone_enables_server_auth_only() {
+    let cfg = resolve(&[("upstream_tls_ca", "ca.pem")]).unwrap();
+    let tls = cfg.upstream_tls.expect("upstream tls configured");
+    assert_eq!(tls.ca_path, "ca.pem");
+    assert!(tls.cert_path.is_none());
+    assert!(tls.key_path.is_none());
+}
+
+#[test]
+fn upstream_tls_cert_without_ca_is_rejected() {
+    assert_eq!(
+        resolve(&[("upstream_tls_cert", "c.pem")])
+            .unwrap_err()
+            .field(),
+        "upstream_tls_ca"
+    );
+}
+
+#[test]
+fn upstream_tls_cert_requires_its_key() {
+    assert_eq!(
+        resolve(&[
+            ("upstream_tls_ca", "ca.pem"),
+            ("upstream_tls_cert", "c.pem")
+        ])
+        .unwrap_err()
+        .field(),
+        "upstream_tls_cert"
+    );
+    let cfg = resolve(&[
+        ("upstream_tls_ca", "ca.pem"),
+        ("upstream_tls_cert", "c.pem"),
+        ("upstream_tls_key", "k.pem"),
+    ])
+    .unwrap();
+    let tls = cfg.upstream_tls.unwrap();
+    assert_eq!(tls.cert_path.as_deref(), Some("c.pem"));
+    assert_eq!(tls.key_path.as_deref(), Some("k.pem"));
+}
+
+#[test]
 fn tokens_parse_and_reject_malformed_entries() {
     let cfg = resolve(&[("tokens", "s3cr3t=svc, t2 = other ")]).unwrap();
     assert_eq!(

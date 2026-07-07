@@ -207,3 +207,43 @@ fn alpn_advertises_h2_then_http11() {
         vec![b"h2".to_vec(), b"http/1.1".to_vec()]
     );
 }
+
+#[test]
+fn upstream_client_config_trusts_the_given_ca_and_advertises_alpn() {
+    let tc = test_cert();
+    // The upstream cert IS the trust anchor here (self-signed), same shape as
+    // an operator pointing at their own CA bundle.
+    let config = RingProvider::upstream_client_config(tc.cert_pem.as_bytes(), None).unwrap();
+    assert_eq!(
+        config.alpn_protocols,
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+    );
+}
+
+#[test]
+fn upstream_client_config_supports_mutual_tls_identity() {
+    let tc = test_cert();
+    let identity = test_cert();
+    let config = RingProvider::upstream_client_config(
+        tc.cert_pem.as_bytes(),
+        Some((identity.cert_pem.as_bytes(), identity.key_pem.as_bytes())),
+    )
+    .unwrap();
+    assert_eq!(
+        config.alpn_protocols,
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+    );
+}
+
+#[test]
+fn upstream_client_config_rejects_invalid_ca_pem() {
+    assert!(RingProvider::upstream_client_config(b"not a cert", None).is_err());
+}
+
+#[test]
+fn upstream_client_config_needs_no_server_identity() {
+    // No RingProvider instance (no server cert/key) is built at all — proving
+    // upstream TLS works even when ingress runs cleartext.
+    let tc = test_cert();
+    assert!(RingProvider::upstream_client_config(tc.cert_pem.as_bytes(), None).is_ok());
+}

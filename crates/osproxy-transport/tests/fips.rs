@@ -53,3 +53,15 @@ fn the_fips_provider_offers_exactly_the_approved_suites() {
         );
     }
 }
+
+#[test]
+fn upstream_client_config_uses_the_fips_module_too() {
+    let (cert, _key) = test_cert();
+    // No AwsLcFipsProvider instance built at all (no server identity needed);
+    // upstream TLS gets the same FIPS-validated module ingress uses.
+    let config = AwsLcFipsProvider::upstream_client_config(cert.as_bytes(), None).unwrap();
+    assert_eq!(
+        config.alpn_protocols,
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+    );
+}

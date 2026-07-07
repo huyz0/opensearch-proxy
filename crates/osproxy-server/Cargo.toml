@@ -50,6 +50,10 @@ osproxy-etcd = { workspace = true, optional = true }
 osproxy-spi.workspace = true
 osproxy-tenancy.workspace = true
 osproxy-sink.workspace = true
+# Names ClientConfig for load_upstream_tls; the crypto provider itself is
+# selected by osproxy-transport's fips/non-fips feature (this dep contributes
+# no additional provider selection of its own).
+tokio-rustls.workspace = true
 osproxy-kafka = { workspace = true, optional = true }
 osproxy-kafka-krafka = { workspace = true, optional = true }
 osproxy-kafka-wal = { workspace = true, optional = true }

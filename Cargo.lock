@@ -1924,6 +1924,7 @@ dependencies = [
  "testcontainers",
  "testcontainers-modules",
  "tokio",
+ "tokio-rustls",
  "tonic-prost-build",
 ]
 
@@ -1937,9 +1938,11 @@ dependencies = [
  "hyper-util",
  "osproxy-core",
  "osproxy-spi",
+ "rcgen",
  "serde_json",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tower-service",
 ]
 

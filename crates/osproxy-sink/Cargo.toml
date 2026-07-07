@@ -19,11 +19,20 @@ tower-service.workspace = true
 http-body-util.workspace = true
 bytes.workspace = true
 tokio = { workspace = true, features = ["time"] }
+# Client-side TLS-to-upstream: types only, no crypto module selected here. The
+# concrete provider (ring/aws-lc-rs) is chosen once, by osproxy-transport's
+# feature-gated CryptoProvider, and handed in as an already-built ClientConfig
+# (docs/07's FIPS boundary: aws-lc-rs stays a single-consumer dep).
+tokio-rustls.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "time"] }
 hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["server", "server-auto", "service", "tokio"] }
+# Test-only crypto provider to build a real ClientConfig fixture; never a
+# production dependency of this crate (see the tokio-rustls comment above).
+tokio-rustls = { workspace = true, features = ["ring"] }
+rcgen.workspace = true
 
 [lints]
 workspace = true

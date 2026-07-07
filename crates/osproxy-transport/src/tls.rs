@@ -30,7 +30,9 @@ use tokio_rustls::rustls::crypto::CryptoProvider as RustlsCryptoProvider;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::version::{TLS12, TLS13};
-use tokio_rustls::rustls::{CipherSuite, ServerConfig, SupportedProtocolVersion};
+use tokio_rustls::rustls::{
+    CipherSuite, ClientConfig, RootCertStore, ServerConfig, SupportedProtocolVersion,
+};
 
 /// The FIPS-approved TLS cipher suites the proxy offers (`docs/07` §2 caveat 3,
 /// NFR-S5):
@@ -124,6 +126,25 @@ impl RingProvider {
             server_config: build_server_config(base, cert_pem, key_pem, Some(client_ca_pem))?,
         })
     }
+
+    /// The client-side TLS config for an upstream cluster (`osproxy-sink`'s
+    /// TLS connector), on the same `ring` module ingress uses. Not tied to a
+    /// `RingProvider` instance — no server identity is needed to dial out, so
+    /// this works even when ingress runs cleartext. `ca_pem` is a required
+    /// explicit trust bundle (rustls trusts nothing implicitly); the
+    /// optional `client_identity` `(cert_pem, key_pem)` pair enables mTLS.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TlsError`] if any PEM cannot be parsed or rustls rejects the
+    /// configuration.
+    pub fn upstream_client_config(
+        ca_pem: &[u8],
+        client_identity: Option<(&[u8], &[u8])>,
+    ) -> Result<Arc<ClientConfig>, TlsError> {
+        let base = tokio_rustls::rustls::crypto::ring::default_provider();
+        build_client_config(Arc::new(base), ca_pem, client_identity)
+    }
 }
 
 #[cfg(feature = "non-fips")]
@@ -181,6 +202,23 @@ impl AwsLcFipsProvider {
                 Some(client_ca_pem),
             )?,
         })
+    }
+
+    /// The client-side TLS configuration for connecting to an upstream
+    /// cluster, on the same CMVP-validated aws-lc-rs FIPS module this build's
+    /// ingress uses (mirrors [`RingProvider::upstream_client_config`]; see its
+    /// docs for the parameters).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TlsError`] if any PEM cannot be parsed, rustls rejects the
+    /// configuration, or the linked aws-lc-rs module is not actually
+    /// operating in FIPS mode.
+    pub fn upstream_client_config(
+        ca_pem: &[u8],
+        client_identity: Option<(&[u8], &[u8])>,
+    ) -> Result<Arc<ClientConfig>, TlsError> {
+        build_client_config(Arc::new(fips_base()?), ca_pem, client_identity)
     }
 }
 
@@ -256,6 +294,40 @@ fn build_server_config(
         .map_err(|e| TlsError::Config(e.to_string()))?;
     // Advertise HTTP/2 (preferred) then HTTP/1.1 via ALPN so a TLS client can
     // negotiate h2; the auto ingress builder serves whichever is selected.
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(Arc::new(config))
+}
+
+/// Builds an upstream [`ClientConfig`] from an already-selected crypto
+/// provider (the same one backing [`CryptoProvider::server_config`]) plus PEM
+/// trust/identity material. Mirrors [`build_server_config`]'s policy: versions
+/// pinned to [`FIPS_VERSIONS`], h2/http-1.1 ALPN. Cipher suites are not
+/// re-pinned here — the provider handed in already carries
+/// [`fips_pinned_provider`]'s filtered list, from the server config it was
+/// derived from.
+fn build_client_config(
+    provider: Arc<RustlsCryptoProvider>,
+    ca_pem: &[u8],
+    client_identity: Option<(&[u8], &[u8])>,
+) -> Result<Arc<ClientConfig>, TlsError> {
+    let versions = ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(FIPS_VERSIONS)
+        .map_err(|e| TlsError::Config(e.to_string()))?;
+    let mut roots = RootCertStore::empty();
+    for ca in parse_certs(ca_pem)? {
+        roots.add(ca).map_err(|e| TlsError::Config(e.to_string()))?;
+    }
+    let builder = versions.with_root_certificates(roots);
+    let mut config = match client_identity {
+        None => builder.with_no_client_auth(),
+        Some((cert_pem, key_pem)) => {
+            let certs = parse_certs(cert_pem)?;
+            let key = parse_key(key_pem)?;
+            builder
+                .with_client_auth_cert(certs, key)
+                .map_err(|e| TlsError::Config(e.to_string()))?
+        }
+    };
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     Ok(Arc::new(config))
 }

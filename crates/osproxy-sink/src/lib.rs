@@ -23,6 +23,7 @@ mod memory;
 mod opensearch;
 mod read;
 mod sink;
+mod tls;
 mod trace_headers;
 mod wire;
 

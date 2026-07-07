@@ -10,7 +10,7 @@ use crate::raw::Raw;
 use crate::{
     AdminPassthroughConfig, CaptureTlsConfig, Config, ConfigError, DiagBaseline, EtcdConfig,
     FanoutBodyEncoding, FanoutConfig, HeaderForwardingConfig, ObservabilityConfig,
-    PassthroughConfig, TlsConfig,
+    PassthroughConfig, TlsConfig, UpstreamTlsConfig,
 };
 
 mod resolve_capture;
@@ -37,6 +37,7 @@ pub(crate) fn resolve(raw: &Raw) -> Result<Config, ConfigError> {
             enabled: bool_or(raw, "forward_client_headers", true)?,
             deny: csv(raw, "forward_header_deny"),
         },
+        upstream_tls: upstream_tls(raw)?,
         capture: resolve_capture::capture(raw)?,
         capture_default: bool_or(raw, "capture_default", false)?,
         fanout: fanout(raw)?,
@@ -290,6 +291,38 @@ fn tls(raw: &Raw) -> Result<Option<TlsConfig>, ConfigError> {
         _ => Err(ConfigError::invalid(
             "tls_cert",
             "set both tls_cert and tls_key, or neither",
+        )),
+    }
+}
+
+/// Validates the upstream-TLS settings: `upstream_tls_ca` is required for any
+/// of the three keys to apply (rustls trusts nothing implicitly), and the
+/// mTLS cert/key pair is both-or-neither, mirroring [`tls`]'s shape.
+fn upstream_tls(raw: &Raw) -> Result<Option<UpstreamTlsConfig>, ConfigError> {
+    let ca_path = opt(raw, "upstream_tls_ca");
+    let cert_path = opt(raw, "upstream_tls_cert");
+    let key_path = opt(raw, "upstream_tls_key");
+    match (ca_path, cert_path, key_path) {
+        (None, None, None) => Ok(None),
+        (None, _, _) => Err(ConfigError::invalid(
+            "upstream_tls_ca",
+            "set upstream_tls_ca to enable TLS to the upstream (required, rustls trusts \
+             nothing implicitly)",
+        )),
+        (Some(ca_path), None, None) => Ok(Some(UpstreamTlsConfig {
+            ca_path,
+            cert_path: None,
+            key_path: None,
+        })),
+        (Some(ca_path), Some(cert_path), Some(key_path)) => Ok(Some(UpstreamTlsConfig {
+            ca_path,
+            cert_path: Some(cert_path),
+            key_path: Some(key_path),
+        })),
+        _ => Err(ConfigError::invalid(
+            "upstream_tls_cert",
+            "set both upstream_tls_cert and upstream_tls_key (mutual TLS to the upstream), \
+             or neither",
         )),
     }
 }
