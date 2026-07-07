@@ -131,6 +131,27 @@ show the choice is about isolation, not latency (all three add ~0.1–0.3 ms).
 - `sensitive_fields` is **deny-by-default**: every value is redacted unless you
   allow-list it as safe. A field you add later is protected automatically.
 
+### `routing_hint`: overriding the `_routing` wire value
+
+`doc_id_rule`'s partition-prefixed id is what makes `SharedIndex` isolation safe,
+and it doubles as the OpenSearch `_routing` value by default. If your cluster's
+shard routing needs a different value than the partition id itself (e.g. you
+co-locate several partitions on one shard for a locality reason), override
+`routing_hint`:
+
+```rust
+impl TenancySpi for MyTenancy {
+    fn routing_hint(&self, partition: &PartitionId) -> Option<String> {
+        Some(format!("shard-group-{}", self.shard_group_of(partition)))
+    }
+}
+```
+
+Default `None` uses the partition id, which is almost always what you want. This
+only changes the `_routing` value sent on the wire; the constructed `_id` always
+uses the real partition, never the hint, so cross-tenant isolation is unaffected
+either way.
+
 ### Partition key sources
 
 For the common case the id lives somewhere a name can point at, hand a
