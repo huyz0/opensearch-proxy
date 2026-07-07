@@ -274,5 +274,76 @@ fn spi_accessor_returns_the_wrapped_tenancy() {
     assert_eq!(router.spi().injected_fields().len(), 1);
 }
 
+/// A `DedicatedIndex` tenancy whose `upstream_credentials` is configurable, to
+/// prove the SPI's credential resolution reaches the routed `Target`.
+struct CredentialedTenancy {
+    credentials: Option<osproxy_core::UpstreamCredentials>,
+}
+
+impl TenancySpi for CredentialedTenancy {
+    fn resolve_partition(
+        &self,
+        ctx: &RequestCtx<'_>,
+        body: BodyDoc<'_>,
+    ) -> Result<PartitionId, SpiError> {
+        crate::resolve_partition_spec(&PartitionKeySpec::Header("x-tenant".to_owned()), ctx, body)
+    }
+    fn doc_id_rule(&self) -> Option<DocIdRule> {
+        None
+    }
+    fn injected_fields(&self) -> Vec<InjectedField> {
+        vec![]
+    }
+    async fn placement_for(&self, _partition: &PartitionId) -> Result<PlacementAt, SpiError> {
+        Ok(PlacementAt::new(
+            Placement::DedicatedIndex {
+                cluster: ClusterId::from("c1"),
+                index: IndexName::from("acme-idx"),
+            },
+            Epoch::new(1),
+        ))
+    }
+    fn upstream_credentials(
+        &self,
+        cluster: &ClusterId,
+    ) -> Option<osproxy_core::UpstreamCredentials> {
+        (cluster.as_str() == "c1")
+            .then(|| self.credentials.clone())
+            .flatten()
+    }
+}
+
+#[tokio::test]
+async fn upstream_credentials_from_the_spi_reach_the_target() {
+    let creds = osproxy_core::UpstreamCredentials::bearer("service-token");
+    let router = TenancyRouter::new(CredentialedTenancy {
+        credentials: Some(creds.clone()),
+    });
+    let principal = Principal::new(PrincipalId::from("svc"));
+    let rid = RequestId::from("r1");
+    let headers = vec![("x-tenant".to_owned(), "acme".to_owned())];
+    let ctx = RequestCtx::new(
+        &principal,
+        &rid,
+        HttpMethod::Post,
+        EndpointKind::IngestDoc,
+        Protocol::Http1,
+        "orders",
+        HeaderView::new(&headers),
+        b"",
+    );
+    let resolved = router.resolve(&ctx).await.expect("resolves");
+    assert_eq!(resolved.decision.target.credentials, Some(creds));
+}
+
+#[test]
+fn upstream_credentials_defaults_to_none_when_the_spi_does_not_override_it() {
+    let router = TenancyRouter::new(SharedTenancy {
+        id_rule: None,
+        routing_hint: None,
+    });
+    assert_eq!(router.upstream_credentials(&ClusterId::from("c")), None);
+}
+
 #[path = "router_inject_tests.rs"]
 mod inject_tests;

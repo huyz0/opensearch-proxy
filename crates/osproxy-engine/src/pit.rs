@@ -48,6 +48,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
         let body = rewrite_pit_id(search_op.body, &real_pit);
         let op = CursorOp::new(cluster.clone(), ctx.method(), "/_search", body)
             .with_endpoint(self.router.cluster_endpoint(&cluster))
+            .with_credentials(self.router.upstream_credentials(&cluster))
             .with_trace(self.upstream_trace(ctx))
             .with_forward_headers(ctx.forward_headers().to_vec());
         let outcome = self.sink.cursor(op).await?;
@@ -92,8 +93,10 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             format!("/{}/_search/point_in_time", target.index.as_str()),
             ctx.body().to_vec(),
         )
-        // PIT create resolved a placement, so the endpoint rides on its target.
+        // PIT create resolved a placement, so the endpoint (and any upstream
+        // credential) ride on its target.
         .with_endpoint(target.endpoint.clone())
+        .with_credentials(target.credentials.clone())
         // Forward `keep_alive` (allow-listed) so the PIT gets the requested TTL.
         .with_query(forwardable_query(ctx.query()))
         .with_trace(self.upstream_trace(ctx))
@@ -152,6 +155,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
                 serde_json::to_vec(&body).unwrap_or_default(),
             )
             .with_endpoint(self.router.cluster_endpoint(&cluster))
+            .with_credentials(self.router.upstream_credentials(&cluster))
             .with_trace(self.upstream_trace(ctx))
             .with_forward_headers(ctx.forward_headers().to_vec());
             let outcome = self.sink.cursor(op).await?;

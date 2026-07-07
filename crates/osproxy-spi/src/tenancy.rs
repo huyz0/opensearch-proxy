@@ -2,7 +2,7 @@
 
 use std::future::Future;
 
-use osproxy_core::{ClusterId, Epoch, PartitionId};
+use osproxy_core::{ClusterId, Epoch, PartitionId, UpstreamCredentials};
 
 use crate::error::SpiError;
 use crate::placement::PlacementAt;
@@ -177,6 +177,27 @@ pub trait TenancySpi: Send + Sync + 'static {
     /// affects `_id` construction or read isolation, both of which stay keyed on
     /// the real partition id.
     fn routing_hint(&self, _partition: &PartitionId) -> Option<String> {
+        None
+    }
+
+    /// The proxy's own upstream credential for a cluster — distinct from
+    /// whatever authenticated the client to the proxy itself. Resolved fresh
+    /// on every route (not cached), so a rotating credential is naturally
+    /// supported without extra API surface.
+    ///
+    /// Two independent ways a request can carry auth upstream: this SPI hook
+    /// (the proxy's own identity, needed when the upstream is a plain
+    /// OpenSearch security plugin, or a `DedicatedCluster` placement where
+    /// different clusters need different credentials), or forwarding the
+    /// client's own `Authorization` header verbatim via the server's forward-
+    /// headers policy (sound only when a compatible auth layer sits in front
+    /// of the upstream cluster and can validate that same header itself).
+    /// When both are configured, this one wins at the sink's upstream choke
+    /// point — it is the proxy's deliberate identity, not passthrough.
+    ///
+    /// Default: none (the sink sends no credential header unless the
+    /// client's own forwarded headers supply one).
+    fn upstream_credentials(&self, _cluster: &ClusterId) -> Option<UpstreamCredentials> {
         None
     }
 }

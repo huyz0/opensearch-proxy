@@ -8,7 +8,7 @@
 
 use std::future::Future;
 
-use osproxy_core::{ClusterId, Epoch, IndexName, PartitionId, Target};
+use osproxy_core::{ClusterId, Epoch, IndexName, PartitionId, Target, UpstreamCredentials};
 use osproxy_spi::{
     BodyDoc, BodyTransform, InjectedField, InjectedValue, MigrationPhase, Placement, RequestCtx,
     RouteDecision, RoutingSpi, SpiError, TenancySpi,
@@ -114,10 +114,13 @@ impl<T: TenancySpi> TenancyRouter<T> {
         logical_index: &str,
     ) -> Result<Resolved, SpiError> {
         let at = self.spi.placement_for(&partition).await?;
-        // Carry the cluster's endpoint (from the placement result) onto the
-        // target so the sink can pool it, the tenancy is the source of truth for
-        // where each cluster lives.
-        let target = target_for(&at.placement, logical_index).with_endpoint(at.endpoint.clone());
+        // Carry the cluster's endpoint (from the placement result) and its
+        // upstream credential (from the SPI, resolved fresh) onto the target so
+        // the sink can pool/authenticate it; the tenancy is the source of truth
+        // for where each cluster lives and how the proxy authenticates to it.
+        let target = target_for(&at.placement, logical_index)
+            .with_endpoint(at.endpoint.clone())
+            .with_credentials(self.spi.upstream_credentials(at.placement.cluster()));
         let body_transform = self.build_transform(&at.placement, &partition, ctx)?;
         let decision = RouteDecision {
             target,
@@ -238,6 +241,13 @@ pub trait Router: Send + Sync + 'static {
     fn cluster_endpoint(&self, _cluster: &ClusterId) -> Option<String> {
         None
     }
+
+    /// The proxy's own upstream credential for a cluster by id, for the same
+    /// cluster-without-a-placement paths as [`Self::cluster_endpoint`].
+    /// Default `None`.
+    fn upstream_credentials(&self, _cluster: &ClusterId) -> Option<UpstreamCredentials> {
+        None
+    }
 }
 
 impl<T: TenancySpi> Router for TenancyRouter<T> {
@@ -268,6 +278,10 @@ impl<T: TenancySpi> Router for TenancyRouter<T> {
 
     fn cluster_endpoint(&self, cluster: &ClusterId) -> Option<String> {
         self.spi.cluster_endpoint(cluster)
+    }
+
+    fn upstream_credentials(&self, cluster: &ClusterId) -> Option<UpstreamCredentials> {
+        self.spi.upstream_credentials(cluster)
     }
 }
 

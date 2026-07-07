@@ -92,6 +92,7 @@ impl<R: Router, S: Sink + Reader> Pipeline<R, S> {
             ctx.body().to_vec(),
         )
         .with_endpoint(endpoint)
+        .with_credentials(self.router.upstream_credentials(&policy.cluster))
         .with_query(ctx.query().map(str::to_owned))
         .with_trace(self.upstream_trace(ctx))
         .with_forward_headers(ctx.forward_headers().to_vec());

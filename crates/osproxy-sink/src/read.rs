@@ -13,7 +13,7 @@
 // exchange. They share the same builders and conventions; splitting them would
 // scatter one small vocabulary across files for no real separation.
 
-use osproxy_core::{ClusterId, Target, TraceContext};
+use osproxy_core::{ClusterId, Target, TraceContext, UpstreamCredentials};
 use osproxy_spi::{HttpMethod, Protocol};
 
 use crate::error::SinkError;
@@ -274,6 +274,10 @@ pub struct CursorOp {
     /// from the envelope alone: the sink then reuses the pool the opening request
     /// already built for this cluster, erroring only if none exists.
     pub endpoint: Option<String>,
+    /// The proxy's own upstream credential for the pinned cluster, when the
+    /// tenancy's `upstream_credentials` lookup supplies one. `None`: no
+    /// credential header, unless the client's own forwarded headers carry one.
+    pub credentials: Option<UpstreamCredentials>,
     /// The upstream wire protocol. Defaults to [`Protocol::Http1`].
     pub protocol: Protocol,
     /// The W3C trace context to forward downstream.
@@ -300,6 +304,7 @@ impl CursorOp {
             body,
             query: None,
             endpoint: None,
+            credentials: None,
             protocol: Protocol::Http1,
             trace: None,
             forward_headers: Vec::new(),
@@ -319,6 +324,14 @@ impl CursorOp {
     #[must_use]
     pub fn with_endpoint(mut self, endpoint: Option<String>) -> Self {
         self.endpoint = endpoint;
+        self
+    }
+
+    /// Sets the proxy's own upstream credential for the pinned cluster
+    /// (builder style), as resolved from `Router::upstream_credentials`.
+    #[must_use]
+    pub fn with_credentials(mut self, credentials: Option<UpstreamCredentials>) -> Self {
+        self.credentials = credentials;
         self
     }
 
@@ -362,6 +375,10 @@ pub struct ForwardOp {
     /// The cluster's base URL, when known (so the pool can be built on any
     /// instance). `None` reuses an existing pool, erroring if none exists.
     pub endpoint: Option<String>,
+    /// The proxy's own upstream credential for the cluster, when the
+    /// tenancy's `upstream_credentials` lookup supplies one. `None`: no
+    /// credential header, unless the client's own forwarded headers carry one.
+    pub credentials: Option<UpstreamCredentials>,
     /// The upstream wire protocol. Defaults to [`Protocol::Http1`].
     pub protocol: Protocol,
     /// The W3C trace context to forward downstream.
@@ -381,6 +398,7 @@ impl ForwardOp {
             path: path.into(),
             query: None,
             endpoint: None,
+            credentials: None,
             protocol: Protocol::Http1,
             trace: None,
             forward_headers: Vec::new(),
@@ -398,6 +416,14 @@ impl ForwardOp {
     #[must_use]
     pub fn with_endpoint(mut self, endpoint: Option<String>) -> Self {
         self.endpoint = endpoint;
+        self
+    }
+
+    /// Sets the proxy's own upstream credential for the cluster (builder
+    /// style), as resolved from `Router::upstream_credentials`.
+    #[must_use]
+    pub fn with_credentials(mut self, credentials: Option<UpstreamCredentials>) -> Self {
+        self.credentials = credentials;
         self
     }
 

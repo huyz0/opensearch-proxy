@@ -8,6 +8,7 @@
 
 use std::fmt;
 
+use crate::credentials::UpstreamCredentials;
 use crate::ids::{ClusterId, IndexName};
 
 /// The physical destination of a single routed request.
@@ -38,16 +39,25 @@ pub struct Target {
     /// function of the cluster, not part of *which* target this is, so two ops
     /// for the same `cluster`+`index` stay one demux key regardless of it.
     pub endpoint: Option<String>,
+    /// The proxy's own upstream credential for this cluster, when
+    /// `TenancySpi::upstream_credentials` supplied one. `None`: the sink sends
+    /// no credential header unless the client's own forwarded headers supply
+    /// one (`docs/13`'s auth-passthrough posture).
+    ///
+    /// Excluded from identity for the same reason as `endpoint`: a function of
+    /// the cluster, not part of *which* target this is.
+    pub credentials: Option<UpstreamCredentials>,
 }
 
 impl Target {
-    /// Constructs a target from a cluster and an index (no endpoint).
+    /// Constructs a target from a cluster and an index (no endpoint, no credential).
     #[must_use]
     pub fn new(cluster: ClusterId, index: IndexName) -> Self {
         Self {
             cluster,
             index,
             endpoint: None,
+            credentials: None,
         }
     }
 
@@ -58,10 +68,18 @@ impl Target {
         self.endpoint = endpoint;
         self
     }
+
+    /// Sets the proxy's own upstream credential for this cluster (builder
+    /// style), as resolved from `TenancySpi::upstream_credentials`.
+    #[must_use]
+    pub fn with_credentials(mut self, credentials: Option<UpstreamCredentials>) -> Self {
+        self.credentials = credentials;
+        self
+    }
 }
 
-// Identity is (cluster, index) only; the endpoint is dispatch metadata derived
-// from the cluster, so it is deliberately excluded.
+// Identity is (cluster, index) only; endpoint/credentials are dispatch
+// metadata derived from the cluster, so both are deliberately excluded.
 impl PartialEq for Target {
     fn eq(&self, other: &Self) -> bool {
         self.cluster == other.cluster && self.index == other.index

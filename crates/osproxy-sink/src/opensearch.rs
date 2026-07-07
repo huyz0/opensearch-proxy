@@ -26,7 +26,7 @@ use hyper::{Method, Request, Response};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use osproxy_core::{Clock, ClusterId, SystemClock, TraceContext};
+use osproxy_core::{Clock, ClusterId, SystemClock, TraceContext, UpstreamCredentials};
 use osproxy_spi::{HttpMethod, Protocol};
 use serde_json::Value;
 
@@ -139,6 +139,18 @@ impl ClusterPool {
             _ => &self.client_h1,
         }
     }
+}
+
+/// The upstream-bound header inputs [`OpenSearchSink::send`] applies, bundled
+/// into one argument to stay within the function-argument-count lint budget.
+///
+/// Field order documents application order (`docs/13`): forwarded headers,
+/// then the credential (overwriting a same-named forwarded header — the
+/// proxy's deliberate identity wins over passthrough), then trace last.
+struct UpstreamHeaders<'a> {
+    forward: &'a [(String, String)],
+    credentials: Option<&'a UpstreamCredentials>,
+    trace: Option<&'a TraceContext>,
 }
 
 /// The default per-request upstream deadline: a hung upstream that accepts the
@@ -302,14 +314,18 @@ impl OpenSearchSink {
         pool: &ClusterPool,
         protocol: Protocol,
         mut req: Request<ByteBody>,
-        forward: &[(String, String)],
-        trace: Option<&TraceContext>,
+        headers: UpstreamHeaders<'_>,
         fail_kind: &'static str,
     ) -> Result<(Response<Incoming>, bool), SinkError> {
         // One choke point for upstream headers: relay the client's forwarded set
-        // (the policy already dropped hop-by-hop/framing), then inject the proxy's
-        // trace last so a proxy span (when export is on) wins on `traceparent`.
-        apply_forward_headers(&mut req, forward);
+        // (the policy already dropped hop-by-hop/framing), then the target's own
+        // upstream credential (overwriting a same-named forwarded header — the
+        // proxy's deliberate identity for that cluster wins over passthrough when
+        // both are configured), then inject the proxy's trace last so a proxy
+        // span (when export is on) wins on `traceparent`.
+        apply_forward_headers(&mut req, headers.forward);
+        apply_credentials(&mut req, headers.credentials);
+        let trace = headers.trace;
         crate::trace_headers::inject_trace(&mut req, trace);
         if !pool.breaker.allows(self.clock.now(), self.cooldown) {
             return Err(SinkError::Transport {
@@ -373,8 +389,11 @@ impl OpenSearchSink {
                 &pool,
                 op.protocol,
                 req,
-                &op.forward_headers,
-                op.trace.as_ref(),
+                UpstreamHeaders {
+                    forward: &op.forward_headers,
+                    credentials: op.target.credentials.as_ref(),
+                    trace: op.trace.as_ref(),
+                },
                 "upstream query failed",
             )
             .await?;
@@ -434,8 +453,11 @@ impl OpenSearchSink {
                 &pool,
                 op.protocol,
                 req,
-                &op.forward_headers,
-                op.trace.as_ref(),
+                UpstreamHeaders {
+                    forward: &op.forward_headers,
+                    credentials: op.credentials.as_ref(),
+                    trace: op.trace.as_ref(),
+                },
                 fail_kind,
             )
             .await?;
@@ -455,8 +477,11 @@ impl OpenSearchSink {
                 &pool,
                 op.protocol,
                 req,
-                &op.forward_headers,
-                op.trace.as_ref(),
+                UpstreamHeaders {
+                    forward: &op.forward_headers,
+                    credentials: op.target.credentials.as_ref(),
+                    trace: op.trace.as_ref(),
+                },
                 "upstream request failed",
             )
             .await?;
@@ -497,8 +522,11 @@ impl Reader for OpenSearchSink {
                 &pool,
                 op.protocol,
                 req,
-                &op.forward_headers,
-                op.trace.as_ref(),
+                UpstreamHeaders {
+                    forward: &op.forward_headers,
+                    credentials: op.target.credentials.as_ref(),
+                    trace: op.trace.as_ref(),
+                },
                 "upstream read failed",
             )
             .await?;
@@ -546,6 +574,7 @@ impl Reader for OpenSearchSink {
             path: op.path,
             query: op.query,
             endpoint: op.endpoint,
+            credentials: op.credentials,
             protocol: op.protocol,
             trace: op.trace,
             forward_headers: op.forward_headers,
@@ -613,6 +642,23 @@ fn apply_forward_headers<B>(req: &mut Request<B>, headers: &[(String, String)]) 
         ) {
             req.headers_mut().insert(n, v);
         }
+    }
+}
+
+/// Sets the target's own upstream credential header, when one was resolved
+/// (see [`Target::credentials`](osproxy_core::Target::credentials)). `insert`ed
+/// like a forwarded header, so it overwrites a same-named header the client
+/// forwarded (the proxy's deliberate identity for the cluster wins).
+fn apply_credentials<B>(req: &mut Request<B>, credentials: Option<&UpstreamCredentials>) {
+    use hyper::header::{HeaderName, HeaderValue};
+    let Some(creds) = credentials else {
+        return;
+    };
+    if let (Ok(n), Ok(v)) = (
+        HeaderName::from_bytes(creds.header_name.as_bytes()),
+        HeaderValue::from_str(&creds.header_value),
+    ) {
+        req.headers_mut().insert(n, v);
     }
 }
 
@@ -727,6 +773,55 @@ mod tests {
             &[("content-type".to_owned(), "text/plain".to_owned())],
         );
         assert_eq!(req.headers().get("content-type").unwrap(), "text/plain");
+    }
+
+    #[test]
+    fn apply_credentials_sets_the_configured_header() {
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("http://h/")
+            .body(())
+            .unwrap();
+        apply_credentials(&mut req, Some(&UpstreamCredentials::bearer("svc-token")));
+        assert_eq!(
+            req.headers().get("authorization").unwrap(),
+            "Bearer svc-token"
+        );
+    }
+
+    #[test]
+    fn apply_credentials_is_a_no_op_when_none() {
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("http://h/")
+            .body(())
+            .unwrap();
+        apply_credentials(&mut req, None);
+        assert!(req.headers().is_empty());
+    }
+
+    #[test]
+    fn credentials_override_a_forwarded_authorization_header() {
+        // The proxy's own upstream identity is deliberate, not passthrough:
+        // it must win over whatever the client forwarded (see send()'s
+        // ordering, forward headers then credentials then trace).
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("http://h/")
+            .body(())
+            .unwrap();
+        apply_forward_headers(
+            &mut req,
+            &[("Authorization".to_owned(), "Bearer client-token".to_owned())],
+        );
+        apply_credentials(&mut req, Some(&UpstreamCredentials::basic("svc", "s3cret")));
+        let value = req
+            .headers()
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(value.starts_with("Basic "));
     }
 
     #[test]

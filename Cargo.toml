@@ -102,6 +102,9 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # evicting cache, so exported cardinality tracks live tenants, never all-time
 # count. `sync` only, no async runtime coupling needed for a plain counter map.
 moka = { version = "0.12", default-features = false, features = ["sync"] }
+# Pure encoding, no I/O: osproxy-core's UpstreamCredentials::basic needs it
+# for the Authorization: Basic <base64> wire form.
+base64 = "0.22"
 # TLS via rustls behind the CryptoProvider seam. The crypto *provider* is NOT
 # pinned here — osproxy-transport selects it per build feature so a FIPS artifact
 # links only aws-lc-rs and a dev build links only `ring` (ADR-009, docs/07):

@@ -27,6 +27,7 @@
 //! own file (`docs/08` §2).
 #![deny(missing_docs)]
 
+pub mod credentials;
 pub mod cursor;
 pub mod endpoint;
 pub mod error;
@@ -36,6 +37,7 @@ pub mod target;
 pub mod time;
 pub mod trace;
 
+pub use credentials::UpstreamCredentials;
 pub use cursor::CursorSigner;
 pub use endpoint::EndpointKind;
 pub use error::{ErrorCode, ErrorContext};
