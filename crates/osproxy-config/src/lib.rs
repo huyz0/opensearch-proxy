@@ -182,6 +182,9 @@ pub struct TlsConfig {
 }
 
 /// Observability and control-plane channel settings.
+// Each bool is an independent, unrelated on/off knob, a config struct's
+// ordinary shape, not the coupled-flags smell the lint targets.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObservabilityConfig {
     /// Whether to emit a structured JSON log line per request.
@@ -205,6 +208,9 @@ pub struct ObservabilityConfig {
     /// them by `trace_id` rather than only the local per-instance ring (`docs/05`
     /// §5). The fleet-coherent counterpart of the break-glass tape.
     pub log_diagnostic_captures: bool,
+    /// Whether bounded per-tenant counters are served at `GET
+    /// /debug/metrics/tenants` (default `false`). Gated by `debug_endpoints`.
+    pub tenant_metrics_enabled: bool,
 }
 
 /// The admin pass-through policy: the cluster that answers admin requests and the

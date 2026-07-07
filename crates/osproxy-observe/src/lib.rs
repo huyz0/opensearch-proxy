@@ -24,6 +24,7 @@ mod export;
 mod otlp;
 mod stats;
 mod store;
+mod tenant_metrics;
 mod trace;
 
 pub use breakglass::BreakGlassBuffer;
@@ -38,6 +39,7 @@ pub use export::{NoopExporter, SpanExporter};
 pub use otlp::resource_spans;
 pub use stats::{Metrics, PoolSnapshot, StatsSnapshot};
 pub use store::{DirectiveStore, InMemoryDirectiveStore};
+pub use tenant_metrics::{TenantMetrics, TenantSnapshot, DEFAULT_IDLE_TTL, DEFAULT_MAX_TENANTS};
 pub use trace::{
     ClassifyInfo, DispatchInfo, EgressInfo, IngressInfo, RequestTrace, ResolveInfo, RewriteInfo,
 };

@@ -32,6 +32,7 @@ pub(crate) const KEYS: &[&str] = &[
     "directive_admin_token",
     "debug_endpoints",
     "log_diagnostic_captures",
+    "tenant_metrics_enabled",
     "admin_passthrough_cluster",
     "admin_passthrough_prefixes",
     "admin_passthrough_endpoint",

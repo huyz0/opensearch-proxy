@@ -305,6 +305,7 @@ fn observability(raw: &Raw) -> Result<ObservabilityConfig, ConfigError> {
         directive_admin_token: opt(raw, "directive_admin_token"),
         debug_endpoints: bool_or(raw, "debug_endpoints", true)?,
         log_diagnostic_captures: bool_or(raw, "log_diagnostic_captures", false)?,
+        tenant_metrics_enabled: bool_or(raw, "tenant_metrics_enabled", false)?,
     })
 }
 

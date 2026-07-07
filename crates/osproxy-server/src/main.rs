@@ -104,11 +104,14 @@ async fn run() -> Result<(), String> {
     } else {
         "token"
     };
-    let app = AppHandler::new(pipeline, ReferenceAuthenticator::new(tokens))
+    let mut app = AppHandler::new(pipeline, ReferenceAuthenticator::new(tokens))
         .with_request_log(request_log(cfg.observability.log_requests))
         .with_require_tls_for_mutation(cfg.require_tls_for_mutation)
         .with_debug_endpoints(debug_endpoints(cfg.observability.debug_endpoints))
         .with_forward_policy(forward_policy(&cfg));
+    if cfg.observability.tenant_metrics_enabled {
+        app = app.with_tenant_metrics(Arc::new(osproxy_observe::TenantMetrics::new()));
+    }
     let app = capture::attach(app, &cfg).await?;
     let handler = Arc::new(with_directive_admin(
         app,

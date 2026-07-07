@@ -100,6 +100,14 @@ never inserts a `traceparent` pointing at a span it never exported.
 - **`GET /metrics`**, always-on shape-only counters (requests total/ok/error) and
   per-cluster pool-reuse snapshot, served **before auth**. This is the one
   introspection surface meant to stay on in production where `/debug/*` is off.
+- **`GET /debug/metrics/tenants`**, opt-in (`OSPROXY_TENANT_METRICS_ENABLED`,
+  default off) per-tenant request/failure/latency counters, Prometheus text.
+  Unlike `/metrics`, the labels carry the tenant (partition) id, so this is
+  gated by `debug_endpoints` like the other `/debug/*` surfaces, not always-on.
+  Cardinality is bounded two ways: a tenant idle 15 minutes is evicted, and a
+  hard 50k-tenant cap protects against a burst of one-off ids before the idle
+  timer applies — exported cardinality tracks live tenants, never all-time
+  count.
 - **`/debug/explain` + `/debug/breakglass`**, see §6.
 - **`GET`/`POST /admin/directives`**, token-gated, fail-closed. `POST` publishes a
   `DirectiveSet` to the fleet `DirectiveStore` (polled fresh per request → flips

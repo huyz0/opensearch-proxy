@@ -582,3 +582,67 @@ async fn a_handled_request_emits_a_structured_log_carrying_the_trace_id() {
         "structured log carries the 32-hex trace id: {rec}"
     );
 }
+
+#[tokio::test]
+async fn a_tenanted_request_tallies_the_opt_in_per_tenant_counters() {
+    let (upstream, _captured) = start_upstream().await;
+    let cluster = ClusterId::from("default");
+    let sink = OpenSearchSink::new();
+    let tenancy = ReferenceTenancy::new(cluster, IndexName::from("osproxy-shared"), upstream);
+    let handler = Arc::new(
+        AppHandler::new(
+            Pipeline::new(TenancyRouter::new(tenancy), sink),
+            ReferenceAuthenticator::dev(),
+        )
+        .with_require_tls_for_mutation(false)
+        .with_tenant_metrics(Arc::new(osproxy_observe::TenantMetrics::new())),
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = osproxy_transport::serve(listener, handler).await;
+    });
+
+    let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("http://{proxy_addr}/orders/_doc"))
+        .header("content-type", "application/json")
+        .body(Full::new(Bytes::from_static(
+            br#"{"tenant_id":"acme","id":7,"msg":"hi"}"#,
+        )))
+        .unwrap();
+    let resp = client.request(req).await.unwrap();
+    assert_eq!(resp.status(), 201);
+
+    let tenants = client
+        .request(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("http://{proxy_addr}/debug/metrics/tenants"))
+                .body(Full::new(Bytes::new()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tenants.status(), 200);
+    let body = tenants.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        text.contains("osproxy_tenant_requests_total{tenant=\"acme\"} 1"),
+        "{text}"
+    );
+    assert!(
+        text.contains("osproxy_tenant_failures_total{tenant=\"acme\"} 0"),
+        "{text}"
+    );
+    // A latency counter was recorded (some nonzero nanosecond total), not just a
+    // present-but-always-zero field.
+    let latency_line = text
+        .lines()
+        .find(|l| l.starts_with("osproxy_tenant_latency_nanos_total{tenant=\"acme\"}"))
+        .expect("latency line present");
+    let nanos: u64 = latency_line.rsplit(' ').next().unwrap().parse().unwrap();
+    assert!(nanos > 0, "expected a recorded duration: {latency_line}");
+}

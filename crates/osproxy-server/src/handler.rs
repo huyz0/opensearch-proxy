@@ -9,10 +9,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use osproxy_core::{Clock, EndpointKind, ErrorCode, RequestId};
+use osproxy_core::{Clock, EndpointKind, ErrorCode, RequestId, SystemClock};
 use osproxy_engine::{Pipeline, PipelineResponse, RequestError};
 use osproxy_observe::{
     decode_directive_set, DirectiveStore, InMemoryDirectiveStore, Metrics, PoolSnapshot,
+    TenantMetrics,
 };
 use osproxy_sink::OpenSearchSink;
 use osproxy_spi::{
@@ -53,6 +54,14 @@ pub struct AppHandler<A, Z = AllowAllAuthorizer> {
     request_log: Box<dyn RequestLog>,
     directive_admin: Option<DirectiveAdmin>,
     metrics: Metrics,
+    /// Opt-in, bounded per-tenant counters (default `None`: no per-tenant
+    /// cardinality is ever allocated). Served at `/debug/metrics/tenants`
+    /// alongside the shape-only `/metrics`, gated by `debug_endpoints` since it
+    /// does carry tenant (partition) identifiers.
+    tenant_metrics: Option<Arc<TenantMetrics>>,
+    /// The clock the per-tenant latency timer reads (`docs/12`: production code
+    /// never calls `Instant::now()` directly). Defaults to [`SystemClock`].
+    clock: Arc<dyn Clock>,
     /// When true (default), a body-mutating request over cleartext is refused
     /// (NFR-S1), the proxy must terminate TLS to rewrite the stream. An operator
     /// on a trusted network can opt out.
@@ -96,6 +105,8 @@ impl<A: Authenticator> AppHandler<A, AllowAllAuthorizer> {
             request_log: Box::new(NoLog),
             directive_admin: None,
             metrics: Metrics::new(),
+            tenant_metrics: None,
+            clock: Arc::new(SystemClock),
             require_tls_for_mutation: true,
             debug_endpoints: true,
             capture: Box::new(NoCapture),
@@ -118,6 +129,8 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
             request_log: self.request_log,
             directive_admin: self.directive_admin,
             metrics: self.metrics,
+            tenant_metrics: self.tenant_metrics,
+            clock: self.clock,
             require_tls_for_mutation: self.require_tls_for_mutation,
             debug_endpoints: self.debug_endpoints,
             capture: self.capture,
@@ -149,6 +162,24 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
     #[must_use]
     pub fn with_debug_endpoints(mut self, enabled: bool) -> Self {
         self.debug_endpoints = enabled;
+        self
+    }
+
+    /// Enables bounded per-tenant request/failure/latency counters (builder
+    /// style), served at `GET /debug/metrics/tenants`. Default `None`: a
+    /// deployment that never calls this never allocates one of these.
+    #[must_use]
+    pub fn with_tenant_metrics(mut self, tenant_metrics: Arc<TenantMetrics>) -> Self {
+        self.tenant_metrics = Some(tenant_metrics);
+        self
+    }
+
+    /// Sets the clock the per-tenant latency timer reads (builder style).
+    /// Defaults to [`SystemClock`]; a test can inject a `ManualClock` for a
+    /// deterministic duration.
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
         self
     }
 
@@ -283,6 +314,18 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
                 let tape = serde_json::Value::Array(self.pipeline.break_glass().snapshot());
                 return Some(IngressResponse::json(200, tape.to_string().into_bytes()));
             }
+            // /debug/metrics/tenants: the opt-in, bounded per-tenant counters
+            // (Prometheus text), gated the same as the other `/debug/*` surfaces
+            // since it carries tenant (partition) identifiers, unlike `/metrics`.
+            if req.path == "/debug/metrics/tenants" {
+                return Some(match &self.tenant_metrics {
+                    Some(tenant_metrics) => {
+                        IngressResponse::json(200, tenant_metrics.to_prometheus_text().into_bytes())
+                            .with_header("content-type", "text/plain; version=0.0.4")
+                    }
+                    None => IngressResponse::json(404, br#"{"error":"not_enabled"}"#.to_vec()),
+                });
+            }
         }
         // /metrics: the always-on, prod-safe operational snapshot (shape-only
         // counts/rates/cluster ids, so no auth; see `metrics_snapshot`).
@@ -368,6 +411,7 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
         request_id: &RequestId,
         result: Result<PipelineResponse, RequestError>,
         should_capture: bool,
+        started: osproxy_core::time::Instant,
     ) -> IngressResponse {
         let (response, ok) = match result {
             Ok(resp) => {
@@ -379,13 +423,14 @@ impl<A: Authenticator, Z: Authorizer> AppHandler<A, Z> {
                 false,
             ),
         };
-        self.after_response(req, &response, request_id, ok, should_capture);
+        self.after_response(req, &response, request_id, ok, should_capture, started);
         response.with_header("x-request-id", request_id.as_str())
     }
 }
 
 impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
     async fn handle(&self, req: IngressRequest) -> IngressResponse {
+        let started = self.clock.now();
         let request_id = self.next_request_id();
 
         // Introspection + admin surfaces short-circuit before auth; the data plane
@@ -424,7 +469,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
                 false,
             ),
         };
-        self.after_response(&req, &response, &request_id, ok, should_capture);
+        self.after_response(&req, &response, &request_id, ok, should_capture, started);
         response.with_header("x-request-id", request_id.as_str())
     }
 
@@ -445,6 +490,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
     }
 
     async fn handle_forward(&self, req: IngressRequest, body: Incoming) -> StreamingResponse {
+        let started = self.clock.now();
         let request_id = self.next_request_id();
         // `forward_plan` already excluded the introspection routes; apply the same
         // TLS + auth + authz gate as the buffered path before forwarding.
@@ -469,7 +515,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         let (result, _capture) = self.pipeline.forward_streamed(&ctx, upstream).await;
         let response = match result {
             Ok(forward) => {
-                self.after_streamed(&request_id, (200..300).contains(&forward.status));
+                self.after_streamed(&request_id, (200..300).contains(&forward.status), started);
                 let mut response = StreamingResponse::stream(forward.status, forward.body);
                 // Carry the upstream content type so a non-JSON verbatim forward
                 // (e.g. a passed-through `_cat`) is not relabeled `application/json`.
@@ -479,7 +525,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
                 response
             }
             Err(err) => {
-                self.after_streamed(&request_id, false);
+                self.after_streamed(&request_id, false, started);
                 StreamingResponse::buffered(status_for(&err), error_body(&err))
             }
         };
@@ -496,6 +542,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
     }
 
     async fn handle_search_stream(&self, req: IngressRequest) -> StreamingResponse {
+        let started = self.clock.now();
         let request_id = self.next_request_id();
         // `wants_search_stream` does not gate; apply the same TLS + auth + authz
         // gate as the buffered path before dispatching.
@@ -515,11 +562,11 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
         let (result, _capture) = self.pipeline.search_streamed(&ctx).await;
         let response = match result {
             Ok(search) => {
-                self.after_streamed(&request_id, (200..300).contains(&search.status));
+                self.after_streamed(&request_id, (200..300).contains(&search.status), started);
                 StreamingResponse::stream(search.status, search.body)
             }
             Err(err) => {
-                self.after_streamed(&request_id, false);
+                self.after_streamed(&request_id, false, started);
                 StreamingResponse::buffered(status_for(&err), error_body(&err))
             }
         };
@@ -536,6 +583,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
     }
 
     async fn handle_bulk_stream(&self, req: IngressRequest, body: Incoming) -> IngressResponse {
+        let started = self.clock.now();
         let request_id = self.next_request_id();
         let principal = match self.gate(&req, &request_id).await {
             Ok(principal) => principal,
@@ -551,7 +599,7 @@ impl<A: Authenticator, Z: Authorizer> IngressHandler for AppHandler<A, Z> {
 
         let stream = osproxy_sink::stream_body(body);
         let (result, should_capture) = self.pipeline.handle_bulk_streamed(&ctx, stream).await;
-        self.finish_streamed(&req, &request_id, result, should_capture)
+        self.finish_streamed(&req, &request_id, result, should_capture, started)
     }
 }
 
@@ -565,8 +613,10 @@ impl<A, Z> AppHandler<A, Z> {
         request_id: &RequestId,
         ok: bool,
         should_capture: bool,
+        started: osproxy_core::time::Instant,
     ) {
         self.metrics.record(ok);
+        self.record_tenant_metrics(request_id, ok, started);
         // The structured log is the shape-only explain document, which carries the
         // request's trace_id, so logs join the trace/spans.
         if self.request_log.enabled() {
@@ -580,13 +630,45 @@ impl<A, Z> AppHandler<A, Z> {
     /// Post-response side effects for a **streamed** response (no body retained):
     /// tally metrics and emit the structured log. Capture is never available on a
     /// streamed path (there is no buffered body to tee), so it is not attempted.
-    fn after_streamed(&self, request_id: &RequestId, ok: bool) {
+    fn after_streamed(
+        &self,
+        request_id: &RequestId,
+        ok: bool,
+        started: osproxy_core::time::Instant,
+    ) {
         self.metrics.record(ok);
+        self.record_tenant_metrics(request_id, ok, started);
         if self.request_log.enabled() {
             if let Some(record) = self.pipeline.explain(request_id) {
                 self.request_log.emit(&record);
             }
         }
+    }
+
+    /// Tallies the opt-in per-tenant counters, when enabled. The tenant is the
+    /// resolved partition id read back from the just-recorded `/debug/explain`
+    /// document (`spans.spi.resolve.partition_id`) — an id, not a captured value
+    /// (`docs/05` §7) — so a request that never reached routing (an unresolved
+    /// partition, an introspection path) contributes nothing, since there is no
+    /// tenant to attribute it to.
+    fn record_tenant_metrics(
+        &self,
+        request_id: &RequestId,
+        ok: bool,
+        started: osproxy_core::time::Instant,
+    ) {
+        let Some(tenant_metrics) = &self.tenant_metrics else {
+            return;
+        };
+        let Some(doc) = self.pipeline.explain(request_id) else {
+            return;
+        };
+        let Some(tenant) = doc["spans"]["spi.resolve"]["partition_id"].as_str() else {
+            return;
+        };
+        let elapsed = self.clock.now().saturating_duration_since(started);
+        let duration_nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
+        tenant_metrics.record(tenant, ok, duration_nanos);
     }
 
     /// Full-fidelity capture: tee the raw exchange for replay/audit when a capture

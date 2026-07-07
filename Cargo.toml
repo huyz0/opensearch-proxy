@@ -98,6 +98,10 @@ etcd-client = { version = "0.19", default-features = false }
 # Stream combinators for bounded-concurrency demux dispatch (buffer_unordered).
 # Already in the tree via hyper-util; no runtime/spawn needed — just polling.
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# Bounded per-tenant metrics (osproxy-observe::TenantMetrics): a TTL + max-size
+# evicting cache, so exported cardinality tracks live tenants, never all-time
+# count. `sync` only, no async runtime coupling needed for a plain counter map.
+moka = { version = "0.12", default-features = false, features = ["sync"] }
 # TLS via rustls behind the CryptoProvider seam. The crypto *provider* is NOT
 # pinned here — osproxy-transport selects it per build feature so a FIPS artifact
 # links only aws-lc-rs and a dev build links only `ring` (ADR-009, docs/07):
