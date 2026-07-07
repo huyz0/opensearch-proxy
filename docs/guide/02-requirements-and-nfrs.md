@@ -15,7 +15,7 @@ in [`docs/01-architecture.md`](../01-architecture.md) §5.
   isn't tenancy-shaped at all, the lower-level `RoutingSpi` escape hatch
   (`route → RouteDecision` directly). `routing_hint` lets a `SharedIndex`
   implementer override the `_routing` wire value independently of the
-  partition-prefixed id. See [The SPI](05-spi-guide.md).
+  partition-prefixed id.
 - **Tenant-agnostic passthrough** (opt-in, index-prefix scoped): requests
   whose logical index matches skip tenancy entirely and forward verbatim to a
   configured cluster, so one instance can mix tenanted and legacy traffic.
@@ -32,12 +32,11 @@ in [`docs/01-architecture.md`](../01-architecture.md) §5.
 - **Auth**: client authentication (mTLS + token). Upstream authentication is
   either the client's own forwarded credential (pass-through) or an SPI-
   supplied one (`TenancySpi::upstream_credentials`, resolved fresh per route,
-  overwrites a same-named forwarded header) — see
-  [The SPI](05-spi-guide.md). Upstream TLS/mTLS (`upstream_tls_ca`/`_cert`/
-  `_key`) is independent of ingress TLS and fails closed: an `https://`
-  cluster with no trust anchor configured is refused, never silently dialed
-  in cleartext or trusted via the public web PKI. Optional post-auth
-  authorization.
+  overwrites a same-named forwarded header). Upstream TLS/mTLS
+  (`upstream_tls_ca`/`_cert`/`_key`) is independent of ingress TLS and fails
+  closed: an `https://` cluster with no trust anchor configured is refused,
+  never silently dialed in cleartext or trusted via the public web PKI.
+  Optional post-auth authorization.
 - **Scroll/PIT affinity** pinning (opt-in).
 - **Epoch-gated partition migration**.
 - **Pluggable write sink** (OpenSearch now; the `Sink` trait makes Kafka-based
