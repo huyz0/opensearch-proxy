@@ -1785,6 +1785,7 @@ dependencies = [
  "base64",
  "dhat",
  "iai-callgrind",
+ "memchr",
  "proptest",
  "thiserror",
 ]
@@ -1799,6 +1800,7 @@ dependencies = [
  "futures-util",
  "http-body",
  "http-body-util",
+ "memchr",
  "osproxy-control",
  "osproxy-core",
  "osproxy-observe",
@@ -1885,6 +1887,7 @@ version = "1.0.3"
 dependencies = [
  "dhat",
  "divan",
+ "memchr",
  "osproxy-core",
  "proptest",
  "serde_json",

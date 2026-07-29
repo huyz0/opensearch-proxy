@@ -22,6 +22,7 @@ mod fields;
 mod id;
 mod mget;
 mod msearch;
+mod ndjson;
 mod query;
 
 pub use bulk::{parse_bulk, parse_bulk_action, BulkAction, BulkItem, ParsedAction};

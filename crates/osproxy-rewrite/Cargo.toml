@@ -12,6 +12,7 @@ repository.workspace = true
 osproxy-core.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
+memchr.workspace = true
 
 [dev-dependencies]
 proptest = "1"

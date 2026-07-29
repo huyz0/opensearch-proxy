@@ -230,7 +230,7 @@ impl NdjsonReader {
     /// Returns the next non-blank line (newline stripped), or `None` at EOF.
     async fn next_line(&mut self) -> Result<Option<BytesMut>, RequestError> {
         loop {
-            if let Some(rel) = self.buf[self.scan..].iter().position(|&b| b == b'\n') {
+            if let Some(rel) = memchr::memchr(b'\n', &self.buf[self.scan..]) {
                 let nl = self.scan + rel;
                 let mut line = self.buf.split_to(nl); // bytes before '\n' (O(1))
                 self.buf.advance(1); // drop the '\n'

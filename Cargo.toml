@@ -105,6 +105,11 @@ moka = { version = "0.12", default-features = false, features = ["sync"] }
 # Pure encoding, no I/O: osproxy-core's UpstreamCredentials::basic needs it
 # for the Authorization: Basic <base64> wire form.
 base64 = "0.22"
+# Vectorized single-byte search for osproxy-core::json's zero-materialization
+# scanner (ADR-014): jumps over runs of ordinary string bytes in one call
+# instead of a per-byte bounds-checked match. Pure computation, no I/O — fine
+# in `core`. Already in the tree transitively (serde_json, etc.).
+memchr = "2"
 # TLS via rustls behind the CryptoProvider seam. The crypto *provider* is NOT
 # pinned here — osproxy-transport selects it per build feature so a FIPS artifact
 # links only aws-lc-rs and a dev build links only `ring` (ADR-009, docs/07):

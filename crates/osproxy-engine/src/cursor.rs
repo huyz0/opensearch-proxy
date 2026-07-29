@@ -33,9 +33,13 @@ pub(crate) fn forwardable_query(raw: Option<&str>) -> Option<String> {
 
 /// Whether a response body mentions `_scroll_id` at all, a cheap pre-filter so a
 /// plain (non-scroll) search never pays for a JSON parse just to find none.
+///
+/// Vectorized substring search (`memchr::memmem`): a naive `windows(len).any`
+/// scan is O(body · needle) with a bounds-checked comparison per position,
+/// against every search response regardless of size.
 pub(crate) fn has_scroll_id(body: &[u8]) -> bool {
     const NEEDLE: &[u8] = b"_scroll_id";
-    body.windows(NEEDLE.len()).any(|w| w == NEEDLE)
+    memchr::memmem::find(body, NEEDLE).is_some()
 }
 
 /// Replaces the response's `_scroll_id` with its signed envelope (`cluster` + id).

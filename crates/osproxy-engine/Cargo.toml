@@ -23,6 +23,7 @@ futures-util.workspace = true
 http-body-util.workspace = true
 http-body.workspace = true
 bytes.workspace = true
+memchr.workspace = true
 # `rt` for `tokio::spawn`, `time` for the retry-backoff `sleep`.
 tokio = { workspace = true, features = ["rt", "time"] }
 

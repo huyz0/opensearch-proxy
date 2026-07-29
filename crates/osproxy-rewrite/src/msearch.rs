@@ -10,6 +10,7 @@
 use serde_json::Value;
 
 use crate::error::RewriteError;
+use crate::ndjson::non_blank_lines;
 
 /// One parsed multi-search request: the optional explicit `index` from the
 /// header line (else the URL default), and the raw query body line.
@@ -45,9 +46,7 @@ pub struct MsearchItem {
 /// ```
 pub fn parse_msearch(body: &[u8]) -> Result<Vec<MsearchItem>, RewriteError> {
     let mut items = Vec::new();
-    let mut lines = body
-        .split(|&b| b == b'\n')
-        .filter(|l| !l.iter().all(u8::is_ascii_whitespace));
+    let mut lines = non_blank_lines(body);
     while let Some(header_line) = lines.next() {
         let header: Value =
             serde_json::from_slice(header_line).map_err(|_| RewriteError::InvalidJson)?;

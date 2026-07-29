@@ -11,6 +11,7 @@ use osproxy_core::json;
 use serde_json::Value;
 
 use crate::error::RewriteError;
+use crate::ndjson::non_blank_lines;
 
 /// The action of a bulk operation, mirroring OpenSearch's verbs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -91,9 +92,7 @@ pub struct BulkItem {
 /// ```
 pub fn parse_bulk(body: &[u8]) -> Result<Vec<BulkItem>, RewriteError> {
     let mut items = Vec::new();
-    let mut lines = body
-        .split(|&b| b == b'\n')
-        .filter(|l| !l.iter().all(u8::is_ascii_whitespace));
+    let mut lines = non_blank_lines(body);
     while let Some(action_line) = lines.next() {
         let (action, meta) = parse_action_line(action_line)?;
         let source = if action.has_source() {

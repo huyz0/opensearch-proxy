@@ -9,6 +9,7 @@ use std::hint::black_box;
 
 use iai_callgrind::{library_benchmark, library_benchmark_group, main};
 use osproxy_core::cursor::{self, CursorSigner};
+use osproxy_core::json::{self, JsonError};
 use osproxy_core::{ClusterId, Epoch, PartitionId, RequestId, TraceContext};
 
 #[library_benchmark]
@@ -75,6 +76,23 @@ fn trace_propagate() -> TraceContext {
     )
 }
 
+// A single large string field with no escapes: the case where the
+// zero-materialization scanner (ADR-014) must bulk-jump via `memchr` rather
+// than dispatch a `match` per byte (issue: skip_string was ~5.8x slower than
+// a full `serde_json` parse on bodies shaped like this before that fix).
+fn large_string_body(len: usize) -> Vec<u8> {
+    let mut body = br#"{"payload":""#.to_vec();
+    body.extend(std::iter::repeat_n(b'x', len));
+    body.extend(br#""}"#);
+    body
+}
+
+#[library_benchmark]
+#[bench::large_string_64kib(large_string_body(64 * 1024))]
+fn json_validate(body: Vec<u8>) -> Result<(), JsonError> {
+    json::validate(black_box(&body))
+}
+
 library_benchmark_group!(
     name = core_hot_paths;
     benchmarks =
@@ -83,7 +101,8 @@ library_benchmark_group!(
         cursor_wrap,
         cursor_unwrap,
         trace_parse,
-        trace_propagate
+        trace_propagate,
+        json_validate
 );
 
 main!(library_benchmark_groups = core_hot_paths);

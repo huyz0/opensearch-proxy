@@ -107,3 +107,42 @@ fn validate_accepts_well_formed_and_rejects_garbage() {
     assert!(validate(b"{\"a\":1,}").is_err());
     assert!(validate(b"1 2").is_err());
 }
+
+#[test]
+fn rejects_raw_control_byte_in_string() {
+    // A literal (unescaped) control byte inside a string is invalid JSON; the
+    // bulk-jump scan must still catch it even though it isn't a `"` or `\`.
+    let body = b"{\"a\":\"x\x01y\"}";
+    assert_eq!(validate(body).unwrap_err(), JsonError::Invalid);
+    assert!(object_top_level(body).is_err());
+}
+
+#[test]
+fn rejects_unterminated_string() {
+    assert_eq!(validate(b"\"abc").unwrap_err(), JsonError::Invalid);
+    assert_eq!(
+        validate(br#"{"a":"unterminated"#).unwrap_err(),
+        JsonError::Invalid
+    );
+}
+
+#[test]
+fn handles_string_spanning_multiple_scan_runs() {
+    // Several escapes force the bulk-jump loop to run more than once, mixing
+    // ordinary runs (bulk-copied) with escape decoding (byte-by-byte).
+    let body = br#"{"a":"abc\ndef\tghi\\jkl\"mno"}"#;
+    assert_eq!(
+        scalar_at_path(body, ["a"]).unwrap(),
+        "abc\ndef\tghi\\jkl\"mno"
+    );
+}
+
+#[test]
+fn validate_large_string_with_no_escapes() {
+    // Exercises the memchr fast path over a run far larger than any SIMD lane
+    // width, with no escapes and no control bytes.
+    let mut body = br#"{"payload":""#.to_vec();
+    body.extend(std::iter::repeat_n(b'x', 64 * 1024));
+    body.extend(br#""}"#);
+    assert!(validate(&body).is_ok());
+}

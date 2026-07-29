@@ -311,27 +311,34 @@ impl<'a> Parser<'a> {
     }
 
     /// Skips a string (cursor at the opening quote), handling escapes, no alloc.
+    ///
+    /// Ordinary (non-`"`, non-`\`) runs are bulk-jumped with a vectorized
+    /// [`memchr::memchr2`] scan of the *existing* body slice, instead of a
+    /// bounds-checked `match` per byte — still zero-allocation, still a scan
+    /// over the caller's own bytes, just fewer trips through the dispatch loop
+    /// (see the module doc's ADR-014 no-materialization contract).
     fn skip_string(&mut self) -> Result<(), JsonError> {
         self.expect(b'"')?;
         loop {
-            match self.peek().ok_or(JsonError::Invalid)? {
-                b'"' => {
-                    self.i += 1;
-                    return Ok(());
+            let rest = &self.b[self.i..];
+            let off = memchr::memchr2(b'"', b'\\', rest).ok_or(JsonError::Invalid)?;
+            if rest[..off].iter().any(|&c| c < 0x20) {
+                return Err(JsonError::Invalid);
+            }
+            self.i += off;
+            if self.b[self.i] == b'"' {
+                self.i += 1;
+                return Ok(());
+            }
+            // Otherwise the byte at `self.i` is '\\': consume the escaped char;
+            // `\u` carries four more hex digits.
+            self.i += 1;
+            let esc = self.peek().ok_or(JsonError::Invalid)?;
+            self.i += 1;
+            if esc == b'u' {
+                for _ in 0..4 {
+                    self.hex_digit()?;
                 }
-                b'\\' => {
-                    self.i += 1;
-                    // Consume the escaped char; `\u` carries four more hex digits.
-                    let esc = self.peek().ok_or(JsonError::Invalid)?;
-                    self.i += 1;
-                    if esc == b'u' {
-                        for _ in 0..4 {
-                            self.hex_digit()?;
-                        }
-                    }
-                }
-                c if c < 0x20 => return Err(JsonError::Invalid),
-                _ => self.i += 1,
             }
         }
     }
@@ -345,27 +352,30 @@ impl<'a> Parser<'a> {
         // own code point, e.g. "café" → "cafÃ©", corrupting any non-ASCII
         // partition key or id-template input. The validation at the close rejects a
         // string that is not valid UTF-8 (JSON must be UTF-8), keeping the scanner
-        // strict rather than silently producing mojibake.
+        // strict rather than silently producing mojibake. `out` is sized to the
+        // one decoded string, never the document (INV-MEM).
         let mut out: Vec<u8> = Vec::new();
         loop {
-            match self.peek().ok_or(JsonError::Invalid)? {
-                b'"' => {
-                    self.i += 1;
-                    return String::from_utf8(out).map_err(|_| JsonError::Invalid);
-                }
-                b'\\' => {
-                    self.i += 1;
-                    self.decode_escape(&mut out)?;
-                }
-                c if c < 0x20 => return Err(JsonError::Invalid),
-                _ => {
-                    // A literal byte (ASCII, or one byte of a multi-byte sequence):
-                    // copy it verbatim. Continuation bytes are >= 0x80, so they are
-                    // never an escape or terminator and fall through here.
-                    out.push(self.b[self.i]);
-                    self.i += 1;
-                }
+            // Bulk-jump to the next `"`/`\` via a vectorized scan (same
+            // rationale as `skip_string`), then copy the run in one call
+            // instead of pushing byte-by-byte. Continuation bytes of a
+            // multi-byte UTF-8 sequence are >= 0x80, so they are never an
+            // escape or terminator and are copied verbatim within the run.
+            let rest = &self.b[self.i..];
+            let off = memchr::memchr2(b'"', b'\\', rest).ok_or(JsonError::Invalid)?;
+            let run = &rest[..off];
+            if run.iter().any(|&c| c < 0x20) {
+                return Err(JsonError::Invalid);
             }
+            out.extend_from_slice(run);
+            self.i += off;
+            if self.b[self.i] == b'"' {
+                self.i += 1;
+                return String::from_utf8(out).map_err(|_| JsonError::Invalid);
+            }
+            // Otherwise the byte at `self.i` is '\\'.
+            self.i += 1;
+            self.decode_escape(&mut out)?;
         }
     }
 

@@ -10,6 +10,7 @@
 
 use dhat::{HeapStats, Profiler};
 use osproxy_core::cursor::{self, CursorSigner};
+use osproxy_core::json;
 use osproxy_core::{ClusterId, ErrorCode, PartitionId, RequestId, TraceContext};
 
 #[global_allocator]
@@ -104,6 +105,49 @@ fn core_allocation_budgets() {
         n, 0,
         "TraceContext::propagate (no tracestate) must not allocate"
     );
+
+    json_scan_allocation_budgets();
+}
+
+/// The zero-materialization JSON scanner (ADR-014/INV-MEM): retained memory is
+/// bounded by the extracted value, never by document size. Split out of
+/// [`core_allocation_budgets`] to stay under the function-length budget; still
+/// runs under that test's single live profiler.
+fn json_scan_allocation_budgets() {
+    // json::validate must allocate nothing, even over a string field far
+    // larger than any single scan run, proving the memchr bulk-jump path
+    // never builds a parsed tree.
+    let mut large_string_body = br#"{"payload":""#.to_vec();
+    large_string_body.extend(std::iter::repeat_n(b'x', 128 * 1024));
+    large_string_body.extend(br#""}"#);
+    let n = allocs(|| {
+        let _ = std::hint::black_box(json::validate(&large_string_body));
+    });
+    assert_eq!(n, 0, "json::validate must not allocate");
+
+    // json::scalar_at_path: an unrelated field scanned past on the way to the
+    // target must be skipped for free regardless of its size, so the
+    // allocation count is identical whether that field is 4 bytes or 64KiB.
+    let small = json_body_with_skip_field(4);
+    let large = json_body_with_skip_field(64 * 1024);
+    let n_small = allocs(|| {
+        let _ = std::hint::black_box(json::scalar_at_path(&small, ["target"]));
+    });
+    let n_large = allocs(|| {
+        let _ = std::hint::black_box(json::scalar_at_path(&large, ["target"]));
+    });
+    assert_eq!(
+        n_small, n_large,
+        "scalar_at_path allocations must not scale with a skipped field's size"
+    );
+}
+
+/// `{"skip":"<skip_len bytes>","target":"hit"}`, for [`json_scan_allocation_budgets`].
+fn json_body_with_skip_field(skip_len: usize) -> Vec<u8> {
+    let mut b = br#"{"skip":""#.to_vec();
+    b.extend(std::iter::repeat_n(b'x', skip_len));
+    b.extend(br#"","target":"hit"}"#);
+    b
 }
 
 /// The cursor codec's per-call allocation budgets, discovered by measurement and
