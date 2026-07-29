@@ -36,8 +36,8 @@ dylibs).
 
 Two ways to consume osproxy, matching its two modes:
 
-**Run the proxy (prebuilt binary).** Each release attaches a static `osproxy`
-binary (a default build and a FIPS build) to its
+**Run the proxy (prebuilt binary).** Each release attaches static `osproxy`
+binaries (a default build, a FIPS build, and an `-v3` build) to its
 [GitHub Release](https://github.com/huyz0/opensearch-proxy/releases) — no Rust
 toolchain required:
 
@@ -45,6 +45,12 @@ toolchain required:
 curl -L https://github.com/huyz0/opensearch-proxy/releases/latest/download/osproxy-v1.0.1-x86_64-unknown-linux-gnu -o osproxy
 chmod +x osproxy && ./osproxy --help
 ```
+
+The `-v3` asset (`osproxy-<version>-x86_64-unknown-linux-gnu-v3`) is compiled
+with `target-feature=+avx2` for a faster JSON string scan on a modern-only
+fleet — it will crash with an illegal instruction on any pre-Haswell (2013)
+Intel or pre-2015 AMD x86_64 CPU, so use the plain (default) asset unless
+you've confirmed your deployment target supports AVX2.
 
 Or install it with cargo from crates.io:
 

@@ -77,9 +77,10 @@ fn trace_propagate() -> TraceContext {
 }
 
 // A single large string field with no escapes: the case where the
-// zero-materialization scanner (ADR-014) must bulk-jump via `memchr` rather
-// than dispatch a `match` per byte (issue: skip_string was ~5.8x slower than
-// a full `serde_json` parse on bodies shaped like this before that fix).
+// zero-materialization scanner (ADR-014) must bulk-jump via the vector scan
+// (`next_string_boundary`) rather than dispatch a `match` per byte (issue:
+// skip_string was ~5.8x slower than a full `serde_json` parse on bodies
+// shaped like this before that fix).
 fn large_string_body(len: usize) -> Vec<u8> {
     let mut body = br#"{"payload":""#.to_vec();
     body.extend(std::iter::repeat_n(b'x', len));

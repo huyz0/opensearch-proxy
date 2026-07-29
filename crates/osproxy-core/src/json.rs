@@ -312,33 +312,34 @@ impl<'a> Parser<'a> {
 
     /// Skips a string (cursor at the opening quote), handling escapes, no alloc.
     ///
-    /// Ordinary (non-`"`, non-`\`) runs are bulk-jumped with a vectorized
-    /// [`memchr::memchr2`] scan of the *existing* body slice, instead of a
-    /// bounds-checked `match` per byte — still zero-allocation, still a scan
-    /// over the caller's own bytes, just fewer trips through the dispatch loop
-    /// (see the module doc's ADR-014 no-materialization contract).
+    /// Ordinary (non-`"`, non-`\`, non-control) runs are bulk-jumped via
+    /// [`next_string_boundary`]'s fused scan instead of a bounds-checked
+    /// `match` per byte — still zero-allocation, still a scan over the
+    /// caller's own bytes, just fewer trips through the dispatch loop (see the
+    /// module doc's ADR-014 no-materialization contract).
     fn skip_string(&mut self) -> Result<(), JsonError> {
         self.expect(b'"')?;
         loop {
             let rest = &self.b[self.i..];
-            let off = memchr::memchr2(b'"', b'\\', rest).ok_or(JsonError::Invalid)?;
-            if rest[..off].iter().any(|&c| c < 0x20) {
-                return Err(JsonError::Invalid);
-            }
+            let off = next_string_boundary(rest).ok_or(JsonError::Invalid)?;
             self.i += off;
-            if self.b[self.i] == b'"' {
-                self.i += 1;
-                return Ok(());
-            }
-            // Otherwise the byte at `self.i` is '\\': consume the escaped char;
-            // `\u` carries four more hex digits.
-            self.i += 1;
-            let esc = self.peek().ok_or(JsonError::Invalid)?;
-            self.i += 1;
-            if esc == b'u' {
-                for _ in 0..4 {
-                    self.hex_digit()?;
+            match self.b[self.i] {
+                b'"' => {
+                    self.i += 1;
+                    return Ok(());
                 }
+                b'\\' => {
+                    // Consume the escaped char; `\u` carries four more hex digits.
+                    self.i += 1;
+                    let esc = self.peek().ok_or(JsonError::Invalid)?;
+                    self.i += 1;
+                    if esc == b'u' {
+                        for _ in 0..4 {
+                            self.hex_digit()?;
+                        }
+                    }
+                }
+                _ => return Err(JsonError::Invalid), // a raw control byte
             }
         }
     }
@@ -356,26 +357,26 @@ impl<'a> Parser<'a> {
         // one decoded string, never the document (INV-MEM).
         let mut out: Vec<u8> = Vec::new();
         loop {
-            // Bulk-jump to the next `"`/`\` via a vectorized scan (same
+            // Bulk-jump to the next `"`/`\`/control byte via a fused scan (same
             // rationale as `skip_string`), then copy the run in one call
             // instead of pushing byte-by-byte. Continuation bytes of a
             // multi-byte UTF-8 sequence are >= 0x80, so they are never an
             // escape or terminator and are copied verbatim within the run.
             let rest = &self.b[self.i..];
-            let off = memchr::memchr2(b'"', b'\\', rest).ok_or(JsonError::Invalid)?;
-            let run = &rest[..off];
-            if run.iter().any(|&c| c < 0x20) {
-                return Err(JsonError::Invalid);
-            }
-            out.extend_from_slice(run);
+            let off = next_string_boundary(rest).ok_or(JsonError::Invalid)?;
+            out.extend_from_slice(&rest[..off]);
             self.i += off;
-            if self.b[self.i] == b'"' {
-                self.i += 1;
-                return String::from_utf8(out).map_err(|_| JsonError::Invalid);
+            match self.b[self.i] {
+                b'"' => {
+                    self.i += 1;
+                    return String::from_utf8(out).map_err(|_| JsonError::Invalid);
+                }
+                b'\\' => {
+                    self.i += 1;
+                    self.decode_escape(&mut out)?;
+                }
+                _ => return Err(JsonError::Invalid), // a raw control byte
             }
-            // Otherwise the byte at `self.i` is '\\'.
-            self.i += 1;
-            self.decode_escape(&mut out)?;
         }
     }
 
@@ -490,6 +491,56 @@ impl<'a> Parser<'a> {
             Err(JsonError::Invalid)
         }
     }
+}
+
+/// Bytes handled per word in [`next_string_boundary`]'s vector scan.
+const SIMD_STEP: usize = 32;
+
+/// Finds the offset of the first byte in `bytes` that ends an ordinary string
+/// run: `"`, `\`, or a raw control byte (<0x20). `None` means none of those
+/// occur before the end of `bytes` (the string is unterminated).
+///
+/// Checks a whole 32-byte word per iteration via a portable, safe vector
+/// compare ([`wide::u8x32`]) instead of a per-byte or per-word scalar scan.
+/// `wide` picks AVX2 on `x86_64`, NEON on `aarch64`, or a scalar fallback
+/// elsewhere at compile time (no runtime feature detection, no `unsafe` in
+/// this crate — the per-platform unsafe lives inside `wide`, same trust model
+/// as depending on `memchr`). Learned from `simd-json`'s per-string AVX2 scan
+/// (`impls/avx2/deser.rs::parse_str`) and its range-check technique
+/// (`impls/avx2/stage1.rs::unsigned_lteq_against_input`), reimplemented here
+/// narrowly (just this one scan, not simd-json's whole-document structural
+/// indexing, which a 1MB-single-string benchmark showed has enough
+/// carry-propagation overhead to lose to this narrower scan).
+fn next_string_boundary(bytes: &[u8]) -> Option<usize> {
+    let quote = wide::u8x32::splat(b'"');
+    let backslash = wide::u8x32::splat(b'\\');
+    let ctrl_ceiling = wide::u8x32::splat(0x20); // unsigned; `wide` handles the sign offset
+    let mut chunks = bytes.chunks_exact(SIMD_STEP);
+    for (i, chunk) in (&mut chunks).enumerate() {
+        // `chunks_exact` guarantees `chunk.len() == SIMD_STEP`, so this never
+        // truncates; `copy_from_slice` avoids a `try_into().expect()`/`unwrap()`
+        // this crate's lints disallow.
+        let mut lanes = [0u8; SIMD_STEP];
+        lanes.copy_from_slice(chunk);
+        let v = wide::u8x32::from(lanes);
+        let mask = v.simd_eq(quote).to_bitmask()
+            | v.simd_eq(backslash).to_bitmask()
+            | v.simd_lt(ctrl_ceiling).to_bitmask();
+        if mask != 0 {
+            return Some(i * SIMD_STEP + mask.trailing_zeros() as usize);
+        }
+    }
+    let tail_start = bytes.len() - chunks.remainder().len();
+    chunks
+        .remainder()
+        .iter()
+        .position(|&c| is_string_boundary(c))
+        .map(|pos| tail_start + pos)
+}
+
+/// Whether `c` ends an ordinary string run: `"`, `\`, or a raw control byte.
+fn is_string_boundary(c: u8) -> bool {
+    c == b'"' || c == b'\\' || c < 0x20
 }
 
 /// Appends a decoded escape character's UTF-8 encoding to the byte buffer.

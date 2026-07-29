@@ -115,8 +115,8 @@ fn core_allocation_budgets() {
 /// runs under that test's single live profiler.
 fn json_scan_allocation_budgets() {
     // json::validate must allocate nothing, even over a string field far
-    // larger than any single scan run, proving the memchr bulk-jump path
-    // never builds a parsed tree.
+    // larger than any single scan run, proving the vector bulk-jump path never
+    // builds a parsed tree.
     let mut large_string_body = br#"{"payload":""#.to_vec();
     large_string_body.extend(std::iter::repeat_n(b'x', 128 * 1024));
     large_string_body.extend(br#""}"#);

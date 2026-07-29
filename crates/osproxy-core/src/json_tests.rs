@@ -138,9 +138,39 @@ fn handles_string_spanning_multiple_scan_runs() {
 }
 
 #[test]
+fn next_string_boundary_finds_the_boundary_at_every_offset_including_chunk_seams() {
+    // Exercises the vector scan's lane math directly: every offset from 0 up
+    // to three full 32-byte SIMD words, for each kind of boundary byte, so a
+    // lane-index or chunk-offset bug (off-by-one at a word seam, a wrong
+    // `trailing_zeros` lane extraction, ...) can't hide in the tail-only or
+    // aligned-only case.
+    for &needle in &[b'"', b'\\', 0x00u8, 0x01u8, 0x1fu8] {
+        for len in 0..=96usize {
+            for pos in 0..=len {
+                let mut buf = vec![b'x'; len];
+                if pos < len {
+                    buf[pos] = needle;
+                    assert_eq!(
+                        next_string_boundary(&buf),
+                        Some(pos),
+                        "needle={needle:#x} len={len} pos={pos}"
+                    );
+                } else {
+                    assert_eq!(
+                        next_string_boundary(&buf),
+                        None,
+                        "needle={needle:#x} len={len} (no boundary present)"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn validate_large_string_with_no_escapes() {
-    // Exercises the memchr fast path over a run far larger than any SIMD lane
-    // width, with no escapes and no control bytes.
+    // Exercises the vector-scan fast path over a run far larger than a single
+    // 32-byte SIMD word, with no escapes and no control bytes.
     let mut body = br#"{"payload":""#.to_vec();
     body.extend(std::iter::repeat_n(b'x', 64 * 1024));
     body.extend(br#""}"#);
