@@ -61,14 +61,14 @@ fn the_scalability_brief_lists_every_point_and_the_scaling_summary() {
 fn the_footprint_brief_reflects_a_failing_verdict() {
     // Oversized idle → the verdict fails, and the brief must say so.
     let profile = FootprintProfile {
-        idle_rss_bytes: 512 * 1024 * 1024,
-        soak_rss_bytes: 520 * 1024 * 1024,
+        before_rss_bytes: 512 * 1024 * 1024,
+        after_rss_bytes: 520 * 1024 * 1024,
         soak_requests: 50_000,
     };
     let verdict = judge_footprint(&profile, &FootprintThresholds::provisional());
     let md = footprint_brief(&profile, &verdict);
     assert!(md.contains("### NFR-P6 footprint"));
-    assert!(md.contains("idle RSS"));
+    assert!(md.contains("before RSS"));
     assert!(md.contains("FAIL"), "oversized idle reads FAIL:\n{md}");
 }
 

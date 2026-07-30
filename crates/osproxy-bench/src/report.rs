@@ -80,14 +80,14 @@ pub fn scalability_brief(curve: &ScalabilityCurve, verdict: &Verdict) -> String 
     out
 }
 
-/// A Markdown brief for the idle/soak memory footprint.
+/// A Markdown brief for the before/after-soak memory footprint.
 #[must_use]
 pub fn footprint_brief(profile: &FootprintProfile, verdict: &Verdict) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "### NFR-P6 footprint\n");
     let _ = writeln!(out, "| metric | value |\n| --- | --- |");
-    row(&mut out, "idle RSS", &mib(profile.idle_rss_bytes));
-    row(&mut out, "post-soak RSS", &mib(profile.soak_rss_bytes));
+    row(&mut out, "before RSS", &mib(profile.before_rss_bytes));
+    row(&mut out, "after RSS", &mib(profile.after_rss_bytes));
     row(
         &mut out,
         "growth",

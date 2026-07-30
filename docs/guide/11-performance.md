@@ -211,16 +211,76 @@ connector (flat on loopback; prevents Nagle tail latency on a real network).
 ## End-to-end vs. a real OpenSearch (CI, authoritative)
 
 The Docker integration lane fills an NFR-P profile (proxy vs. direct baseline) and
-renders briefs to the job summary. Representative figures:
+renders briefs to the job summary. The profile run drives three request-body shapes
+so the comparison exercises more than the routing envelope: **tiny** (the original
+3-field ~40 B document), **big-field** (one 64 KB string — the shape that motivated
+`osproxy-core::json`'s vectorized string scan, e.g. a large text blob or base64
+attachment), and **many-fields** (~15 small mixed-type fields, two nested objects, an
+array — a typical document not dominated by any single field).
 
-- **Added latency** (proxy over direct): p50 ≈ 0.08 ms, p99 ≈ 1.7 ms, inside
-  NFR-P1's ~1–2 ms target.
-- **Pool reuse** ≈ 1.0 under steady load (NFR-P4).
-- **Scalability**: throughput scales ~44× (52 → 2,310 rps as concurrency 1 → 64) with
-  p50 flat (~18 → 24 ms), scales by pool reuse, not latency inflation (NFR-P2).
-- **Footprint**: idle ≈ 12 MiB RSS (the `mimalloc` allocator reserves ~1 MiB of
-  per-thread arenas over the ~11 MiB system-allocator baseline); bounded growth under
-  a 50k-request soak (NFR-P6).
+| shape | added p50 | added p99 | pool reuse | throughput |
+|-------|----------:|----------:|-----------:|-----------:|
+| tiny | 0.000 ms | 11.4 ms | 1.0000 | 1,116 rps |
+| big-field (64 KB) | 6.9 ms | 11.1 ms | 1.0000 | 526 rps |
+| many-fields | 0.126 ms | 0.000 ms | 1.0000 | 1,048 rps |
+
+What it shows: **tiny and many-fields cost essentially nothing beyond the baseline**
+— the proxy's added p50 is at or near zero for both, consistent with the
+[per-request hot path](#per-request-hot-path-cpu-single-thread) being sub-microsecond
+CPU regardless of field count. **big-field is where real added latency shows up**
+(~6.9 ms p50): moving a 64 KB body through an extra hop is dominated by socket I/O
+(as [Proxy overhead, isolated](#proxy-overhead-isolated-differential) found
+in-process — ~0.29 ms fixed+body cost there vs. real network+OpenSearch-write
+latency here, which swamps it), not the JSON scan itself, which the unit-level
+`iai-callgrind` bench pins at tens of microseconds even at large sizes. **Pool reuse
+stays 1.0 across every shape** (NFR-P4): body size doesn't churn upstream
+connections.
+
+The added-p50 story doesn't extend cleanly to p99: tiny's added p99 (11.4 ms) is
+*higher* than big-field's (11.1 ms), which looks backwards next to the p50 numbers.
+It isn't a real inversion — p99 is a single-digit sample count out of `TOTAL`/
+`TOTAL_BIG_FIELD` requests (a handful of outliers out of 300 for big-field vs. 2,000
+for tiny), so it's the noisiest statistic this harness produces, sensitive to one
+slow container GC pause or scheduling blip landing on either side. Like the rest of
+this page's absolute numbers, p99 here is **recorded, not asserted** — only p50 and
+pool reuse are read for the "does this cost something" story; p99 needs many more
+samples (or repeated runs) before treating small cross-shape differences as signal.
+
+**Scalability** (tiny shape, concurrency 1 → 64): throughput scales ~34.5× (53 →
+1,838 rps) with p50 nearly flat (18.3 → 26.4 ms) — the proxy scales by pool reuse,
+not latency inflation (NFR-P2). Tail amplification 2.91×.
+
+### Memory under sustained load
+
+The footprint soak spawns the real `osproxy` binary and reads its own process RSS
+(`/proc/<pid>/statm`) before and after driving load through it — two soaks back to
+back on the same process, so the second isolates what it specifically adds over the
+first's already-warmed state (not a strictly equivalent measurement to a fresh
+big-field-only soak from a cold process — allocator arena reuse from the first soak
+could plausibly shift the second's delta a little either way — but close enough for
+the bounded-vs-unbounded question this soak exists to answer):
+
+| soak | requests | bytes moved | RSS before | RSS after | growth |
+|------|---------:|------------:|-----------:|----------:|-------:|
+| tiny | 50,000 | ~2 MB | 16.7 MiB | 23.6 MiB | 1.41× (+6.8 MiB) |
+| big-field (64 KB) | 5,000 | ~320 MB | 23.6 MiB | 44.2 MiB | 1.88× (+20.6 MiB) |
+
+The big-field soak moves **~320 MB** of request bodies through the proxy — a fully
+materializing parser copying every byte into a tree would show that scale of growth
+(or worse, retained garbage from repeated allocation churn). It grows RSS by
+**~20.6 MiB**: memory doesn't track total bytes transferred, it stays bounded, the
+end-to-end confirmation (real binary, real RSS, sustained load) of the same
+zero/bounded-materialization claim (ADR-014/INV-MEM) the crate's dhat allocation-count
+unit tests already prove in isolation. NFR-P6 passes both soaks via its either/or
+bound (ratio ≤1.5× *or* growth ≤64 MiB absolute) — big-field's ratio alone (1.88×)
+would fail the ratio leg, exactly the case the either/or bound exists for: a small
+idle baseline makes any real growth look like a large ratio.
+
+Both the tiny soak's idle figure (16.7 MiB) and the older recorded one (~12 MiB) are
+debug-binary numbers, not directly comparable run to run — the gap here is plausibly
+a couple of new small dependencies (`wide`, `memchr`) linked into `osproxy-core`
+since the earlier measurement, not a regression signal by itself; the invariant that
+matters is the bounded-growth finding, re-verified above.
 
 ## Reproduce everything
 
@@ -234,8 +294,13 @@ cargo test  -p osproxy-server --test connection_load                          # 
 cargo test  -p osproxy-server --test connection_load single_connection_request_latency_microbench -- --ignored --nocapture
 cargo bench -p osproxy-rewrite                                                 # hot-path timing
 cargo test  -p osproxy-rewrite --test memory                                   # allocation budgets
-cargo test  -p osproxy-server --test perf_harness     -- --ignored --nocapture --test-threads=1  # needs Docker
+cargo test  -p osproxy-server --test perf_harness     -- --ignored --nocapture --test-threads=1  # needs Docker; 3 body shapes
+cargo test  -p osproxy-server --test soak             -- --ignored --nocapture --test-threads=1  # needs Docker + Linux /proc; memory under load
 ```
+
+`perf_harness` and `soak` each write one `nfr-*-<shape>.{json,md}` artifact set per
+body shape (`tiny`/`big-field`/`many-fields` for the profile,
+`tiny`/`big-field` for the soak) to `$CARGO_TARGET_TMPDIR`.
 
 To profile the per-request CPU breakdown with an external profiler (no kernel
 support needed), the `profile_64k` test exposes 64 KB and 256 B single-connection

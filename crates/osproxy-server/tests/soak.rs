@@ -38,11 +38,56 @@ const INDEX: &str = "osproxy-shared";
 /// Linux page size assumed when converting `statm` resident pages to bytes (4 KiB
 /// on every platform this runs on).
 const PAGE_BYTES: u64 = 4096;
-/// Requests driven through the proxy during the soak, enough that an unbounded
-/// per-request buffer would show as a climbing resident set.
+/// Requests driven through the proxy during the [`BodyShape::Tiny`] soak,
+/// enough that an unbounded per-request buffer would show as a climbing
+/// resident set.
 const SOAK_REQUESTS: u64 = 50_000;
+/// Requests for the [`BodyShape::BigField`] soak: fewer, since each moves
+/// `BIG_FIELD_BYTES` (still 320 MB total) — enough that an unbounded per-request
+/// buffer scaling with body size would show as a climbing resident set.
+const SOAK_REQUESTS_BIG_FIELD: u64 = 5_000;
+/// Size of the big-field soak's single string field, matching
+/// `perf_harness.rs`'s `BIG_FIELD_BYTES` (duplicated rather than shared, same
+/// rationale as the container scaffold above: cheaper than a cross-test-binary
+/// module for two `#[ignore]` gates).
+const BIG_FIELD_BYTES: usize = 64 * 1024;
 /// Concurrency the soak is driven at.
 const SOAK_CONCURRENCY: u32 = 16;
+
+/// Request-body shapes the soak drives. `Tiny` is the original fixed envelope
+/// (NFR-P6's baseline soak); `BigField` is a single large string field — the
+/// shape `osproxy-core::json`'s zero-materialization scanner (ADR-014/INV-MEM)
+/// exists for. Soaking with it directly tests whether the "no full-body copy"
+/// claim holds under sustained real load and real process RSS, not just in the
+/// crate's own dhat allocation-count unit tests.
+#[derive(Clone, Copy)]
+enum BodyShape {
+    Tiny,
+    BigField,
+}
+
+impl BodyShape {
+    fn label(self) -> &'static str {
+        match self {
+            BodyShape::Tiny => "tiny",
+            BodyShape::BigField => "big-field",
+        }
+    }
+
+    fn requests(self) -> u64 {
+        match self {
+            BodyShape::Tiny => SOAK_REQUESTS,
+            BodyShape::BigField => SOAK_REQUESTS_BIG_FIELD,
+        }
+    }
+
+    fn field_json(self) -> String {
+        match self {
+            BodyShape::Tiny => r#""msg":"x""#.to_owned(),
+            BodyShape::BigField => format!(r#""payload":"{}""#, "x".repeat(BIG_FIELD_BYTES)),
+        }
+    }
+}
 
 type HttpClient = Client<hyper_util::client::legacy::connect::HttpConnector, Full<Bytes>>;
 
@@ -97,9 +142,9 @@ async fn spawn_proxy_process(upstream: &str) -> (ProxyChild, String, u32) {
     (ProxyChild(child), format!("http://{bind}"), pid)
 }
 
-/// One logical ingest request through the proxy.
-fn ingest(base: &str, i: u64) -> Request<Full<Bytes>> {
-    let body = format!(r#"{{"tenant_id":"soak","id":{i},"msg":"x"}}"#);
+/// One logical ingest request through the proxy, in `shape`'s body.
+fn ingest(base: &str, i: u64, shape: BodyShape) -> Request<Full<Bytes>> {
+    let body = format!(r#"{{"tenant_id":"soak","id":{i},{}}}"#, shape.field_json());
     Request::builder()
         .method(Method::POST)
         .uri(format!("{base}/orders/_doc"))
@@ -112,7 +157,11 @@ fn ingest(base: &str, i: u64) -> Request<Full<Bytes>> {
 /// gives up. Returns whether it became ready.
 async fn wait_proxy_ready(client: &HttpClient, base: &str) -> bool {
     for _ in 0..60 {
-        if client.request(ingest(base, 0)).await.is_ok() {
+        if client
+            .request(ingest(base, 0, BodyShape::Tiny))
+            .await
+            .is_ok()
+        {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -128,9 +177,10 @@ fn rss_bytes(pid: u32) -> Option<u64> {
     Some(resident_pages * PAGE_BYTES)
 }
 
-/// Drives `SOAK_REQUESTS` ingests through the proxy at `SOAK_CONCURRENCY`,
-/// returning how many succeeded (2xx).
-async fn soak(client: &HttpClient, base: &str) -> u64 {
+/// Drives `shape.requests()` ingests of `shape`'s body through the proxy at
+/// `SOAK_CONCURRENCY`, returning how many succeeded (2xx).
+async fn soak(client: &HttpClient, base: &str, shape: BodyShape) -> u64 {
+    let total = shape.requests();
     let next = Arc::new(AtomicU64::new(0));
     let ok = Arc::new(AtomicU64::new(0));
     let mut workers = Vec::new();
@@ -142,10 +192,10 @@ async fn soak(client: &HttpClient, base: &str) -> u64 {
         workers.push(tokio::spawn(async move {
             loop {
                 let i = next.fetch_add(1, Ordering::Relaxed);
-                if i >= SOAK_REQUESTS {
+                if i >= total {
                     break;
                 }
-                if let Ok(resp) = client.request(ingest(&base, i)).await {
+                if let Ok(resp) = client.request(ingest(&base, i, shape)).await {
                     let success = resp.status().is_success();
                     let _ = resp.into_body().collect().await;
                     if success {
@@ -159,6 +209,80 @@ async fn soak(client: &HttpClient, base: &str) -> u64 {
         w.await.unwrap();
     }
     ok.load(Ordering::Relaxed)
+}
+
+/// Runs one soak (`shape`'s body) starting from `pre_rss`, builds and reports
+/// its [`FootprintProfile`] (artifacts labeled by [`BodyShape::label`]),
+/// asserts its growth stays bounded (NFR-P6), and returns the post-soak RSS —
+/// the next shape's starting point, so chaining shapes isolates what each one
+/// specifically adds rather than re-measuring from a cold, unrepresentative
+/// idle baseline every time.
+async fn run_soak_and_report(
+    client: &HttpClient,
+    proxy_base: &str,
+    pid: u32,
+    pre_rss: u64,
+    shape: BodyShape,
+) -> u64 {
+    let requests = shape.requests();
+    let label = shape.label();
+    let ok = soak(client, proxy_base, shape).await;
+    assert_eq!(ok, requests, "[{label}] every soak ingest should succeed");
+
+    // Let post-soak transients drain before reading, so the figure reflects
+    // retained memory, not in-flight buffers.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let post_rss = rss_bytes(pid).expect("read post-soak RSS");
+
+    let profile = FootprintProfile {
+        before_rss_bytes: pre_rss,
+        after_rss_bytes: post_rss,
+        soak_requests: requests,
+    };
+    let verdict = judge_footprint(&profile, &FootprintThresholds::provisional());
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    std::fs::write(
+        format!("{dir}/nfr-footprint-{label}.json"),
+        profile.to_json(),
+    )
+    .unwrap();
+    std::fs::write(
+        format!("{dir}/nfr-footprint-verdict-{label}.json"),
+        verdict.to_json(),
+    )
+    .unwrap();
+    std::fs::write(
+        format!("{dir}/nfr-footprint-{label}.md"),
+        footprint_brief(&profile, &verdict),
+    )
+    .unwrap();
+    println!("NFR-P6 footprint [{label}]:\n{}", profile.to_json());
+    println!(
+        "[{label}] before = {:.1} MiB, after = {:.1} MiB, growth = {:.2}x over {} reqs\nverdict (provisional):\n{}",
+        pre_rss as f64 / 1_048_576.0,
+        post_rss as f64 / 1_048_576.0,
+        profile.growth_ratio(),
+        requests,
+        verdict.to_json(),
+    );
+
+    // Host-independent invariant: the footprint must not run away under load,
+    // the proxy holds no unbounded per-request buffer or queue (NFR-P6). The
+    // *absolute* figures are build/host-bound (this is a debug binary), so they
+    // are recorded and judged but not hard-asserted; the growth finding (ratio OR
+    // absolute bytes) is the leak guard that survives a small idle footprint.
+    let growth = verdict
+        .findings
+        .iter()
+        .find(|f| f.nfr == "NFR-P6-growth")
+        .expect("growth finding present");
+    assert!(
+        growth.pass,
+        "[{label}] footprint should stay bounded under soak: {}",
+        growth.detail
+    );
+
+    post_rss
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -175,59 +299,20 @@ async fn nfr_p6_footprint_under_soak() {
     // Let startup allocations settle, then read the idle footprint.
     tokio::time::sleep(Duration::from_secs(2)).await;
     let idle_rss_bytes = rss_bytes(pid).expect("read idle RSS");
-
-    let ok = soak(&client, &proxy_base).await;
-    assert_eq!(ok, SOAK_REQUESTS, "every soak ingest should succeed");
-
-    // Let post-soak transients drain before reading, so the figure reflects
-    // retained memory, not in-flight buffers.
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    let soak_rss_bytes = rss_bytes(pid).expect("read post-soak RSS");
-
-    let profile = FootprintProfile {
-        idle_rss_bytes,
-        soak_rss_bytes,
-        soak_requests: SOAK_REQUESTS,
-    };
-    let verdict = judge_footprint(&profile, &FootprintThresholds::provisional());
-    let dir = env!("CARGO_TARGET_TMPDIR");
-    std::fs::write(format!("{dir}/nfr-footprint.json"), profile.to_json()).unwrap();
-    std::fs::write(
-        format!("{dir}/nfr-footprint-verdict.json"),
-        verdict.to_json(),
-    )
-    .unwrap();
-    std::fs::write(
-        format!("{dir}/nfr-footprint.md"),
-        footprint_brief(&profile, &verdict),
-    )
-    .unwrap();
-    println!("NFR-P6 footprint:\n{}", profile.to_json());
-    println!(
-        "idle = {:.1} MiB, post-soak = {:.1} MiB, growth = {:.2}x over {} reqs\nverdict (provisional):\n{}",
-        idle_rss_bytes as f64 / 1_048_576.0,
-        soak_rss_bytes as f64 / 1_048_576.0,
-        profile.growth_ratio(),
-        SOAK_REQUESTS,
-        verdict.to_json(),
-    );
-
-    // Host-independent invariant: the footprint must not run away under load,
-    // the proxy holds no unbounded per-request buffer or queue (NFR-P6). The
-    // *absolute* idle figure is build/host-bound (this is a debug binary), so it
-    // is recorded and judged but not hard-asserted; the growth finding (ratio OR
-    // absolute bytes) is the leak guard that survives a small idle footprint.
     assert!(idle_rss_bytes > 0, "idle RSS should be measurable");
-    let growth = verdict
-        .findings
-        .iter()
-        .find(|f| f.nfr == "NFR-P6-growth")
-        .expect("growth finding present");
-    assert!(
-        growth.pass,
-        "footprint should stay bounded under soak: {}",
-        growth.detail
-    );
+    println!("idle RSS = {:.1} MiB", idle_rss_bytes as f64 / 1_048_576.0);
+
+    // Two soaks on the SAME process, back to back: the tiny-body soak (the
+    // original NFR-P6 baseline) then a big-field soak layered on top of it.
+    // The second profile's "before" is the already-warmed post-tiny-soak state,
+    // so it isolates what sustained large-string ingest specifically adds —
+    // directly testing whether osproxy-core::json's zero-materialization scan
+    // (ADR-014/INV-MEM) holds under real, repeated load and real process RSS,
+    // not just the crate's own dhat allocation-count unit tests.
+    let mut rss = idle_rss_bytes;
+    for shape in [BodyShape::Tiny, BodyShape::BigField] {
+        rss = run_soak_and_report(&client, &proxy_base, pid, rss, shape).await;
+    }
 
     drop(proxy); // explicit: kill the child before the container tears down.
 }

@@ -7,17 +7,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::judge::{Finding, Verdict};
 
-/// A footprint measurement: the proxy process's resident set size (RSS) when
-/// idle and again after sustaining `soak_requests`. The two readings are taken
-/// from the *same* process, so their difference is the proxy's own growth under
-/// load, the signal that catches an unbounded buffer or queue (NFR-P6), since a
-/// well-behaved proxy returns near its idle footprint after a soak.
+/// A footprint measurement: the proxy process's resident set size (RSS) before
+/// and after sustaining `soak_requests`. The two readings are taken from the
+/// *same* process, so their difference is the proxy's own growth under load,
+/// the signal that catches an unbounded buffer or queue (NFR-P6), since a
+/// well-behaved proxy returns near its starting footprint after a soak.
+///
+/// `before_rss_bytes` is the true idle footprint for a single soak, but a
+/// *chained* run (several soaks back to back on one process, each isolating
+/// what it specifically adds) reuses this same type per soak with
+/// `before_rss_bytes` set to the *previous* soak's `after_rss_bytes` — deliberately
+/// generic field names, not `idle_rss_bytes`, so a mid-chain profile's artifact
+/// never mislabels an already-warmed baseline as "idle".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FootprintProfile {
-    /// Resident set after startup settles, before load, the idle footprint.
-    pub idle_rss_bytes: u64,
+    /// Resident set before the soak: the true idle footprint for a single
+    /// soak, or the previous soak's `after_rss_bytes` in a chained run.
+    pub before_rss_bytes: u64,
     /// Resident set after the soak completed.
-    pub soak_rss_bytes: u64,
+    pub after_rss_bytes: u64,
     /// Number of requests driven through the proxy during the soak.
     pub soak_requests: u64,
 }
@@ -28,23 +36,24 @@ impl FootprintProfile {
     /// zero growth, never a nonsensical negative.
     #[must_use]
     pub fn growth_bytes(&self) -> u64 {
-        self.soak_rss_bytes.saturating_sub(self.idle_rss_bytes)
+        self.after_rss_bytes.saturating_sub(self.before_rss_bytes)
     }
 
-    /// Post-soak RSS as a multiple of idle RSS. `1.0` is "returned to idle"; a
-    /// ratio climbing with `soak_requests` is the fingerprint of an unbounded
-    /// buffer. Guards a zero idle reading (unmeasurable) by returning `1.0`.
+    /// Post-soak RSS as a multiple of the pre-soak RSS. `1.0` is "returned to
+    /// where it started"; a ratio climbing with `soak_requests` is the
+    /// fingerprint of an unbounded buffer. Guards a zero pre-soak reading
+    /// (unmeasurable) by returning `1.0`.
     ///
     /// The `u64 -> f64` casts are exact below 2^52 bytes (4 PiB), so the
     /// precision-loss lint is suppressed.
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
     pub fn growth_ratio(&self) -> f64 {
-        if self.idle_rss_bytes == 0 {
+        if self.before_rss_bytes == 0 {
             return 1.0;
         }
         // Both fit well under 2^52, so the f64 conversion is exact.
-        self.soak_rss_bytes as f64 / self.idle_rss_bytes as f64
+        self.after_rss_bytes as f64 / self.before_rss_bytes as f64
     }
 
     /// The profile as pretty JSON, the artifact a soak run writes and a judge
@@ -89,10 +98,12 @@ impl FootprintThresholds {
     }
 }
 
-/// Scores a footprint against `thresholds`: one finding for the idle footprint
-/// and one for soak growth (the unbounded-buffer guard). Passes iff both hold.
-/// Growth passes within **either** the ratio or the absolute-bytes bound; it
-/// fails closed on a non-finite ratio.
+/// Scores a footprint against `thresholds`: one finding for the pre-soak
+/// footprint (the true idle footprint for a single soak; a prior soak's
+/// end-state for a chained one — see [`FootprintProfile`]'s doc) and one for
+/// soak growth (the unbounded-buffer guard). Passes iff both hold. Growth
+/// passes within **either** the ratio or the absolute-bytes bound; it fails
+/// closed on a non-finite ratio.
 #[must_use]
 pub fn judge_footprint(profile: &FootprintProfile, thresholds: &FootprintThresholds) -> Verdict {
     let ratio = profile.growth_ratio();
@@ -102,10 +113,10 @@ pub fn judge_footprint(profile: &FootprintProfile, thresholds: &FootprintThresho
     let findings = vec![
         Finding {
             nfr: "NFR-P6".to_owned(),
-            pass: profile.idle_rss_bytes <= thresholds.max_idle_rss_bytes,
+            pass: profile.before_rss_bytes <= thresholds.max_idle_rss_bytes,
             detail: format!(
-                "idle {:.1} MiB vs bound {:.1} MiB",
-                mib(profile.idle_rss_bytes),
+                "before {:.1} MiB vs bound {:.1} MiB",
+                mib(profile.before_rss_bytes),
                 mib(thresholds.max_idle_rss_bytes)
             ),
         },

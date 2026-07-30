@@ -8,8 +8,8 @@ const MIB: u64 = 1024 * 1024;
 
 fn profile(idle_mib: u64, soak_mib: u64, reqs: u64) -> FootprintProfile {
     FootprintProfile {
-        idle_rss_bytes: idle_mib * MIB,
-        soak_rss_bytes: soak_mib * MIB,
+        before_rss_bytes: idle_mib * MIB,
+        after_rss_bytes: soak_mib * MIB,
         soak_requests: reqs,
     }
 }
