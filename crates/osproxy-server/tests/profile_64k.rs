@@ -37,6 +37,14 @@ use hyper_util::rt::TokioExecutor;
 use common::{build_handler, payload, serve, start_upstream};
 use osproxy_server::tenancy::PlacementMode;
 
+/// Matches the real `osproxy` binary's allocator (`crates/osproxy-server/src/
+/// main.rs`): `#[global_allocator]` only applies within the binary crate root
+/// that declares it, and each integration-test file is its own crate root, so
+/// without this a profile of this file measures the *system* allocator's cost,
+/// not production's.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Requests in the profiled loop. Enough samples for callgrind, few enough that a
 /// ~30× valgrind slowdown stays quick.
 const REQUESTS: usize = 200;
@@ -72,5 +80,29 @@ async fn profile_64k_single_connection() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "profiling target; run under callgrind, see module docs"]
 async fn profile_256b_single_connection() {
+    drive(256).await;
+}
+
+/// Same workload as [`profile_256b_single_connection`], but on a single-
+/// threaded runtime: client, proxy, and mock upstream tasks all cooperatively
+/// scheduled on one OS thread instead of work-stolen across `worker_threads`.
+/// At single-connection concurrency there's no real parallelism to schedule
+/// anyway, so this isolates how much of the fixed per-request cost is
+/// cross-thread wakeup overhead (`futex`) rather than request-handling work —
+/// see `runtime_flavor.rs` for the systematic latency/throughput A/B.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "profiling target; run under callgrind, see module docs"]
+async fn profile_256b_single_connection_current_thread() {
+    drive(256).await;
+}
+
+/// Same as [`profile_256b_single_connection`] but with exactly one worker
+/// thread: unlike `current_thread`, this still goes through the multi-thread
+/// scheduler's park/unpark machinery (just with nothing to steal from), so
+/// diffing this against `current_thread` isolates the scheduler-flavor cost
+/// from the worker-*count* cost.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore = "profiling target; run under callgrind, see module docs"]
+async fn profile_256b_single_connection_mt1() {
     drive(256).await;
 }

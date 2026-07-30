@@ -153,6 +153,100 @@ Every transform is sub-microsecond, <0.1% of a request. Allocations are budgeted
 `wrap_query` is ~12 allocations (down from 33) because the client query is preserved
 as raw bytes (`serde_json::RawValue`), never re-parsed.
 
+### Where the fixed cost actually goes (callgrind)
+
+The transform table above only covers `osproxy-rewrite`'s own functions. Profiling
+the whole per-request path — `profile_64k.rs`'s single-connection loop under
+`valgrind --tool=callgrind`, 256 B body, 200 sequential requests — answers where the
+rest of the ~0.15 ms fixed cost from
+[Proxy overhead, isolated](#proxy-overhead-isolated-differential) goes. (This profile
+covers client + proxy + mock upstream in one process, so the shares below are of the
+whole request/response round trip, not the proxy alone — but attributed by function,
+which is what matters for "where would more optimization help".)
+
+| category | share of instructions | what |
+|---|---:|---|
+| allocator (`mimalloc`) | ~11% | malloc/free internals |
+| `memcpy` | ~7% | header + body byte moves |
+| SipHash | ~2.8% | Rust's default (DoS-resistant, slower) hasher, mostly `HeaderMap` |
+| HTTP parsing/building (`http`/`httparse`/`hyper`) | ~5–6% | not our code |
+| tokio scheduling | ~3% | task polling, timer wheel |
+| **our own code** (json scan, sink wire-building, transport glue) | **~1.5–2%** | |
+
+These are the categories that individually clear the 90% callgrind-annotate
+threshold used to build this table (roughly ~31% of instructions combined); the
+remaining ~69% is spread across dynamic-linker/relocation setup cost, `Timespec`/
+`clock_gettime`, string formatting, and hundreds of sub-0.3%-each functions across
+tokio/hyper/http/bytes internals — no single further category, ours or a
+dependency's, is a comparably large lever.
+
+Our own application code was never the bottleneck, and still isn't after the SIMD
+string-scan work (ADR-014) — that work targeted roughly 2% of the per-request cost.
+The allocator and `memcpy` are the two biggest line items under our control; HTTP
+parsing and tokio scheduling are dependency cost, not ours to optimize directly
+beyond calling into them less.
+
+**A methodology note that changed the numbers**: `profile_64k.rs`'s
+`#[global_allocator]` was originally *not* set, so an early version of this profile
+measured the system allocator (glibc), not `mimalloc` — each integration test file is
+its own crate root, and `#[global_allocator]` only applies to the crate root that
+declares it, so `main.rs`'s declaration doesn't reach test binaries automatically.
+With glibc, the allocator's share was ~19–24% of instructions; with `mimalloc` linked
+into the test file to match production, it drops to ~11% and total instructions fall
+~5% — a real, now-directly-measured confirmation of the mimalloc win alongside the
+earlier concurrent-throughput A/B (above), not just a duplicate of it.
+
+### Runtime flavor: does `current_thread` help? (ablation — mostly no)
+
+The same callgrind run, read with `strace -c` instead, turned up something the
+instruction breakdown doesn't show: **`futex` is ~84% of measured syscall time**
+(~6 calls/request) — tokio's cross-thread work-stealing wakeup — while actual socket
+I/O (`recvfrom`/`writev`/`write`/`sendto` combined) is under 8%. Switching that one
+profiling target from `multi_thread(2)` to a `current_thread` runtime cut futex calls
+from 1,241 to 4 for the same 200-request loop, which reads like a strong case for a
+single-threaded runtime at low concurrency.
+
+`runtime_flavor.rs` checks that the way it actually matters — proxy on its own
+dedicated runtime, talking over real loopback sockets to a *separately*-threaded
+client and upstream (unlike the callgrind target, which unifies client+proxy+upstream
+in one process/thread, which is what let `current_thread` eliminate futex calls
+entirely) — across concurrency 1→64, and randomizes flavor-test order per run (by
+process id parity) so a wall-clock drift artifact can't masquerade as a flavor
+effect.
+
+Across roughly a dozen runs, one signal held up: in every run *not* dominated by
+external system noise (below), `current_thread` had the lowest conns=64 throughput of
+the five flavors, ~30–40% below the two best-performing multi-thread configs — the
+one run where it wasn't lowest, a *different* flavor (`multi_thread(cores)`) dipped
+anomalously rather than `current_thread` improving. One signal was
+**not** robust: at conns=1, `current_thread` was often the fastest or tied-fastest by
+tens of microseconds in a clean run, but a couple of runs later in the same session —
+after sustained heavy load from the callgrind/strace profiling work above — showed
+enough system-wide noise (every flavor's numbers degraded together, rankings
+scrambled) that no single-connection ranking should be trusted from this box without
+many more repeated, isolated trials than this ablation ran. Concretely: this
+comparison was noisier run-to-run than any other benchmark on this page, itself worth
+knowing before trusting a fine-grained ranking from it.
+
+The isolated futex measurement was real, but the dramatic 1,241→4 drop doesn't
+translate into a reliable low-concurrency win in a realistic topology: a proxy always
+talks to external clients and upstreams over sockets living in separate
+threads/processes, so *some* cross-thread wakeup is unavoidable regardless of the
+proxy's own internal thread count — `current_thread` only removes the proxy's own
+internal share of it, and that share turned out to be a small, noisy effect at low
+concurrency, not the dominant one.
+
+**Conclusion: the futex overhead is real, but a runtime-flavor change is not a lever
+worth taking.** The one clean, repeatable finding — `current_thread` throughput-caps
+well below `multi_thread(4)`'s at even modest concurrency — is reason enough on its
+own not to change it, without needing the noisier low-concurrency numbers to make the
+case. `#[tokio::main]`'s default (worker count = core count) remains the right
+general-purpose choice. Reproduce:
+`cargo test -p osproxy-server --test profile_64k --release --no-run` (then callgrind/
+strace per the module doc) and
+`cargo test -p osproxy-server --test runtime_flavor -- --ignored --nocapture` (run it
+several times — see above).
+
 ## Multicore scaling of the per-request shared state
 
 Aggregate throughput (Mops/s) by thread count
@@ -296,6 +390,7 @@ cargo bench -p osproxy-rewrite                                                 #
 cargo test  -p osproxy-rewrite --test memory                                   # allocation budgets
 cargo test  -p osproxy-server --test perf_harness     -- --ignored --nocapture --test-threads=1  # needs Docker; 3 body shapes
 cargo test  -p osproxy-server --test soak             -- --ignored --nocapture --test-threads=1  # needs Docker + Linux /proc; memory under load
+cargo test  -p osproxy-server --test runtime_flavor   -- --ignored --nocapture  # tokio runtime-flavor A/B (see below)
 ```
 
 `perf_harness` and `soak` each write one `nfr-*-<shape>.{json,md}` artifact set per
@@ -304,5 +399,6 @@ body shape (`tiny`/`big-field`/`many-fields` for the profile,
 
 To profile the per-request CPU breakdown with an external profiler (no kernel
 support needed), the `profile_64k` test exposes 64 KB and 256 B single-connection
-loops as callgrind targets; see that file's module docs for the `valgrind
---tool=callgrind` invocation.
+loops as callgrind targets, plus `current_thread`/`multi_thread(1)` runtime-flavor
+variants of the 256 B loop for direct `strace -c` comparison; see that file's module
+docs for the `valgrind --tool=callgrind` invocation.
