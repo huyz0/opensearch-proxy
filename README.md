@@ -43,7 +43,7 @@ binaries (a default build, a FIPS build, and an `-v3` build) to its
 toolchain required:
 
 ```sh
-curl -L https://github.com/huyz0/opensearch-proxy/releases/latest/download/osproxy-v1.0.1-x86_64-unknown-linux-gnu -o osproxy
+curl -L https://github.com/huyz0/opensearch-proxy/releases/latest/download/osproxy-v1.0.4-x86_64-unknown-linux-gnu -o osproxy
 chmod +x osproxy && ./osproxy --help
 ```
 
