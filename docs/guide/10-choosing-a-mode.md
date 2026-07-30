@@ -12,7 +12,7 @@ This page is the map. Each section links to the page with the full story.
 > **Performance is not the deciding factor.** All placement modes (passthrough,
 > dedicated cluster/index, shared index) add ~0.1–0.3 ms and are within noise of
 > each other; the body rewrite of the shared mode costs ~nothing measurable. Choose
-> by **isolation model**, not latency — see the
+> by **isolation model**, not latency: see the
 > [routing-vs-rewrite numbers](11-performance.md#choosing-a-mode-routing-vs-body-rewrite-cost).
 
 ## The map

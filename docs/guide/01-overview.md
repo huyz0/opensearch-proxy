@@ -74,11 +74,11 @@ These are deliberate cuts, each with a home elsewhere.
 
 ## Who uses it, and how
 
-Three jobs drove the design. Logical-index tenancy, where clients address logical
-indices and the proxy resolves the physical cluster and index from a partition key.
-Interception, where profiling, telemetry, and auth apply uniformly to all traffic at
-the proxy boundary. And operational agility, where partitions migrate between
-placements with the proxy guaranteeing write correctness across the cutover.
+Three jobs drove the design: logical-index tenancy (clients address logical indices;
+the proxy resolves the physical cluster and index from a partition key), interception
+(profiling, telemetry, and auth apply uniformly to all traffic at the proxy
+boundary), and operational agility (partitions migrate between placements with the
+proxy guaranteeing write correctness across the cutover).
 
 You consume it by depending on `osproxy-spi`, implementing a `TenancySpi` (and
 optionally an `Authenticator`, `Authorizer`, custom `Sink`, or `Router`), and

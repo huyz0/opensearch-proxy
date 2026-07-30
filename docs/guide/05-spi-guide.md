@@ -111,10 +111,10 @@ impl TenancySpi for MyTenancy {
 
 `placement_for` returns any of the three `Placement` kinds, and the choice is the
 isolation model: `SharedIndex` (isolate by an injected field + a partition-scoped
-id — the only kind that rewrites the body), `DedicatedIndex` (isolate by a
+id, the only kind that rewrites the body), `DedicatedIndex` (isolate by a
 per-partition physical index), or `DedicatedCluster` (isolate by cluster). The
-shipped `ReferenceTenancy` demonstrates all three — `with_placement_mode(...)`
-switches between them — and the [mode-overhead numbers](11-performance.md#choosing-a-mode-routing-vs-body-rewrite-cost)
+shipped `ReferenceTenancy` demonstrates all three: `with_placement_mode(...)`
+switches between them, and the [mode-overhead numbers](11-performance.md#choosing-a-mode-routing-vs-body-rewrite-cost)
 show the choice is about isolation, not latency (all three add ~0.1–0.3 ms).
 
 ### Invariants you must uphold
@@ -233,7 +233,7 @@ sitting in front of that cluster:
 **A compatible auth layer sits in front of OpenSearch** (an auth-aware sidecar
 or gateway that validates the same token/OIDC realm the client already
 presented to the proxy): pass the client's own header straight through. This
-needs no SPI code — it is what `forward-headers.enabled` (docs/07) already
+needs no SPI code: it is what `forward-headers.enabled` (docs/07) already
 does, since `Authorization` is not on the mandatory strip list. Sound only when
 that upstream layer can independently validate the header; it is not a
 substitute for tenant isolation on a shared index, which still comes from the
@@ -256,14 +256,14 @@ impl TenancySpi for MyTenancy {
 }
 ```
 
-Resolved fresh on every route (never cached), so a rotating credential — a
-refreshed access token, a short-lived STS-style secret — is naturally
+Resolved fresh on every route (never cached), so a rotating credential (a
+refreshed access token, a short-lived STS-style secret) is naturally
 supported; your own lookup does whatever caching or refresh it needs.
 `UpstreamCredentials::basic`/`bearer` cover the common schemes; the type is
 otherwise just a `(header_name, header_value)` pair, since OpenSearch's
 security plugin (and anything else in front of it) is header-based regardless
 of scheme. When both this and a forwarded `Authorization` header are present,
-this one wins at the sink's upstream choke point — the proxy's deliberate
+this one wins at the sink's upstream choke point: the proxy's deliberate
 identity for a cluster is never silently overridden by passthrough.
 
 Default `None`: the sink sends no credential header unless the client's own

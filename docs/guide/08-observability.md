@@ -169,12 +169,12 @@ the effective diag level, so `Off` costs almost nothing.
 
 **B3 (Zipkin/Istio) is continued too.** When exporting, the proxy continues the
 caller's trace from a W3C `traceparent` or, when only **B3** is present (single
-`b3` or the `X-B3-*` multi-header form), from that — preserving the `trace_id` so a
+`b3` or the `X-B3-*` multi-header form), from that, preserving the `trace_id` so a
 B3-native client's trace stays connected even though the proxy emits W3C
 downstream.
 
 **Tracing is transparent when export is off (the default).** With no exporter the
-proxy adds no span and injects **no** `traceparent` of its own — it stays out of the
+proxy adds no span and injects **no** `traceparent` of its own: it stays out of the
 trace. The client's own trace headers instead pass straight through to the upstream
 in the forwarded header set (see below), B3 included. So a proxy that is not itself
 exporting never inserts a `traceparent` pointing at a span it never recorded.
@@ -184,7 +184,7 @@ exporting never inserts a `traceparent` pointing at a span it never recorded.
 When the proxy forwards a request it rebuilds it for the upstream, so by default the
 cluster would see only the headers the proxy manages. For a sidecar / transparent
 deployment that is too lossy, so by default osproxy **relays the client's own
-headers** to the cluster on every request — custom routing hints, vendor trace
+headers** to the cluster on every request: custom routing hints, vendor trace
 headers (B3, …), and (by default) the client's `Authorization`. A mandatory set is
 never relayed: hop-by-hop headers plus `host`/`content-length` (the proxy re-frames
 the request). Control it with `forward_client_headers` (default `true`, sidecar

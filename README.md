@@ -1,6 +1,6 @@
-# osproxy — OpenSearch Routing Proxy
+# osproxy: OpenSearch Routing Proxy
 
-A high-performance, low-footprint, low-latency proxy for routing OpenSearch
+A low-latency, high-throughput, low-footprint proxy for routing OpenSearch
 requests. Accepts HTTP/1.1, HTTP/2, and gRPC over cleartext or TLS (with an
 optional **FIPS 140-3** validated crypto build), and routes each request to the
 correct physical OpenSearch cluster/index based on a pluggable **placement
@@ -17,12 +17,13 @@ dylibs).
   cluster, dedicated index, or shared index) based on a partition key.
 - **Injects** partition id / synthetic fields and **constructs `_id`** on
   ingest; **filters** by partition and **strips** injected fields on
-  query/search — so each tenant sees a clean logical view.
+  query/search, so each tenant sees a clean logical view.
 - **Pools** connections on both the downstream (client) and upstream (cluster)
   sides, reusing TCP and TLS sessions.
 - **Authenticates** clients (mTLS + token) and manages upstream credentials.
-- Is built to be **observed and debugged by an LLM** with no human source-diving
-  required — structured, causal, security-aware traces, togglable at runtime.
+- Is built to be **observed and debugged by an LLM** with structured, causal,
+  security-aware traces, togglable at runtime, so nobody has to dive into the
+  source to diagnose a failure.
 
 ## What it explicitly does *not* do
 
@@ -38,7 +39,7 @@ Two ways to consume osproxy, matching its two modes:
 
 **Run the proxy (prebuilt binary).** Each release attaches static `osproxy`
 binaries (a default build, a FIPS build, and an `-v3` build) to its
-[GitHub Release](https://github.com/huyz0/opensearch-proxy/releases) — no Rust
+[GitHub Release](https://github.com/huyz0/opensearch-proxy/releases). No Rust
 toolchain required:
 
 ```sh
@@ -48,7 +49,7 @@ chmod +x osproxy && ./osproxy --help
 
 The `-v3` asset (`osproxy-<version>-x86_64-unknown-linux-gnu-v3`) is compiled
 with `target-feature=+avx2` for a faster JSON string scan on a modern-only
-fleet — it will crash with an illegal instruction on any pre-Haswell (2013)
+fleet. It will crash with an illegal instruction on any pre-Haswell (2013)
 Intel or pre-2015 AMD x86_64 CPU, so use the plain (default) asset unless
 you've confirmed your deployment target supports AVX2.
 
@@ -79,7 +80,7 @@ osproxy-engine = "1.0"
 | `cmake` + `go` | builds AWS-LC-FIPS (the validated crypto module) | **FIPS builds only** |
 | Docker | the `--ignored` testcontainer suite (real OpenSearch) | optional |
 
-The default (non-FIPS) build needs `protoc` and a **C compiler** — the binary's
+The default (non-FIPS) build needs `protoc` and a **C compiler**: the binary's
 `mimalloc` global allocator compiles a small C library (as does the default `ring`
 crypto). `cmake` and `go` are required *additionally* only for a FIPS build,
 because the FIPS crypto module compiles AWS-LC from C.
@@ -114,7 +115,7 @@ brew install cmake go
 ### Build modes (crypto provider selected at build time)
 
 The crypto provider is chosen by a **mutually-exclusive build feature**, so a
-FIPS artifact never links a non-validated crypto crate — it is a *separate
+FIPS artifact never links a non-validated crypto crate: it is a *separate
 compiled binary*, not a runtime switch (ADR-009, [docs/07](docs/07-fips-and-crypto.md)):
 
 ```sh
@@ -131,8 +132,8 @@ cargo xtask check-fips
 
 > **FIPS toolchain note:** AWS-LC-FIPS's integrity transform (`delocate`) only
 > supports specific compiler versions; a bleeding-edge `gcc` (e.g. 15) can fail
-> the FIPS build at `-O3`. CI pins the image for this reason — see
-> [docs/specs/fips-boundary.md](docs/specs/fips-boundary.md) §4. Do not inject
+> the FIPS build at `-O3`. CI pins the image for this reason (see
+> [docs/specs/fips-boundary.md](docs/specs/fips-boundary.md) §4). Do not inject
 > `CFLAGS` to work around it; that would alter the validated build.
 
 Enabling both (or neither) provider feature is a compile error by design. The
@@ -154,10 +155,10 @@ deeper rationale.
 
 | Doc | Purpose |
 |-----|---------|
-| **[docs/guide/](docs/guide/README.md)** | **User Guide** — overview, NFRs, architecture, components, SPI, wiring, configuration, observability |
+| **[docs/guide/](docs/guide/README.md)** | **User Guide**: overview, NFRs, architecture, components, SPI, wiring, configuration, observability |
 | [docs/00-goals.md](docs/00-goals.md) | Project goal, scope, non-goals, success criteria |
 | [docs/01-architecture.md](docs/01-architecture.md) | Architecture, crate layout, **non-functional requirements** |
-| [docs/02-spi.md](docs/02-spi.md) | **SPI reference** — the public traits, heavily documented |
+| [docs/02-spi.md](docs/02-spi.md) | **SPI reference**: the public traits, heavily documented |
 | [docs/03-tenancy-and-placement.md](docs/03-tenancy-and-placement.md) | Partition model, placement table, epochs |
 | [docs/04-request-pipeline.md](docs/04-request-pipeline.md) | Ingest demux, query rewrite, field strip, affinity |
 | [docs/05-observability.md](docs/05-observability.md) | Diagnostics directives, span schema, `/debug/explain` |
@@ -175,11 +176,11 @@ deeper rationale.
 ## Status
 
 **Feature-complete and CI-green.** All planned milestones (M0–M7) plus the
-post-plan additions — async fan-out, traffic capture, tenant-agnostic passthrough,
+post-plan additions (async fan-out, traffic capture, tenant-agnostic passthrough,
 live scroll/PIT affinity, a reference etcd directive store, and the fleet-coherent
-diagnostic sink — have shipped on the seams the milestones established. No code-side
-gaps remain; the only outstanding items are external (the AWS-LC CMVP certificate
-award and authoritative NFR-P thresholds on reference hardware). See
+diagnostic sink) have shipped on the seams the milestones established. No code-side
+gaps remain; the only outstanding items are external: the AWS-LC CMVP certificate
+award and authoritative NFR-P thresholds on reference hardware. See
 [docs/11-roadmap.md](docs/11-roadmap.md) for the full delivery record.
 
 ## License

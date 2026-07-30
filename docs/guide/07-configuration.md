@@ -58,12 +58,12 @@ topic         = osproxy.capture
 | `tls_cert` | *(unset)* | Path to the server certificate PEM. Set together with `tls_key` to enable TLS. |
 | `tls_key` | *(unset)* | Path to the server private-key PEM. Both-or-neither with `tls_cert`. |
 | `tls_client_ca` | *(unset)* | Path to a client-CA PEM. Setting it requires **mutual TLS**: clients must present a cert chaining to this CA. Only valid alongside `tls_cert`/`tls_key`. |
-| `upstream_tls_ca` | *(unset)* | Path to the trust-anchor PEM an `https://` cluster endpoint's certificate must chain to. **Required** for any `https://` upstream — rustls trusts nothing implicitly, so an `https://` endpoint with this unset fails closed rather than connecting in cleartext or falling back to the public web PKI. |
+| `upstream_tls_ca` | *(unset)* | Path to the trust-anchor PEM an `https://` cluster endpoint's certificate must chain to. **Required** for any `https://` upstream: rustls trusts nothing implicitly, so an `https://` endpoint with this unset fails closed rather than connecting in cleartext or falling back to the public web PKI. |
 | `upstream_tls_cert` | *(unset)* | Path to a client certificate PEM for **mutual TLS to the upstream**. Both-or-neither with `upstream_tls_key`; only valid alongside `upstream_tls_ca`. |
 | `upstream_tls_key` | *(unset)* | Path to the client private-key PEM pairing with `upstream_tls_cert`. |
 
 > Ingress TLS is on when `tls_cert` + `tls_key` are configured; cleartext otherwise. The same
-> provider terminates the HTTP and gRPC listeners. Upstream TLS is independent —
+> provider terminates the HTTP and gRPC listeners. Upstream TLS is independent:
 > a cleartext-ingress proxy can still speak TLS to an external OpenSearch cluster
 > if `upstream_tls_ca` is set. Both use the same build-time crypto module (ring vs.
 > FIPS aws-lc-rs), chosen at **build time**, not here. See [FIPS & Crypto](../07-fips-and-crypto.md).

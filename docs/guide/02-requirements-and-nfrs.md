@@ -8,10 +8,10 @@ in [`docs/01-architecture.md`](../01-architecture.md) §5.
 
 - **Ingress**: HTTP/1.1, HTTP/2, and gRPC; cleartext and TLS; optional FIPS build.
 - **Single-target routing** for **all** request types (read and write), resolved
-  by `TenancySpi` into one of three placement kinds — `SharedIndex` (many
+  by `TenancySpi` into one of three placement kinds: `SharedIndex` (many
   partitions, one physical index, isolated by an injected field + a
   partition-prefixed id), `DedicatedIndex` (one physical index per partition),
-  `DedicatedCluster` (one whole cluster per partition) — or, for routing that
+  `DedicatedCluster` (one whole cluster per partition), or, for routing that
   isn't tenancy-shaped at all, the lower-level `RoutingSpi` escape hatch
   (`route → RouteDecision` directly). `routing_hint` lets a `SharedIndex`
   implementer override the `_routing` wire value independently of the

@@ -34,8 +34,6 @@ flowchart TB
     class M obs;
 ```
 
-A few things are worth understanding about this flow.
-
 The introspection surfaces (`/metrics`, `/debug/*`, `/admin/directives`) short-circuit
 before authentication, and each is individually gated (see
 [Observability](08-observability.md)). Everything below them is the data plane.
