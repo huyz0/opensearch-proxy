@@ -172,7 +172,17 @@ krafka = { version = "0.12", default-features = false }
 # Lints applied to every crate that opts in via `[lints] workspace = true`.
 # See docs/08-engineering-standards.md. xtask deliberately does NOT opt in.
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny`, not `forbid`: unsafe stays off by default everywhere, but `forbid`
+# cannot be locally lifted at all, which made the "any exception requires a
+# SAFETY proof and reviewer sign-off" policy below (docs/08 §5) impossible to
+# actually use. `deny` keeps the default-closed posture while letting a single
+# audited module opt back in with an explicit, visible `#[allow(unsafe_code)]`
+# plus the hygiene lints below (see .agents/skills/rust-unsafe-optimization).
+unsafe_code = "deny"
+# Once a module does opt in, these hold it to the same discipline as `wide`/
+# `memchr`'s own unsafe: no bare unsafe inside an unsafe fn's body without its
+# own justification, and every unsafe block is documented and does one thing.
+unsafe_op_in_unsafe_fn = "deny"
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"
 
@@ -183,6 +193,13 @@ expect_used = "deny"
 panic = "deny"
 todo = "deny"
 unimplemented = "deny"
+# Unsafe hygiene (paired with unsafe_code = "deny" above): a documented
+# `# Safety` section per unsafe fn, a `// SAFETY:` comment per unsafe block,
+# and one operation per block so the comment maps to exactly the thing it
+# justifies.
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+multiple_unsafe_ops_per_block = "deny"
 # Structure / no-god-* budgets (docs/08). Soft (warn) so a `// JUSTIFY` review
 # decision can keep them; CI greps for unjustified overflows separately.
 too_many_lines = "warn"

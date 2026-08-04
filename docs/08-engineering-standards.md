@@ -57,9 +57,13 @@ Rationale: budgets are a forcing function for decomposition. They catch the
 - `rustfmt` enforced; `clippy` at `--deny warnings` with a curated, documented
   allow-list (each allow justified in `clippy.toml` or inline).
 - `cargo-deny`: license/advisory/dup-dependency checks in CI.
-- `unsafe` is **forbidden** by default (`#![forbid(unsafe_code)]`); any
-  exception requires a `// SAFETY:` proof and reviewer sign-off, and is confined
-  to a single audited module.
+- `unsafe` is **denied** by default (`unsafe_code = "deny"`, not `forbid`, so
+  the exception below is actually possible to grant); any exception requires
+  a `# Safety` doc on the `unsafe fn`, a `// SAFETY:` comment per `unsafe`
+  block, reviewer sign-off, and is confined to a single audited module. The
+  hygiene lints (`unsafe_op_in_unsafe_fn`, `clippy::undocumented_unsafe_blocks`,
+  `clippy::missing_safety_doc`, `clippy::multiple_unsafe_ops_per_block`) hold
+  that module to the standard automatically once it opts in.
 
 ### 5a. Background-task discipline
 
