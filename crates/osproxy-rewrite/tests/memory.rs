@@ -71,6 +71,11 @@ fn streaming_invariant_budgets() {
     // Output-buffer reallocs are profile/allocator-dependent (observed 0 locally,
     // +2 on the CI runner); linear (per-byte) growth would multiply the count for
     // the 1024x-larger body, which the slack still catches. Exact counts: perf gate.
+    // (`injected`'s own reallocs dropped from ~2-3 to ~0 for a typical one/two
+    // -field inject once it got a per-field capacity estimate instead of starting
+    // at `Vec::new()` — found via the rust-unsafe-optimization skill's assembly-
+    // first gate: the copies were already a bare `memcpy` with nothing for unsafe
+    // indexing to remove, but the unsized scratch buffer was a real, safe win.)
     let inject_small = allocs(|| {
         let _ = std::hint::black_box(inject_fields_bytes(&small, &fields).unwrap());
     });

@@ -96,7 +96,13 @@ pub fn inject_fields_bytes(
             });
         }
     }
-    let mut injected: Vec<u8> = Vec::new();
+    // Pre-sized off a rough per-field estimate (key quotes + colon + comma +
+    // a short scalar value, the common case for a tenant id/partition key):
+    // an unsized `Vec::new()` here reallocates several times as `to_writer`
+    // fills it (confirmed in the emitted assembly — `RawVec::grow_one`/
+    // `reserve` calls that a capacity hint removes). Wrong is fine, it just
+    // grows once more; this only needs to be a decent guess, not exact.
+    let mut injected: Vec<u8> = Vec::with_capacity(fields.len() * 32);
     for (idx, (name, value)) in fields.iter().enumerate() {
         if idx > 0 {
             injected.push(b',');
