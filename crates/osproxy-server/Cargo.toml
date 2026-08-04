@@ -64,7 +64,7 @@ ciborium.workspace = true
 mimalloc.workspace = true
 ring = { workspace = true, optional = true }
 aws-lc-rs = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "time", "parking_lot"] }
 
 [build-dependencies]
 # Compiles the async fan-out op-envelope `.proto` (messages only, no service).
